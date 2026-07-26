@@ -113,7 +113,7 @@ async def track(interaction: discord.Interaction, sport: app_commands.Choice[str
         return
 
     embed, file = await tracker.build_embed(game, sport_id)
-    view = tracker.DeleteView(interaction.channel_id, game_id)
+    view = tracker.DeleteView(interaction.channel_id, game_id, interaction.user.id)
     message = await interaction.followup.send(embed=embed, file=file, view=view, wait=True)
 
     if scores365.is_finished(game):
@@ -178,7 +178,7 @@ async def playerprops(interaction: discord.Interaction, sport: app_commands.Choi
     embed, file = await proptracker.build_embed(
         entity["name"], entity["id"], entity["is_tennis"], entity["team_id"], sport.value, stat, current_value, is_home, event
     )
-    view = proptracker.DeleteView(interaction.channel_id, event["id"], entity["id"], stat_key)
+    view = proptracker.DeleteView(interaction.channel_id, event["id"], entity["id"], stat_key, interaction.user.id)
     message = await interaction.followup.send(embed=embed, file=file, view=view, wait=True)
 
     if not sofascore.is_finished(event):

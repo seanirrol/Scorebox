@@ -81,18 +81,22 @@ async def build_embed(game: dict, sport_id: Optional[int] = None) -> tuple[disco
 
 class DeleteView(discord.ui.View):
     """A single "Delete" button attached below a /track message, restricted
-    to server admins."""
+    to server admins or whoever ran the command."""
 
-    def __init__(self, channel_id: int, game_id):
+    def __init__(self, channel_id: int, game_id, owner_id: int):
         super().__init__(timeout=None)
         self.channel_id = channel_id
         self.game_id = game_id
+        self.owner_id = owner_id
 
     @discord.ui.button(label="Delete", emoji="🗑️", style=discord.ButtonStyle.danger)
     async def delete(self, interaction: discord.Interaction, button: discord.ui.Button):
         perms = getattr(interaction.user, "guild_permissions", None)
-        if not perms or not perms.administrator:
-            await interaction.response.send_message("Only server admins can delete this.", ephemeral=True)
+        is_admin = perms and perms.administrator
+        if not is_admin and interaction.user.id != self.owner_id:
+            await interaction.response.send_message(
+                "Only an admin or the person who posted this can delete it.", ephemeral=True
+            )
             return
         stop_tracking(self.channel_id, self.game_id)
         await interaction.response.defer()
