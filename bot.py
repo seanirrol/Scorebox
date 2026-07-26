@@ -53,13 +53,12 @@ async def on_ready():
 
 
 def _channel_allowed(interaction: discord.Interaction) -> bool:
-    return config.ALLOWED_CHANNEL_ID is None or interaction.channel_id == config.ALLOWED_CHANNEL_ID
+    return config.ALLOWED_CHANNEL_IDS is None or interaction.channel_id in config.ALLOWED_CHANNEL_IDS
 
 
 async def _reject_wrong_channel(interaction: discord.Interaction):
-    await interaction.response.send_message(
-        f"This bot only works in <#{config.ALLOWED_CHANNEL_ID}>.", ephemeral=True
-    )
+    channels = ", ".join(f"<#{cid}>" for cid in config.ALLOWED_CHANNEL_IDS)
+    await interaction.response.send_message(f"This bot only works in {channels}.", ephemeral=True)
 
 
 async def _find_match_or_reply(interaction: discord.Interaction, team: str, sport: Optional[str], ephemeral: bool = False):
