@@ -96,7 +96,6 @@ async def score(interaction: discord.Interaction, sport: app_commands.Choice[str
 
 
 @tree.command(name="track", description="Post a live score that auto-updates until the match ends")
-@app_commands.default_permissions(administrator=True)
 @app_commands.describe(sport="Sport to search in", team="Team name, e.g. Arsenal")
 @app_commands.choices(sport=SPORT_CHOICES)
 async def track(interaction: discord.Interaction, sport: app_commands.Choice[str], team: str):
