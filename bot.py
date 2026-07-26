@@ -52,6 +52,16 @@ async def on_ready():
     await proptracker.resume_all(client)
 
 
+def _channel_allowed(interaction: discord.Interaction) -> bool:
+    return config.ALLOWED_CHANNEL_ID is None or interaction.channel_id == config.ALLOWED_CHANNEL_ID
+
+
+async def _reject_wrong_channel(interaction: discord.Interaction):
+    await interaction.response.send_message(
+        f"This bot only works in <#{config.ALLOWED_CHANNEL_ID}>.", ephemeral=True
+    )
+
+
 async def _find_match_or_reply(interaction: discord.Interaction, team: str, sport: Optional[str], ephemeral: bool = False):
     await interaction.response.defer(ephemeral=ephemeral)
     try:
@@ -74,6 +84,9 @@ async def _find_match_or_reply(interaction: discord.Interaction, team: str, spor
 @app_commands.describe(sport="Sport to search in", team="Team name, e.g. Arsenal")
 @app_commands.choices(sport=SPORT_CHOICES)
 async def score(interaction: discord.Interaction, sport: app_commands.Choice[str], team: str):
+    if not _channel_allowed(interaction):
+        await _reject_wrong_channel(interaction)
+        return
     result = await _find_match_or_reply(interaction, team, sport.value, ephemeral=True)
     if not result:
         return
@@ -87,6 +100,9 @@ async def score(interaction: discord.Interaction, sport: app_commands.Choice[str
 @app_commands.describe(sport="Sport to search in", team="Team name, e.g. Arsenal")
 @app_commands.choices(sport=SPORT_CHOICES)
 async def track(interaction: discord.Interaction, sport: app_commands.Choice[str], team: str):
+    if not _channel_allowed(interaction):
+        await _reject_wrong_channel(interaction)
+        return
     result = await _find_match_or_reply(interaction, team, sport.value)
     if not result:
         return
@@ -124,6 +140,9 @@ async def stat_autocomplete(interaction: discord.Interaction, current: str) -> l
 @app_commands.choices(sport=SPORT_CHOICES)
 @app_commands.autocomplete(stat=stat_autocomplete)
 async def playerprops(interaction: discord.Interaction, sport: app_commands.Choice[str], player: str, stat: str):
+    if not _channel_allowed(interaction):
+        await _reject_wrong_channel(interaction)
+        return
     await interaction.response.defer()
 
     if sport.value in sofascore.UNSUPPORTED_SPORTS:
@@ -172,6 +191,9 @@ async def playerprops(interaction: discord.Interaction, sport: app_commands.Choi
 @tree.command(name="untrack", description="Stop auto-updating a tracked match in this channel")
 @app_commands.describe(game_id="Game ID shown by /tracked")
 async def untrack(interaction: discord.Interaction, game_id: str):
+    if not _channel_allowed(interaction):
+        await _reject_wrong_channel(interaction)
+        return
     stopped = tracker.stop_tracking(interaction.channel_id, game_id)
     if stopped:
         await interaction.response.send_message(f"Stopped tracking game `{game_id}`.", ephemeral=True)
@@ -181,6 +203,9 @@ async def untrack(interaction: discord.Interaction, game_id: str):
 
 @tree.command(name="tracked", description="List matches currently being tracked in this channel")
 async def tracked(interaction: discord.Interaction):
+    if not _channel_allowed(interaction):
+        await _reject_wrong_channel(interaction)
+        return
     game_ids = tracker.list_tracked(interaction.channel_id)
     if not game_ids:
         await interaction.response.send_message("No matches are being tracked in this channel.", ephemeral=True)
