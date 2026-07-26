@@ -2,36 +2,101 @@
 """Manages background tasks that keep a live-score embed updated."""
 
 import asyncio
+import io
 import logging
 import time
+from typing import Optional
 
 import discord
 
 import config
+import scoreimage
 import scores365
+import state
 
 log = logging.getLogger("scorebox.tracker")
+
+# How long a finished match's final score stays posted before auto-deleting.
+POST_MATCH_DELETE_SECONDS = 24 * 3600
 
 # Keyed by f"{channel_id}:{game_id}" -> asyncio.Task
 _active_tracks: dict[str, asyncio.Task] = {}
 
+_STATUS_COLOR = {
+    "notstarted": 0x3498DB,  # blue
+    "inprogress": 0xE74C3C,  # red
+    "finished": 0x2ECC71,  # green
+}
 
-def build_embed(game: dict) -> discord.Embed:
-    home = (game.get("homeCompetitor") or {}).get("name", "?")
-    away = (game.get("awayCompetitor") or {}).get("name", "?")
-    finished = scores365.is_finished(game)
 
-    embed = discord.Embed(
-        title=f"{home} vs {away}",
-        description=scores365.format_score_line(game),
-        color=0x95A5A6 if finished else 0x2ECC71,
+async def build_embed(game: dict, sport_id: Optional[int] = None) -> tuple[discord.Embed, discord.File]:
+    """Returns (embed, file) - the score image must be sent/edited alongside the embed."""
+    home_competitor = game.get("homeCompetitor") or {}
+    away_competitor = game.get("awayCompetitor") or {}
+    status = scores365.map_status_type(game.get("statusGroup"))
+
+    embed = discord.Embed(color=_STATUS_COLOR.get(status, 0x95A5A6))
+
+    author_bits = [b for b in (scores365.sport_label(sport_id), game.get("competitionDisplayName")) if b]
+    if author_bits:
+        embed.set_author(name=" • ".join(author_bits))
+
+    period_text = scores365.status_line(game, sport_id)
+
+    # Each row is [main score, smaller sub-tier(s)...] left-to-right, main
+    # score first (rendered biggest/boldest, on the left) - tennis gets
+    # sets+games+points, volleyball gets sets+current-set score, everything
+    # else just gets its plain score.
+    main_scores = scores365.main_scores(game)
+    home_cols: list[str] = [scores365.fmt_score(main_scores[0]) if main_scores else "-"]
+    away_cols: list[str] = [scores365.fmt_score(main_scores[1]) if main_scores else "-"]
+
+    set_score = scores365.current_set_score(game, sport_id)
+    if set_score:
+        home_cols.append(scores365.fmt_score(set_score[0]))
+        away_cols.append(scores365.fmt_score(set_score[1]))
+
+    if sport_id == scores365.SPORT_IDS["tennis"] and status == "inprogress":
+        points = scores365.tennis_current_game_points(game)
+        if points:
+            home_cols.append(scores365.tennis_point_label(points[0]))
+            away_cols.append(scores365.tennis_point_label(points[1]))
+
+    home_name = home_competitor.get("name", "?")
+    away_name = away_competitor.get("name", "?")
+    home_logo_url = scores365.competitor_logo_url(home_competitor)
+    away_logo_url = scores365.competitor_logo_url(away_competitor)
+
+    image_bytes = await asyncio.to_thread(
+        scoreimage.render_score_card,
+        home_name, away_name, home_logo_url, away_logo_url, home_cols, away_cols, period_text, status,
     )
-    embed.add_field(name="Status", value=scores365.status_line(game), inline=True)
-    competition = game.get("competitionDisplayName")
-    if competition:
-        embed.add_field(name="Competition", value=competition, inline=True)
+    file = discord.File(io.BytesIO(image_bytes), filename="score.png")
+    embed.set_image(url="attachment://score.png")
+
     embed.set_footer(text="Scorebox • data via 365scores")
-    return embed
+    embed.timestamp = discord.utils.utcnow()
+    return embed, file
+
+
+class DeleteView(discord.ui.View):
+    """A single "Delete" button attached below a /track message, restricted
+    to server admins."""
+
+    def __init__(self, channel_id: int, game_id):
+        super().__init__(timeout=None)
+        self.channel_id = channel_id
+        self.game_id = game_id
+
+    @discord.ui.button(label="Delete", emoji="🗑️", style=discord.ButtonStyle.danger)
+    async def delete(self, interaction: discord.Interaction, button: discord.ui.Button):
+        perms = getattr(interaction.user, "guild_permissions", None)
+        if not perms or not perms.administrator:
+            await interaction.response.send_message("Only server admins can delete this.", ephemeral=True)
+            return
+        stop_tracking(self.channel_id, self.game_id)
+        await interaction.response.defer()
+        await interaction.message.delete()
 
 
 def track_key(channel_id: int, game_id) -> str:
@@ -47,9 +112,24 @@ def list_tracked(channel_id: int) -> list[str]:
     return [key.split(":", 1)[1] for key in _active_tracks if key.startswith(prefix)]
 
 
+def _persist(channel_id: int, game_id, message_id: int, sport_id):
+    data = state.load_tracks()
+    data[track_key(channel_id, game_id)] = {
+        "channel_id": channel_id, "game_id": game_id, "message_id": message_id, "sport_id": sport_id,
+    }
+    state.save_tracks(data)
+
+
+def _forget(channel_id: int, game_id):
+    data = state.load_tracks()
+    data.pop(track_key(channel_id, game_id), None)
+    state.save_tracks(data)
+
+
 def stop_tracking(channel_id: int, game_id) -> bool:
     key = track_key(channel_id, game_id)
     task = _active_tracks.pop(key, None)
+    _forget(channel_id, game_id)
     if task:
         task.cancel()
         return True
@@ -68,18 +148,25 @@ async def _track_loop(message: discord.Message, sport_id: int, game_id, channel_
             if not game:
                 break
 
+            embed, file = await build_embed(game, sport_id)
             try:
-                await message.edit(embed=build_embed(game))
+                await message.edit(embed=embed, attachments=[file])
             except discord.HTTPException as e:
                 log.warning("Failed to edit tracking message: %s", e)
                 break
 
             if scores365.is_finished(game):
+                await asyncio.sleep(POST_MATCH_DELETE_SECONDS)
+                try:
+                    await message.delete()
+                except discord.HTTPException as e:
+                    log.warning("Failed to delete finished tracking message: %s", e)
                 break
     except asyncio.CancelledError:
         raise
     finally:
         _active_tracks.pop(key, None)
+        _forget(channel_id, game_id)
 
 
 def start_tracking(message: discord.Message, sport_id: int, game: dict, channel_id: int):
@@ -89,3 +176,30 @@ def start_tracking(message: discord.Message, sport_id: int, game: dict, channel_
         return
     task = asyncio.create_task(_track_loop(message, sport_id, game_id, channel_id))
     _active_tracks[key] = task
+    _persist(channel_id, game_id, message.id, sport_id)
+
+
+async def resume_all(client: discord.Client):
+    """
+    Called once from on_ready. Reads whatever was still active when the bot
+    last stopped and either picks the tracking loop back up on the same
+    message, or - if the message/channel/game is gone - cleans up instead.
+    """
+    for entry in list(state.load_tracks().values()):
+        channel_id, game_id, message_id, sport_id = (
+            entry["channel_id"], entry["game_id"], entry["message_id"], entry["sport_id"]
+        )
+        try:
+            channel = await client.fetch_channel(channel_id)
+            message = await channel.fetch_message(message_id)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            _forget(channel_id, game_id)
+            continue
+
+        game = await asyncio.to_thread(scores365.get_live_update, sport_id, game_id)
+        if not game or scores365.is_finished(game):
+            _forget(channel_id, game_id)
+            continue
+
+        start_tracking(message, sport_id, game, channel_id)
+        log.info("Resumed tracking game %s in channel %s", game_id, channel_id)

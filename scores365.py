@@ -37,6 +37,33 @@ SPORT_IDS = {
 }
 UNIQUE_SPORT_IDS = sorted(set(SPORT_IDS.values()))
 
+# Sport id -> display label, for embeds (matches the /score, /track dropdown labels).
+SPORT_ID_LABELS = {
+    1: "Soccer",
+    2: "Basketball",
+    3: "Tennis",
+    4: "Hockey",
+    6: "NFL",
+    7: "Baseball",
+    8: "Volleyball",
+    9: "Rugby",
+}
+
+
+def sport_label(sport_id: Optional[int]) -> Optional[str]:
+    return SPORT_ID_LABELS.get(sport_id)
+
+
+_LOGO_URL_TEMPLATE = "https://imagecache.365scores.com/image/upload/f_png,w_100,h_100,c_limit,q_auto:eco,dpr_2/v{version}/Competitors/{id}"
+
+
+def competitor_logo_url(competitor: dict) -> Optional[str]:
+    """Confirmed live against a real competitor (id 7428, imageVersion 3 -> the St. Louis Cardinals' crest)."""
+    comp_id, version = competitor.get("id"), competitor.get("imageVersion")
+    if not comp_id or version is None:
+        return None
+    return _LOGO_URL_TEMPLATE.format(version=version, id=comp_id)
+
 # statusGroup: 2 = not started, 3 = in progress, 4+ = terminal (ended/postponed/...)
 _STATUS_RANK = {"inprogress": 0, "notstarted": 1, "finished": 2}
 
@@ -82,6 +109,107 @@ def _fetch_games_for_sport(sport_id: int) -> list[dict]:
 
     _games_cache[sport_id] = {"games": games, "fetched_at": time.monotonic()}
     return games
+
+
+GAME_DETAIL_CACHE_SECONDS = 5
+_game_detail_cache: dict[int, dict] = {}  # game_id -> {"detail": ..., "fetched_at": monotonic ts}
+
+
+def _get_game_detail(game_id) -> Optional[dict]:
+    """
+    Per-game detail call - the only place 365scores exposes volleyball's
+    per-set score. Deliberately omits langId/timezoneName/userCountryId -
+    confirmed (in the My Bookies port) that this exact endpoint returns a
+    stripped response with no "game" key at all when they're present.
+    """
+    cached = _game_detail_cache.get(game_id)
+    if cached and time.monotonic() - cached["fetched_at"] < GAME_DETAIL_CACHE_SECONDS:
+        return cached["detail"]
+    try:
+        data = _get("https://webws.365scores.com/web/game/", gameId=game_id)
+    except ScoresError:
+        return None
+    detail = data.get("game")
+    _game_detail_cache[game_id] = {"detail": detail, "fetched_at": time.monotonic()}
+    return detail
+
+
+def _norm_score(v):
+    """-1 is 365scores' own "no score yet" sentinel (seen on not-yet-played sets)."""
+    return None if v is None or v < 0 else v
+
+
+def volleyball_set_scores(sport_id: int, status: str, game_id) -> Optional[list[dict]]:
+    """
+    Volleyball-only per-set breakdown. Unlike tennis, the bulk list's own game
+    object has no `stages` array for volleyball at all, so this needs its own
+    per-game detail call (see _get_game_detail above).
+    """
+    if status == "notstarted" or sport_id != SPORT_IDS["volleyball"] or not game_id:
+        return None
+    detail = _get_game_detail(game_id)
+    if not detail:
+        return None
+    stages = detail.get("stages") or []
+    set_stages = [s for s in stages if re.match(r"^Set \d+$", s.get("name") or "") and (s.get("isEnded") or s.get("isLive"))]
+    if not set_stages:
+        return None
+    return [
+        {
+            "set_number": int(s["name"].replace("Set ", "")),
+            "home": _norm_score(s.get("homeCompetitorScore")),
+            "away": _norm_score(s.get("awayCompetitorScore")),
+            "is_live": bool(s.get("isLive")),
+        }
+        for s in set_stages
+    ]
+
+
+def tennis_current_set_score(game: dict) -> Optional[tuple[int, int]]:
+    """Tennis-only current-set game score - already sitting on the bulk list's own `stages` array."""
+    stages = game.get("stages") or []
+    set_stages = [s for s in stages if re.match(r"^Set \d+$", s.get("name") or "")]
+    if not set_stages:
+        return None
+    current = next((s for s in set_stages if s.get("isLive")), set_stages[-1])
+    home = _norm_score(current.get("homeCompetitorScore"))
+    away = _norm_score(current.get("awayCompetitorScore"))
+    return (home, away) if home is not None and away is not None else None
+
+
+def current_set_score(game: dict, sport_id: Optional[int]) -> Optional[tuple[int, int]]:
+    """Current in-progress set/game score - tennis and volleyball only."""
+    if map_status_type(game.get("statusGroup")) != "inprogress":
+        return None
+    if sport_id == SPORT_IDS["tennis"]:
+        return tennis_current_set_score(game)
+    if sport_id == SPORT_IDS["volleyball"]:
+        live_set = next((s for s in volleyball_set_scores(sport_id, "inprogress", game.get("id")) or [] if s["is_live"]), None)
+        if live_set and live_set["home"] is not None and live_set["away"] is not None:
+            return (live_set["home"], live_set["away"])
+    return None
+
+
+def tennis_current_game_points(game: dict) -> Optional[tuple[int, int]]:
+    """Tennis-only points in the current game - the `stages` entry named "Game" while live."""
+    stages = game.get("stages") or []
+    game_stage = next((s for s in stages if s.get("name") == "Game" and s.get("isLive")), None)
+    if not game_stage:
+        return None
+    home = _norm_score(game_stage.get("homeCompetitorScore"))
+    away = _norm_score(game_stage.get("awayCompetitorScore"))
+    return (home, away) if home is not None and away is not None else None
+
+
+# 365scores encodes a standard game's points as 0/15/30/40/50 - 50 means
+# Advantage, not a real point count. A tiebreak game's own points aren't in
+# this sequence at all (plain incrementing integers), so anything outside
+# this map is shown as its raw number rather than mis-labeled.
+_TENNIS_POINT_LABELS = {0: "0", 15: "15", 30: "30", 40: "40", 50: "AD"}
+
+
+def tennis_point_label(v) -> str:
+    return _TENNIS_POINT_LABELS.get(int(v), fmt_score(v))
 
 
 def map_status_type(status_group) -> str:
@@ -184,25 +312,67 @@ def get_live_update(sport_id: int, game_id) -> Optional[dict]:
 
 # --- formatting --------------------------------------------------------
 
-def format_score_line(game: dict) -> str:
-    home = (game.get("homeCompetitor") or {}).get("name", "?")
-    away = (game.get("awayCompetitor") or {}).get("name", "?")
+def fmt_score(v) -> str:
+    """365scores sends scores as floats (e.g. 13.0); drop the .0 for whole numbers."""
+    return str(int(v)) if float(v).is_integer() else str(v)
+
+
+def main_scores(game: dict) -> Optional[tuple]:
+    """Raw (home, away) score pair, or None if the match hasn't started / has no score yet."""
     home_score = (game.get("homeCompetitor") or {}).get("score")
     away_score = (game.get("awayCompetitor") or {}).get("score")
-
     status = map_status_type(game.get("statusGroup"))
     # -1 is 365scores' own "no score yet" sentinel.
     if status == "notstarted" or home_score is None or away_score is None or home_score < 0 or away_score < 0:
+        return None
+    return (home_score, away_score)
+
+
+def format_score_line(game: dict) -> str:
+    home = (game.get("homeCompetitor") or {}).get("name", "?")
+    away = (game.get("awayCompetitor") or {}).get("name", "?")
+    scores = main_scores(game)
+    if not scores:
         return f"{home} vs {away} — not started"
-    return f"{home} {home_score} - {away_score} {away}"
+    return f"{home} {fmt_score(scores[0])} - {fmt_score(scores[1])} {away}"
 
 
-def status_line(game: dict) -> str:
+def score_only_line(game: dict) -> str:
+    """Just the number pair, e.g. '3 - 7', for a large embed headline."""
+    scores = main_scores(game)
+    if not scores:
+        return "Not started"
+    return f"{fmt_score(scores[0])} - {fmt_score(scores[1])}"
+
+
+def _starts_in_text(game: dict) -> str:
+    start_epoch = _start_epoch(game)
+    if not start_epoch:
+        return "Kickoff: TBD"
+    seconds = start_epoch - time.time()
+    if seconds <= 0:
+        return "Starting soon"
+    hours, minutes = divmod(int(seconds // 60), 60)
+    return f"Starts in {hours}h{minutes:02d}m" if hours else f"Starts in {minutes}m"
+
+
+def status_line(game: dict, sport_id: Optional[int] = None) -> str:
     status = map_status_type(game.get("statusGroup"))
     if status == "notstarted":
-        return f"Kickoff: {game.get('startTime', 'TBD')}"
+        return _starts_in_text(game)
     if status == "finished":
         return game.get("statusText") or "Final"
+
     text = game.get("statusText") or "Live"
-    clock = game.get("gameTimeDisplay")
-    return f"{text} ({clock})" if clock else text
+    # Only basketball and soccer/football carry a real running clock here -
+    # confirmed in the My Bookies port (threesixfive.js's liveClockInfo()
+    # deliberately limits clock-building to just these two sports).
+    # gameTimeDisplay/gameTime on every other sport (baseball, tennis, hockey,
+    # NFL, volleyball, rugby) isn't a meaningful clock or counter at all.
+    if sport_id == SPORT_IDS["basketball"]:  # gameTimeDisplay is already "MM:SS remaining"
+        clock = game.get("gameTimeDisplay")
+        return f"{text} ({clock})" if clock else text
+    if sport_id == SPORT_IDS["soccer"]:  # gameTime is plain elapsed minutes
+        minutes = game.get("gameTime")
+        return f"{text} ({minutes}')" if minutes is not None else text
+    return text
