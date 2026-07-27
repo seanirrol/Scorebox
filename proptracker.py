@@ -266,10 +266,14 @@ async def resume_all(client: discord.Client):
             continue
 
         event = await asyncio.to_thread(sofascore.get_event, event_id)
-        if not event or sofascore.is_finished(event):
+        if not event:
             _forget(channel_id, event_id, entity_id, stat_key)
             continue
 
+        # Even an already-finished event still needs to be handed to
+        # start_tracking/_track_loop - it re-registers the message (so the
+        # 🗑️ reaction keeps working) and re-arms the 24h auto-delete timer,
+        # which would otherwise be silently lost on every restart.
         start_tracking(
             message, channel_id, event_id, entity_id, entry["team_id"], entry["is_tennis"],
             entry["sport"], stat_key, entry["stat_label"], entry["player_name"], entry.get("owner_id"),

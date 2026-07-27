@@ -270,9 +270,13 @@ async def resume_all(client: discord.Client):
             continue
 
         game = await asyncio.to_thread(scores365.get_live_update, sport_id, game_id)
-        if not game or scores365.is_finished(game):
+        if not game:
             _forget(channel_id, game_id)
             continue
 
+        # Even an already-finished game still needs to be handed to
+        # start_tracking/_track_loop - it re-registers the message (so the
+        # 🗑️ reaction keeps working) and re-arms the 24h auto-delete timer,
+        # which would otherwise be silently lost on every restart.
         start_tracking(message, sport_id, game, channel_id, owner_id)
         log.info("Resumed tracking game %s in channel %s", game_id, channel_id)
