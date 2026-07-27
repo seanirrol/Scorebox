@@ -52,6 +52,15 @@ async def build_embed(game: dict, sport_id: Optional[int] = None) -> tuple[disco
     if author_bits:
         embed.set_author(name=" • ".join(author_bits))
 
+    # Discord's own <t:...:f> tag renders "Today"/"Tomorrow"/weekday name and
+    # the clock time already localized to whoever's viewing it - no need to
+    # compute that ourselves per-viewer. Only shown pre-match; dropped once
+    # live to save space, since the card itself covers it from then on.
+    if status == "notstarted":
+        kickoff = scores365.start_epoch(game)
+        if kickoff:
+            embed.description = f"<t:{int(kickoff)}:f>"
+
     period_text = scores365.status_line(game, sport_id)
 
     # Each row is [main score, smaller sub-tier(s)...] left-to-right, main
