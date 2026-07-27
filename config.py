@@ -22,3 +22,9 @@ ALLOWED_CHANNEL_IDS = (
     if _allowed_channel_ids
     else None
 )
+
+# If set, messages posted in this channel are auto-parsed for picks, which
+# get tracked automatically via /track or /playerprops - posted into the
+# first channel in ALLOWED_CHANNEL_ID (the "scores" channel).
+_picks_channel_id = os.environ.get("PICKS_CHANNEL_ID", "").strip()
+PICKS_CHANNEL_ID = int(_picks_channel_id) if _picks_channel_id else None

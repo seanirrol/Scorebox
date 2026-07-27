@@ -21,6 +21,7 @@ from discord import app_commands
 
 import config
 import espn
+import picks
 import proptracker
 import scores365
 import tracker
@@ -29,6 +30,7 @@ logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("scorebox.bot")
 
 intents = discord.Intents.default()
+intents.message_content = True  # needed to read pick messages in config.PICKS_CHANNEL_ID
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
@@ -94,6 +96,98 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
         await message.delete()
     except discord.HTTPException as e:
         log.warning("Failed to delete message via reaction: %s", e)
+
+
+async def _auto_track(channel: discord.abc.Messageable, sport_value: str, team: str):
+    """Mirrors /track's core logic for an auto-detected pick - posts via
+    channel.send() since there's no interaction to reply to, and has no
+    owner (owner_id=None means only admins can 🗑️-delete it)."""
+    try:
+        result = await asyncio.to_thread(scores365.find_match_for_team, team, sport_value)
+    except scores365.ScoresError as e:
+        log.info("Auto-track: couldn't reach 365scores for '%s': %s", team, e)
+        return
+    if not result:
+        log.info("Auto-track: no match found for '%s' (%s)", team, sport_value)
+        return
+    game, sport_id = result
+    game_id = game["id"]
+    if tracker.is_tracked(channel.id, game_id):
+        return
+
+    embed, file = await tracker.build_embed(game, sport_id)
+    message = await channel.send(embed=embed, file=file)
+    tracker.register_message(message.id, channel.id, game_id, None)
+    await message.add_reaction(TRASH_EMOJI)
+
+    if scores365.is_finished(game):
+        return
+    tracker.start_tracking(message, sport_id, game, channel.id, None)
+    log.info("Auto-tracked pick '%s' -> game %s", team, game_id)
+
+
+async def _auto_playerprops(channel: discord.abc.Messageable, sport_value: str, player: str, stat: str):
+    """Mirrors /playerprops' core logic for an auto-detected pick."""
+    stat_key = espn.STAT_CATALOG.get(sport_value, {}).get(stat)
+    if not stat_key:
+        return
+    try:
+        entity = await asyncio.to_thread(espn.find_player, player, sport_value)
+    except espn.EspnError as e:
+        log.info("Auto-playerprops: couldn't reach ESPN for '%s': %s", player, e)
+        return
+    if not entity:
+        log.info("Auto-playerprops: no player found for '%s' (%s)", player, sport_value)
+        return
+
+    event_id = await asyncio.to_thread(espn.find_current_event_id, sport_value, entity["team_id"])
+    if not event_id:
+        return
+    event = await asyncio.to_thread(espn.get_event, sport_value, event_id)
+    if not event:
+        return
+    if proptracker.is_tracked(channel.id, event_id, entity["id"], stat_key):
+        return
+
+    current_value, is_home, team = await asyncio.to_thread(espn.get_stat_value, event, entity["id"], stat_key)
+    embed, file = await proptracker.build_embed(
+        entity["name"], entity["id"], entity["photo_url"], sport_value, stat, current_value, is_home, team, event
+    )
+    message = await channel.send(embed=embed, file=file)
+    proptracker.register_message(message.id, channel.id, event_id, entity["id"], stat_key, None)
+    await message.add_reaction(TRASH_EMOJI)
+
+    if espn.is_finished(event):
+        return
+    proptracker.start_tracking(
+        message, channel.id, event_id, entity["id"], entity["team_id"], entity["photo_url"],
+        sport_value, stat_key, stat, entity["name"], None,
+    )
+    log.info("Auto-tracked player prop pick: %s - %s", player, stat)
+
+
+@client.event
+async def on_message(message: discord.Message):
+    if config.PICKS_CHANNEL_ID is None or message.channel.id != config.PICKS_CHANNEL_ID:
+        return
+    if message.author.id == client.user.id or not config.ALLOWED_CHANNEL_IDS:
+        return
+
+    target_channel_id = next(iter(config.ALLOWED_CHANNEL_IDS))
+    try:
+        target_channel = client.get_channel(target_channel_id) or await client.fetch_channel(target_channel_id)
+    except discord.HTTPException as e:
+        log.warning("Auto-track: couldn't reach scores channel %s: %s", target_channel_id, e)
+        return
+
+    for pick in picks.parse_picks_message(message.content):
+        try:
+            if pick["kind"] == "track":
+                await _auto_track(target_channel, pick["sport"], pick["team"])
+            else:
+                await _auto_playerprops(target_channel, pick["sport"], pick["player"], pick["stat"])
+        except Exception as e:
+            log.warning("Failed to auto-track pick %s: %s", pick, e)
 
 
 def _channel_allowed(interaction: discord.Interaction) -> bool:
