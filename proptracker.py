@@ -13,6 +13,7 @@ then the value - no opponent shown, unlike /track's two-team card.
 import asyncio
 import io
 import logging
+import random
 import time
 from typing import Optional
 
@@ -167,6 +168,11 @@ async def _track_loop(
     deadline = time.monotonic() + config.MAX_TRACK_HOURS * 3600
 
     consecutive_misses = 0
+    consecutive_edit_failures = 0
+    # Random head start so many trackers started around the same moment don't
+    # all land on the same wall-clock instant every cycle and pile up against
+    # Discord's per-channel edit rate limit together.
+    await asyncio.sleep(random.uniform(0, config.UPDATE_INTERVAL_SECONDS))
     try:
         while time.monotonic() < deadline:
             await asyncio.sleep(config.UPDATE_INTERVAL_SECONDS)
@@ -191,9 +197,16 @@ async def _track_loop(
             )
             try:
                 await message.edit(embed=embed, attachments=[file])
+                consecutive_edit_failures = 0
             except discord.HTTPException as e:
-                log.warning("Failed to edit prop tracking message: %s", e)
-                break
+                consecutive_edit_failures += 1
+                log.warning(
+                    "Failed to edit prop tracking message (failure %d/%d): %s",
+                    consecutive_edit_failures, MAX_CONSECUTIVE_MISSES, e,
+                )
+                if consecutive_edit_failures >= MAX_CONSECUTIVE_MISSES:
+                    break
+                continue
 
             if sofascore.is_finished(event):
                 await asyncio.sleep(POST_MATCH_DELETE_SECONDS)
