@@ -372,7 +372,7 @@ def status_line(game: dict, sport_id: Optional[int] = None) -> str:
     if sport_id == SPORT_IDS["basketball"]:  # gameTimeDisplay is already "MM:SS remaining"
         clock = game.get("gameTimeDisplay")
         return f"{text} ({clock})" if clock else text
-    if sport_id == SPORT_IDS["soccer"]:  # gameTime is plain elapsed minutes
+    if sport_id == SPORT_IDS["soccer"]:  # gameTime is plain elapsed minutes (365scores gives no seconds)
         minutes = game.get("gameTime")
-        return f"{text} ({minutes}')" if minutes is not None else text
+        return f"{text} ({int(minutes)}:00')" if minutes is not None else text
     return text
