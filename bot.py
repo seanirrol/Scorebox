@@ -20,9 +20,9 @@ import discord
 from discord import app_commands
 
 import config
+import espn
 import proptracker
 import scores365
-import sofascore
 import tracker
 
 logging.basicConfig(level=logging.INFO)
@@ -174,7 +174,7 @@ async def track(interaction: discord.Interaction, sport: app_commands.Choice[str
 async def stat_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
     sport = getattr(interaction.namespace, "sport", None)
     sport_key = sport.value if hasattr(sport, "value") else sport
-    labels = list(sofascore.STAT_CATALOG.get(sport_key, {}).keys())
+    labels = list(espn.STAT_CATALOG.get(sport_key, {}).keys())
     matches = [label for label in labels if current.lower() in label.lower()]
     return [app_commands.Choice(name=label, value=label) for label in matches[:25]]
 
@@ -193,14 +193,14 @@ async def playerprops(interaction: discord.Interaction, sport: app_commands.Choi
         return
     await interaction.response.defer()
 
-    if sport.value in sofascore.UNSUPPORTED_SPORTS:
+    if sport.value not in espn.SPORT_PATHS:
         await interaction.followup.send(
-            f"{sport.name} isn't supported for /playerprops - Sofascore has no per-player stat data for it.",
+            f"{sport.name} isn't supported for /playerprops yet - only Baseball, Basketball, Hockey, and NFL for now.",
             ephemeral=True,
         )
         return
 
-    stat_key = sofascore.STAT_CATALOG.get(sport.value, {}).get(stat)
+    stat_key = espn.STAT_CATALOG.get(sport.value, {}).get(stat)
     if not stat_key:
         await interaction.followup.send(
             f"Unknown stat '{stat}' for {sport.name} - pick one from the autocomplete list.", ephemeral=True
@@ -208,24 +208,26 @@ async def playerprops(interaction: discord.Interaction, sport: app_commands.Choi
         return
 
     try:
-        entity = await asyncio.to_thread(sofascore.find_player, player, sport.value)
-    except sofascore.SofascoreError as e:
-        await interaction.followup.send(f"Couldn't reach Sofascore: {e}", ephemeral=True)
+        entity = await asyncio.to_thread(espn.find_player, player, sport.value)
+    except espn.EspnError as e:
+        await interaction.followup.send(f"Couldn't reach ESPN: {e}", ephemeral=True)
         return
     if not entity:
         await interaction.followup.send(f"Couldn't find a {sport.name} player named **{player}**.", ephemeral=True)
         return
 
-    event = await asyncio.to_thread(sofascore.find_current_event, entity["id"], entity["is_tennis"])
-    if not event:
+    event_id = await asyncio.to_thread(espn.find_current_event_id, sport.value, entity["team_id"])
+    if not event_id:
         await interaction.followup.send(f"No live or recent match found for **{entity['name']}**.", ephemeral=True)
         return
+    event = await asyncio.to_thread(espn.get_event, sport.value, event_id)
+    if not event:
+        await interaction.followup.send(f"Couldn't fetch match data for **{entity['name']}**.", ephemeral=True)
+        return
 
-    current_value, is_home = await asyncio.to_thread(
-        sofascore.get_stat_value, event, entity["id"], entity["is_tennis"], stat_key
-    )
+    current_value, is_home, team = await asyncio.to_thread(espn.get_stat_value, event, entity["id"], stat_key)
     embed, file = await proptracker.build_embed(
-        entity["name"], entity["id"], entity["is_tennis"], entity["team_id"], sport.value, stat, current_value, is_home, event
+        entity["name"], entity["id"], entity["photo_url"], sport.value, stat, current_value, is_home, team, event
     )
     message = await interaction.followup.send(embed=embed, file=file, wait=True)
 
@@ -233,12 +235,12 @@ async def playerprops(interaction: discord.Interaction, sport: app_commands.Choi
     # after ~15 minutes; re-fetch as a plain channel message so edits keep
     # working for the entire tracking duration.
     message = await interaction.channel.fetch_message(message.id)
-    proptracker.register_message(message.id, interaction.channel_id, event["id"], entity["id"], stat_key, interaction.user.id)
+    proptracker.register_message(message.id, interaction.channel_id, event_id, entity["id"], stat_key, interaction.user.id)
     await message.add_reaction(TRASH_EMOJI)
 
-    if not sofascore.is_finished(event):
+    if not espn.is_finished(event):
         proptracker.start_tracking(
-            message, interaction.channel_id, event["id"], entity["id"], entity["team_id"], entity["is_tennis"],
+            message, interaction.channel_id, event_id, entity["id"], entity["team_id"], entity["photo_url"],
             sport.value, stat_key, stat, entity["name"], interaction.user.id,
         )
 
