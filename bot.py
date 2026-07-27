@@ -43,6 +43,8 @@ SPORT_CHOICES = [
     app_commands.Choice(name="Rugby", value="rugby"),
 ]
 
+TRASH_EMOJI = "🗑️"
+
 
 @client.event
 async def on_ready():
@@ -50,6 +52,48 @@ async def on_ready():
     log.info("Logged in as %s", client.user)
     await tracker.resume_all(client)
     await proptracker.resume_all(client)
+
+
+@client.event
+async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
+    if payload.user_id == client.user.id or str(payload.emoji) != TRASH_EMOJI:
+        return
+
+    info = tracker.get_message_owner(payload.message_id)
+    kind = "track"
+    if not info:
+        info = proptracker.get_message_owner(payload.message_id)
+        kind = "prop"
+    if not info:
+        return
+
+    owner_id = info[-1]
+    is_admin = bool(payload.member and payload.member.guild_permissions.administrator)
+
+    try:
+        channel = client.get_channel(payload.channel_id) or await client.fetch_channel(payload.channel_id)
+        message = await channel.fetch_message(payload.message_id)
+    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+        return
+
+    if not is_admin and payload.user_id != owner_id:
+        try:
+            await message.remove_reaction(TRASH_EMOJI, discord.Object(id=payload.user_id))
+        except discord.HTTPException:
+            pass
+        return
+
+    if kind == "track":
+        channel_id, game_id, _ = info
+        tracker.stop_tracking(channel_id, game_id)
+    else:
+        channel_id, event_id, entity_id, stat_key, _ = info
+        proptracker.stop_tracking(channel_id, event_id, entity_id, stat_key)
+
+    try:
+        await message.delete()
+    except discord.HTTPException as e:
+        log.warning("Failed to delete message via reaction: %s", e)
 
 
 def _channel_allowed(interaction: discord.Interaction) -> bool:
@@ -112,17 +156,19 @@ async def track(interaction: discord.Interaction, sport: app_commands.Choice[str
         return
 
     embed, file = await tracker.build_embed(game, sport_id)
-    view = tracker.DeleteView(interaction.channel_id, game_id, interaction.user.id)
-    message = await interaction.followup.send(embed=embed, file=file, view=view, wait=True)
-
-    if scores365.is_finished(game):
-        return  # Nothing to track, match is already over.
+    message = await interaction.followup.send(embed=embed, file=file, wait=True)
 
     # interaction followup messages are bound to a webhook token that expires
     # after ~15 minutes; re-fetch as a plain channel message so edits keep
     # working for the entire tracking duration.
     message = await interaction.channel.fetch_message(message.id)
-    tracker.start_tracking(message, sport_id, game, interaction.channel_id)
+    tracker.register_message(message.id, interaction.channel_id, game_id, interaction.user.id)
+    await message.add_reaction(TRASH_EMOJI)
+
+    if scores365.is_finished(game):
+        return  # Nothing to track, match is already over.
+
+    tracker.start_tracking(message, sport_id, game, interaction.channel_id, interaction.user.id)
 
 
 async def stat_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
@@ -181,16 +227,19 @@ async def playerprops(interaction: discord.Interaction, sport: app_commands.Choi
     embed, file = await proptracker.build_embed(
         entity["name"], entity["id"], entity["is_tennis"], entity["team_id"], sport.value, stat, current_value, is_home, event
     )
-    view = proptracker.DeleteView(interaction.channel_id, event["id"], entity["id"], stat_key, interaction.user.id)
-    message = await interaction.followup.send(embed=embed, file=file, view=view, wait=True)
+    message = await interaction.followup.send(embed=embed, file=file, wait=True)
+
+    # interaction followup messages are bound to a webhook token that expires
+    # after ~15 minutes; re-fetch as a plain channel message so edits keep
+    # working for the entire tracking duration.
+    message = await interaction.channel.fetch_message(message.id)
+    proptracker.register_message(message.id, interaction.channel_id, event["id"], entity["id"], stat_key, interaction.user.id)
+    await message.add_reaction(TRASH_EMOJI)
 
     if not sofascore.is_finished(event):
-        # interaction followup messages are bound to a webhook token that
-        # expires after ~15 minutes; re-fetch as a plain channel message so
-        # edits keep working for the entire tracking duration.
-        message = await interaction.channel.fetch_message(message.id)
         proptracker.start_tracking(
-            message, interaction.channel_id, event["id"], entity["id"], entity["team_id"], entity["is_tennis"], sport.value, stat_key, stat, entity["name"]
+            message, interaction.channel_id, event["id"], entity["id"], entity["team_id"], entity["is_tennis"],
+            sport.value, stat_key, stat, entity["name"], interaction.user.id,
         )
 
 

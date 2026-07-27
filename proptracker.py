@@ -14,6 +14,7 @@ import asyncio
 import io
 import logging
 import time
+from typing import Optional
 
 import discord
 
@@ -26,6 +27,10 @@ log = logging.getLogger("scorebox.proptracker")
 
 POST_MATCH_DELETE_SECONDS = 24 * 3600
 _active_props: dict[str, asyncio.Task] = {}
+
+# message_id -> (channel_id, event_id, entity_id, stat_key, owner_id) - lets
+# the reaction-based delete handler in bot.py look up who can delete a message.
+_message_owners: dict[int, tuple] = {}
 
 _STATUS_COLOR = {
     "notstarted": 0x3498DB,  # blue
@@ -42,12 +47,25 @@ def is_tracked(channel_id: int, event_id, entity_id: int, stat_key: str) -> bool
     return prop_key(channel_id, event_id, entity_id, stat_key) in _active_props
 
 
-def _persist(channel_id: int, event_id, entity_id: int, stat_key: str, message_id: int, team_id, is_tennis, sport, stat_label, player_name):
+def register_message(message_id: int, channel_id: int, event_id, entity_id: int, stat_key: str, owner_id: int):
+    """Lets bot.py's 🗑️-reaction handler know who's allowed to delete this message."""
+    _message_owners[message_id] = (channel_id, event_id, entity_id, stat_key, owner_id)
+
+
+def get_message_owner(message_id: int) -> Optional[tuple]:
+    return _message_owners.get(message_id)
+
+
+def unregister_message(message_id: int):
+    _message_owners.pop(message_id, None)
+
+
+def _persist(channel_id: int, event_id, entity_id: int, stat_key: str, message_id: int, team_id, is_tennis, sport, stat_label, player_name, owner_id: int):
     data = state.load_props()
     data[prop_key(channel_id, event_id, entity_id, stat_key)] = {
         "channel_id": channel_id, "event_id": event_id, "entity_id": entity_id, "stat_key": stat_key,
         "message_id": message_id, "team_id": team_id, "is_tennis": is_tennis, "sport": sport,
-        "stat_label": stat_label, "player_name": player_name,
+        "stat_label": stat_label, "player_name": player_name, "owner_id": owner_id,
     }
     state.save_props(data)
 
@@ -62,6 +80,9 @@ def stop_tracking(channel_id: int, event_id, entity_id: int, stat_key: str) -> b
     key = prop_key(channel_id, event_id, entity_id, stat_key)
     task = _active_props.pop(key, None)
     _forget(channel_id, event_id, entity_id, stat_key)
+    for message_id, (c_id, e_id, ent_id, s_key, _owner) in list(_message_owners.items()):
+        if c_id == channel_id and e_id == event_id and ent_id == entity_id and s_key == stat_key:
+            _message_owners.pop(message_id, None)
     if task:
         task.cancel()
         return True
@@ -124,32 +145,6 @@ async def build_embed(
     return embed, file
 
 
-class DeleteView(discord.ui.View):
-    """A single "Delete" button attached below a /playerprops message, restricted
-    to server admins or whoever ran the command."""
-
-    def __init__(self, channel_id: int, event_id, entity_id: int, stat_key: str, owner_id: int):
-        super().__init__(timeout=None)
-        self.channel_id = channel_id
-        self.event_id = event_id
-        self.entity_id = entity_id
-        self.stat_key = stat_key
-        self.owner_id = owner_id
-
-    @discord.ui.button(emoji="🗑️", style=discord.ButtonStyle.danger)
-    async def delete(self, interaction: discord.Interaction, button: discord.ui.Button):
-        perms = getattr(interaction.user, "guild_permissions", None)
-        is_admin = perms and perms.administrator
-        if not is_admin and interaction.user.id != self.owner_id:
-            await interaction.response.send_message(
-                "Only an admin or the person who posted this can delete it.", ephemeral=True
-            )
-            return
-        stop_tracking(self.channel_id, self.event_id, self.entity_id, self.stat_key)
-        await interaction.response.defer()
-        await interaction.message.delete()
-
-
 async def _track_loop(
     message: discord.Message,
     channel_id: int,
@@ -196,6 +191,7 @@ async def _track_loop(
         raise
     finally:
         _active_props.pop(key, None)
+        _message_owners.pop(message.id, None)
         _forget(channel_id, event_id, entity_id, stat_key)
 
 
@@ -210,6 +206,7 @@ def start_tracking(
     stat_key: str,
     stat_label: str,
     player_name: str,
+    owner_id: int,
 ):
     key = prop_key(channel_id, event_id, entity_id, stat_key)
     if key in _active_props:
@@ -218,7 +215,8 @@ def start_tracking(
         _track_loop(message, channel_id, event_id, entity_id, team_id, is_tennis, sport, stat_key, stat_label, player_name)
     )
     _active_props[key] = task
-    _persist(channel_id, event_id, entity_id, stat_key, message.id, team_id, is_tennis, sport, stat_label, player_name)
+    register_message(message.id, channel_id, event_id, entity_id, stat_key, owner_id)
+    _persist(channel_id, event_id, entity_id, stat_key, message.id, team_id, is_tennis, sport, stat_label, player_name, owner_id)
 
 
 async def resume_all(client: discord.Client):
@@ -246,6 +244,6 @@ async def resume_all(client: discord.Client):
 
         start_tracking(
             message, channel_id, event_id, entity_id, entry["team_id"], entry["is_tennis"],
-            entry["sport"], stat_key, entry["stat_label"], entry["player_name"],
+            entry["sport"], stat_key, entry["stat_label"], entry["player_name"], entry.get("owner_id"),
         )
         log.info("Resumed prop tracking for %s in channel %s", entry["player_name"], channel_id)

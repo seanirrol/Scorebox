@@ -22,6 +22,10 @@ POST_MATCH_DELETE_SECONDS = 24 * 3600
 # Keyed by f"{channel_id}:{game_id}" -> asyncio.Task
 _active_tracks: dict[str, asyncio.Task] = {}
 
+# message_id -> (channel_id, game_id, owner_id) - lets the reaction-based
+# delete handler in bot.py look up who's allowed to delete a given message.
+_message_owners: dict[int, tuple] = {}
+
 _STATUS_COLOR = {
     "notstarted": 0x3498DB,  # blue
     "inprogress": 0xE74C3C,  # red
@@ -79,28 +83,17 @@ async def build_embed(game: dict, sport_id: Optional[int] = None) -> tuple[disco
     return embed, file
 
 
-class DeleteView(discord.ui.View):
-    """A single "Delete" button attached below a /track message, restricted
-    to server admins or whoever ran the command."""
+def register_message(message_id: int, channel_id: int, game_id, owner_id: int):
+    """Lets bot.py's 🗑️-reaction handler know who's allowed to delete this message."""
+    _message_owners[message_id] = (channel_id, game_id, owner_id)
 
-    def __init__(self, channel_id: int, game_id, owner_id: int):
-        super().__init__(timeout=None)
-        self.channel_id = channel_id
-        self.game_id = game_id
-        self.owner_id = owner_id
 
-    @discord.ui.button(emoji="🗑️", style=discord.ButtonStyle.danger)
-    async def delete(self, interaction: discord.Interaction, button: discord.ui.Button):
-        perms = getattr(interaction.user, "guild_permissions", None)
-        is_admin = perms and perms.administrator
-        if not is_admin and interaction.user.id != self.owner_id:
-            await interaction.response.send_message(
-                "Only an admin or the person who posted this can delete it.", ephemeral=True
-            )
-            return
-        stop_tracking(self.channel_id, self.game_id)
-        await interaction.response.defer()
-        await interaction.message.delete()
+def get_message_owner(message_id: int) -> Optional[tuple]:
+    return _message_owners.get(message_id)
+
+
+def unregister_message(message_id: int):
+    _message_owners.pop(message_id, None)
 
 
 def track_key(channel_id: int, game_id) -> str:
@@ -116,10 +109,11 @@ def list_tracked(channel_id: int) -> list[str]:
     return [key.split(":", 1)[1] for key in _active_tracks if key.startswith(prefix)]
 
 
-def _persist(channel_id: int, game_id, message_id: int, sport_id):
+def _persist(channel_id: int, game_id, message_id: int, sport_id, owner_id: int):
     data = state.load_tracks()
     data[track_key(channel_id, game_id)] = {
-        "channel_id": channel_id, "game_id": game_id, "message_id": message_id, "sport_id": sport_id,
+        "channel_id": channel_id, "game_id": game_id, "message_id": message_id,
+        "sport_id": sport_id, "owner_id": owner_id,
     }
     state.save_tracks(data)
 
@@ -134,6 +128,9 @@ def stop_tracking(channel_id: int, game_id) -> bool:
     key = track_key(channel_id, game_id)
     task = _active_tracks.pop(key, None)
     _forget(channel_id, game_id)
+    for message_id, (c_id, g_id, _owner) in list(_message_owners.items()):
+        if c_id == channel_id and g_id == game_id:
+            _message_owners.pop(message_id, None)
     if task:
         task.cancel()
         return True
@@ -170,17 +167,19 @@ async def _track_loop(message: discord.Message, sport_id: int, game_id, channel_
         raise
     finally:
         _active_tracks.pop(key, None)
+        _message_owners.pop(message.id, None)
         _forget(channel_id, game_id)
 
 
-def start_tracking(message: discord.Message, sport_id: int, game: dict, channel_id: int):
+def start_tracking(message: discord.Message, sport_id: int, game: dict, channel_id: int, owner_id: int):
     game_id = game["id"]
     key = track_key(channel_id, game_id)
     if key in _active_tracks:
         return
     task = asyncio.create_task(_track_loop(message, sport_id, game_id, channel_id))
     _active_tracks[key] = task
-    _persist(channel_id, game_id, message.id, sport_id)
+    register_message(message.id, channel_id, game_id, owner_id)
+    _persist(channel_id, game_id, message.id, sport_id, owner_id)
 
 
 async def resume_all(client: discord.Client):
@@ -193,6 +192,7 @@ async def resume_all(client: discord.Client):
         channel_id, game_id, message_id, sport_id = (
             entry["channel_id"], entry["game_id"], entry["message_id"], entry["sport_id"]
         )
+        owner_id = entry.get("owner_id")
         try:
             channel = await client.fetch_channel(channel_id)
             message = await channel.fetch_message(message_id)
@@ -205,5 +205,5 @@ async def resume_all(client: discord.Client):
             _forget(channel_id, game_id)
             continue
 
-        start_tracking(message, sport_id, game, channel_id)
+        start_tracking(message, sport_id, game, channel_id, owner_id)
         log.info("Resumed tracking game %s in channel %s", game_id, channel_id)
