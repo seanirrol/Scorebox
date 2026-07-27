@@ -118,6 +118,10 @@ async def track(interaction: discord.Interaction, sport: app_commands.Choice[str
     if scores365.is_finished(game):
         return  # Nothing to track, match is already over.
 
+    # interaction followup messages are bound to a webhook token that expires
+    # after ~15 minutes; re-fetch as a plain channel message so edits keep
+    # working for the entire tracking duration.
+    message = await interaction.channel.fetch_message(message.id)
     tracker.start_tracking(message, sport_id, game, interaction.channel_id)
 
 
@@ -181,6 +185,10 @@ async def playerprops(interaction: discord.Interaction, sport: app_commands.Choi
     message = await interaction.followup.send(embed=embed, file=file, view=view, wait=True)
 
     if not sofascore.is_finished(event):
+        # interaction followup messages are bound to a webhook token that
+        # expires after ~15 minutes; re-fetch as a plain channel message so
+        # edits keep working for the entire tracking duration.
+        message = await interaction.channel.fetch_message(message.id)
         proptracker.start_tracking(
             message, interaction.channel_id, event["id"], entity["id"], entity["team_id"], entity["is_tennis"], sport.value, stat_key, stat, entity["name"]
         )
