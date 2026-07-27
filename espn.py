@@ -251,6 +251,12 @@ def get_stat_value(event: dict, entity_id: str, stat_key: tuple) -> tuple[Option
     if team is None:
         return None, None, None
 
+    # ESPN sometimes posts lineups (with placeholder 0 stat rows) before the
+    # game actually starts - show "-" rather than a misleading 0 pre-game.
+    status = (event.get("header", {}).get("competitions") or [{}])[0].get("status", {}).get("type", {})
+    if status.get("state") == "pre":
+        return None, is_home, team
+
     if stat_key == TOTAL_BASES_KEY:
         return _compute_total_bases(event, entity_id), is_home, team
 
