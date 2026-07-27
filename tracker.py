@@ -89,7 +89,7 @@ class DeleteView(discord.ui.View):
         self.game_id = game_id
         self.owner_id = owner_id
 
-    @discord.ui.button(label="Delete", emoji="🗑️", style=discord.ButtonStyle.danger)
+    @discord.ui.button(emoji="🗑️", style=discord.ButtonStyle.danger)
     async def delete(self, interaction: discord.Interaction, button: discord.ui.Button):
         perms = getattr(interaction.user, "guild_permissions", None)
         is_admin = perms and perms.administrator
