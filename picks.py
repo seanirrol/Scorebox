@@ -31,7 +31,7 @@ _SPORT_MAP = {
     "volleyball": "volleyball",
 }
 
-_LINE_RE = re.compile(r"^\s*\d+[.)]\s*\[([^\]]+)\]\s*(.+)$")
+_LINE_RE = re.compile(r"^\s*(?:\d+[.)]\s*)?\[([^\]]+)\]\s*(.+)$")
 _PLAYER_STAT_RE = re.compile(r"^(.+?)\s+(?:Over|Under)\s+[\d.]+\s+(.+?)\s*(?:\(|$)", re.IGNORECASE)
 
 # For a baseball "Strikeouts" prop with no other context, pitcher strikeouts
