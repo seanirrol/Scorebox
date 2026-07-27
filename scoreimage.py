@@ -206,31 +206,24 @@ _VALUE_FONT = _load_font(_SCORE_DISPLAY_FONT_PATHS, VALUE_SIZE)
 
 
 def render_player_card(
-    sport_tournament: str,
-    matchup: str,
     team_name: str,
     photo_url: Optional[str],
     player_name: str,
     stat_label: str,
     value_text: str,
     status: str,
-    status_label: str,
 ) -> bytes:
     """
-    A single-player card: header (sport/tournament + match status/period on
-    one line, team matchup on the next), photo, name, small team name, stat
-    label, then the big value - no opponent shown.
+    A single-player card: photo, name, small team name, stat label, then the
+    big value - no opponent shown. Sport/tournament, matchup, and match
+    status live in the embed text above the image instead (see
+    proptracker.build_embed), same as /track's author/description.
     """
     photo = _fetch_circular_logo(photo_url, size=PLAYER_PHOTO_SIZE)
     measure = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
     status_color = _SCORE_COLOR.get(status, (255, 255, 255, 255))
 
     max_text_width = WIDTH - MARGIN * 2
-    header_width = max_text_width - HEADER_GAP
-    status_text = _ellipsize(status_label, _TEAM_LABEL_FONT, header_width * 0.55, measure)
-    status_width = measure.textlength(status_text, font=_TEAM_LABEL_FONT)
-    sport_text = _ellipsize(sport_tournament, _TEAM_LABEL_FONT, header_width - status_width, measure)
-    matchup_text = _ellipsize(matchup, _TEAM_LABEL_FONT, max_text_width, measure)
 
     name_lines = _wrap_name(player_name, max_text_width, measure)
     small_team_text = _ellipsize(team_name, _SMALL_TEAM_FONT, max_text_width, measure)
@@ -238,15 +231,12 @@ def render_player_card(
     value_line = _ellipsize(value_text, _VALUE_FONT, max_text_width, measure)
 
     name_block_h = len(name_lines) * NAME_LINE_HEIGHT
-    header_line_h = TEAM_LABEL_SIZE + 4
     small_team_h = SMALL_TEAM_NAME_SIZE + 4
     stat_label_h = STAT_LABEL_SIZE + 4
     value_h = VALUE_SIZE + 8
 
     height = (
         TOP_PADDING
-        + header_line_h + HEADER_LINE_GAP
-        + header_line_h + HEADER_GAP
         + PLAYER_PHOTO_SIZE + PHOTO_GAP
         + name_block_h + PLAYER_NAME_GAP
         + small_team_h + SMALL_TEAM_NAME_GAP
@@ -269,13 +259,6 @@ def render_player_card(
 
     center_x = WIDTH / 2
     y = TOP_PADDING
-
-    draw.text((MARGIN, y + header_line_h / 2), sport_text, font=_TEAM_LABEL_FONT, fill=_NAME_COLOR, anchor="lm")
-    draw.text((WIDTH - MARGIN, y + header_line_h / 2), status_text, font=_TEAM_LABEL_FONT, fill=status_color, anchor="rm")
-    y += header_line_h + HEADER_LINE_GAP
-
-    draw.text((MARGIN, y + header_line_h / 2), matchup_text, font=_TEAM_LABEL_FONT, fill=_NAME_COLOR, anchor="lm")
-    y += header_line_h + HEADER_GAP
 
     if photo:
         img.paste(photo, (int(center_x - PLAYER_PHOTO_SIZE / 2), int(y)), photo)

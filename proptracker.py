@@ -126,31 +126,44 @@ async def build_embed(
     team: Optional[dict],
     event: dict,
 ) -> tuple[discord.Embed, discord.File]:
-    """Returns (embed, file) - mirrors tracker.build_embed's shape."""
-    status = (event.get("header", {}).get("competitions") or [{}])[0].get("status", {}).get("type", {})
+    """
+    Returns (embed, file). Sport/tournament goes in the embed author line and
+    matchup + status/kickoff-time in the description - both outside the
+    image, same placement as /track's author/description.
+    """
+    comp = (event.get("header", {}).get("competitions") or [{}])[0]
+    status = comp.get("status", {}).get("type", {})
     status_type = {"pre": "notstarted", "in": "inprogress", "post": "finished"}.get(status.get("state"), "notstarted")
 
-    competitors = (event.get("header", {}).get("competitions") or [{}])[0].get("competitors", [])
+    competitors = comp.get("competitors", [])
     home_name = next((c.get("team", {}).get("displayName", "?") for c in competitors if c.get("homeAway") == "home"), "?")
     away_name = next((c.get("team", {}).get("displayName", "?") for c in competitors if c.get("homeAway") == "away"), "?")
     matchup = f"{home_name} v {away_name}"
 
     team_name = (team or {}).get("displayName", "?")
-    status_label = espn.match_status_text(event, sport)
 
     sport_label = espn.SPORT_DISPLAY_LABELS.get(sport, sport.title())
-    header = event.get("header", {})
-    league_name = ((header.get("league") or {}).get("name")) or sport_label
+    league_name = ((event.get("header", {}).get("league") or {}).get("name")) or sport_label
     sport_tournament = f"{sport_label} • {league_name}" if league_name != sport_label else sport_label
+
+    if status_type == "notstarted" and comp.get("date"):
+        try:
+            kickoff = int(datetime.datetime.fromisoformat(comp["date"].replace("Z", "+00:00")).timestamp())
+            description = f"{matchup}\n<t:{kickoff}:f>"
+        except ValueError:
+            description = matchup
+    else:
+        description = f"{matchup}\n{espn.match_status_text(event, sport)}"
 
     image_bytes = await asyncio.to_thread(
         scoreimage.render_player_card,
-        sport_tournament, matchup, team_name, photo_url, player_name, stat_label,
-        _fmt_value(current_value), status_type, status_label,
+        team_name, photo_url, player_name, stat_label, _fmt_value(current_value), status_type,
     )
     file = discord.File(io.BytesIO(image_bytes), filename="score.png")
 
     embed = discord.Embed(color=_STATUS_COLOR.get(status_type, 0x95A5A6))
+    embed.set_author(name=sport_tournament)
+    embed.description = description
     embed.set_image(url="attachment://score.png")
     embed.set_footer(text="Scorebox • data via ESPN")
     embed.timestamp = discord.utils.utcnow()
