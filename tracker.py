@@ -228,10 +228,6 @@ async def _track_loop(message: discord.Message, sport_id: int, game_id, channel_
                         await new_message.add_reaction(TRASH_EMOJI)
                     except discord.HTTPException as e:
                         log.warning("Failed to react to reposted tracking message: %s", e)
-                    try:
-                        await new_message.pin()
-                    except discord.HTTPException as e:
-                        log.warning("Failed to pin reposted tracking message: %s", e)
                     old_message = message
                     message = new_message
                     _message_owners.pop(old_message.id, None)
@@ -257,10 +253,6 @@ async def _track_loop(message: discord.Message, sport_id: int, game_id, channel_
                 continue
 
             if scores365.is_finished(game):
-                try:
-                    await message.unpin()
-                except discord.HTTPException as e:
-                    log.warning("Failed to unpin finished tracking message: %s", e)
                 await asyncio.sleep(POST_MATCH_DELETE_SECONDS)
                 try:
                     await message.delete()
