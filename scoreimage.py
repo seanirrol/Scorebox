@@ -214,8 +214,9 @@ def render_player_card(
     status: str,
 ) -> bytes:
     """
-    A single-player card: photo, name, small team name, stat label, then the
-    big value - no opponent shown. Sport/tournament, matchup, and match
+    A single-player card: circular photo on the left, name/team/stat
+    label/value stacked to its right - saves vertical space versus stacking
+    everything under a centered photo. Sport/tournament, matchup, and match
     status live in the embed text above the image instead (see
     proptracker.build_embed), same as /track's author/description.
     """
@@ -223,27 +224,22 @@ def render_player_card(
     measure = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
     status_color = _SCORE_COLOR.get(status, (255, 255, 255, 255))
 
-    max_text_width = WIDTH - MARGIN * 2
+    text_x = MARGIN + PLAYER_PHOTO_SIZE + PHOTO_GAP
+    text_width = WIDTH - text_x - MARGIN
 
-    name_lines = _wrap_name(player_name, max_text_width, measure)
-    small_team_text = _ellipsize(team_name, _SMALL_TEAM_FONT, max_text_width, measure)
-    stat_label_text = _ellipsize(stat_label, _STAT_LABEL_FONT, max_text_width, measure)
-    value_line = _ellipsize(value_text, _VALUE_FONT, max_text_width, measure)
+    name_lines = _wrap_name(player_name, text_width, measure)
+    small_team_text = _ellipsize(team_name, _SMALL_TEAM_FONT, text_width, measure)
+    stat_label_text = _ellipsize(stat_label, _STAT_LABEL_FONT, text_width, measure)
+    value_line = _ellipsize(value_text, _VALUE_FONT, text_width, measure)
 
     name_block_h = len(name_lines) * NAME_LINE_HEIGHT
     small_team_h = SMALL_TEAM_NAME_SIZE + 4
     stat_label_h = STAT_LABEL_SIZE + 4
     value_h = VALUE_SIZE + 8
+    text_block_h = name_block_h + PLAYER_NAME_GAP + small_team_h + SMALL_TEAM_NAME_GAP + stat_label_h + STAT_LABEL_GAP + value_h
 
-    height = (
-        TOP_PADDING
-        + PLAYER_PHOTO_SIZE + PHOTO_GAP
-        + name_block_h + PLAYER_NAME_GAP
-        + small_team_h + SMALL_TEAM_NAME_GAP
-        + stat_label_h + STAT_LABEL_GAP
-        + value_h
-        + BOTTOM_PADDING
-    )
+    content_h = max(text_block_h, PLAYER_PHOTO_SIZE)
+    height = TOP_PADDING + content_h + BOTTOM_PADDING
 
     img = Image.new("RGBA", (WIDTH, int(height)), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
@@ -257,26 +253,25 @@ def render_player_card(
         width=1,
     )
 
-    center_x = WIDTH / 2
-    y = TOP_PADDING
-
+    photo_top = TOP_PADDING + (content_h - PLAYER_PHOTO_SIZE) / 2
     if photo:
-        img.paste(photo, (int(center_x - PLAYER_PHOTO_SIZE / 2), int(y)), photo)
-    y += PLAYER_PHOTO_SIZE + PHOTO_GAP
+        img.paste(photo, (MARGIN, int(photo_top)), photo)
+
+    y = TOP_PADDING + (content_h - text_block_h) / 2
 
     name_top = y
     for i, line in enumerate(name_lines):
         line_center_y = name_top + NAME_LINE_HEIGHT * (i + 0.5)
-        draw.text((center_x, line_center_y), line, font=_NAME_FONT, fill=_NAME_COLOR, anchor="mm")
+        draw.text((text_x, line_center_y), line, font=_NAME_FONT, fill=_NAME_COLOR, anchor="lm")
     y += name_block_h + PLAYER_NAME_GAP
 
-    draw.text((center_x, y + small_team_h / 2), small_team_text, font=_SMALL_TEAM_FONT, fill=_NAME_COLOR, anchor="mm")
+    draw.text((text_x, y + small_team_h / 2), small_team_text, font=_SMALL_TEAM_FONT, fill=_NAME_COLOR, anchor="lm")
     y += small_team_h + SMALL_TEAM_NAME_GAP
 
-    draw.text((center_x, y + stat_label_h / 2), stat_label_text, font=_STAT_LABEL_FONT, fill=_NAME_COLOR, anchor="mm")
+    draw.text((text_x, y + stat_label_h / 2), stat_label_text, font=_STAT_LABEL_FONT, fill=_NAME_COLOR, anchor="lm")
     y += stat_label_h + STAT_LABEL_GAP
 
-    draw.text((center_x, y + value_h / 2), value_line, font=_VALUE_FONT, fill=status_color, anchor="mm")
+    draw.text((text_x, y + value_h / 2), value_line, font=_VALUE_FONT, fill=status_color, anchor="lm")
 
     buf = io.BytesIO()
     img.save(buf, format="PNG")
