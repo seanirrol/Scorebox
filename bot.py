@@ -168,6 +168,11 @@ async def track(interaction: discord.Interaction, sport: app_commands.Choice[str
     if scores365.is_finished(game):
         return  # Nothing to track, match is already over.
 
+    try:
+        await message.pin()
+    except discord.HTTPException as e:
+        log.warning("Failed to pin tracking message: %s", e)
+
     tracker.start_tracking(message, sport_id, game, interaction.channel_id, interaction.user.id)
 
 

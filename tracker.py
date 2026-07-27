@@ -157,6 +157,10 @@ async def _track_loop(message: discord.Message, sport_id: int, game_id, channel_
                 break
 
             if scores365.is_finished(game):
+                try:
+                    await message.unpin()
+                except discord.HTTPException as e:
+                    log.warning("Failed to unpin finished tracking message: %s", e)
                 await asyncio.sleep(POST_MATCH_DELETE_SECONDS)
                 try:
                     await message.delete()
