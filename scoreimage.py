@@ -224,13 +224,26 @@ def render_player_card(
     measure = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
     status_color = _SCORE_COLOR.get(status, (255, 255, 255, 255))
 
-    text_x = MARGIN + PLAYER_PHOTO_SIZE + PHOTO_GAP
-    text_width = WIDTH - text_x - MARGIN
+    max_text_width = WIDTH - MARGIN * 2 - PLAYER_PHOTO_SIZE - PHOTO_GAP
 
-    name_lines = _wrap_name(player_name, text_width, measure)
-    small_team_text = _ellipsize(team_name, _SMALL_TEAM_FONT, text_width, measure)
-    stat_label_text = _ellipsize(stat_label, _STAT_LABEL_FONT, text_width, measure)
-    value_line = _ellipsize(value_text, _VALUE_FONT, text_width, measure)
+    name_lines = _wrap_name(player_name, max_text_width, measure)
+    small_team_text = _ellipsize(team_name, _SMALL_TEAM_FONT, max_text_width, measure)
+    stat_label_text = _ellipsize(stat_label, _STAT_LABEL_FONT, max_text_width, measure)
+    value_line = _ellipsize(value_text, _VALUE_FONT, max_text_width, measure)
+
+    # Center the photo+text group as a whole, so it's not pinned to the left
+    # margin - width based on the widest actual line, not the full available space.
+    text_content_width = max(
+        [measure.textlength(line, font=_NAME_FONT) for line in name_lines]
+        + [
+            measure.textlength(small_team_text, font=_SMALL_TEAM_FONT),
+            measure.textlength(stat_label_text, font=_STAT_LABEL_FONT),
+            measure.textlength(value_line, font=_VALUE_FONT),
+        ]
+    )
+    group_width = PLAYER_PHOTO_SIZE + PHOTO_GAP + text_content_width
+    photo_x = (WIDTH - group_width) / 2
+    text_x = photo_x + PLAYER_PHOTO_SIZE + PHOTO_GAP
 
     name_block_h = len(name_lines) * NAME_LINE_HEIGHT
     small_team_h = SMALL_TEAM_NAME_SIZE + 4
@@ -255,7 +268,7 @@ def render_player_card(
 
     photo_top = TOP_PADDING + (content_h - PLAYER_PHOTO_SIZE) / 2
     if photo:
-        img.paste(photo, (MARGIN, int(photo_top)), photo)
+        img.paste(photo, (int(photo_x), int(photo_top)), photo)
 
     y = TOP_PADDING + (content_h - text_block_h) / 2
 
