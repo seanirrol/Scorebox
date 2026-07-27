@@ -65,6 +65,16 @@ def is_tracked(channel_id: int, event_id, entity_id: str, stat_key: tuple) -> bo
     return prop_key(channel_id, event_id, entity_id, stat_key) in _active_props
 
 
+def list_tracked_details(channel_id: int) -> list[dict]:
+    """Active prop-tracking entries for this channel, from persisted state."""
+    prefix = f"{channel_id}:"
+    active_keys = {k for k in _active_props if k.startswith(prefix)}
+    return [
+        entry for entry in state.load_props().values()
+        if prop_key(entry["channel_id"], entry["event_id"], entry["entity_id"], tuple(entry["stat_key"])) in active_keys
+    ]
+
+
 def register_message(message_id: int, channel_id: int, event_id, entity_id: str, stat_key: tuple, owner_id: int):
     """Lets bot.py's 🗑️-reaction handler know who's allowed to delete this message."""
     _message_owners[message_id] = (channel_id, event_id, entity_id, stat_key, owner_id)

@@ -258,28 +258,40 @@ async def untrack(interaction: discord.Interaction, game_id: str):
         await interaction.response.send_message(f"No active tracking found for game `{game_id}`.", ephemeral=True)
 
 
-@tree.command(name="tracked", description="List matches currently being tracked in this channel")
+@tree.command(name="tracked", description="List matches and player props currently being tracked in this channel")
 async def tracked(interaction: discord.Interaction):
     if not _channel_allowed(interaction):
         await _reject_wrong_channel(interaction)
         return
     await interaction.response.defer(ephemeral=True)
-    details = tracker.list_tracked_details(interaction.channel_id)
-    if not details:
-        await interaction.followup.send("No matches are being tracked in this channel.", ephemeral=True)
+    match_details = tracker.list_tracked_details(interaction.channel_id)
+    prop_details = proptracker.list_tracked_details(interaction.channel_id)
+    if not match_details and not prop_details:
+        await interaction.followup.send("Nothing is being tracked in this channel.", ephemeral=True)
         return
 
-    lines = []
-    for entry in details:
-        game = await asyncio.to_thread(scores365.get_live_update, entry["sport_id"], entry["game_id"])
-        if game:
-            home = (game.get("homeCompetitor") or {}).get("name", "?")
-            away = (game.get("awayCompetitor") or {}).get("name", "?")
-            lines.append(f"- `{entry['game_id']}` — {home} vs {away}")
-        else:
-            lines.append(f"- `{entry['game_id']}` — (couldn't fetch match info)")
-    listing = "\n".join(lines)
-    await interaction.followup.send(f"Tracked matches in this channel:\n{listing}", ephemeral=True)
+    sections = []
+
+    if match_details:
+        lines = []
+        for entry in match_details:
+            game = await asyncio.to_thread(scores365.get_live_update, entry["sport_id"], entry["game_id"])
+            if game:
+                home = (game.get("homeCompetitor") or {}).get("name", "?")
+                away = (game.get("awayCompetitor") or {}).get("name", "?")
+                lines.append(f"- `{entry['game_id']}` — {home} vs {away}")
+            else:
+                lines.append(f"- `{entry['game_id']}` — (couldn't fetch match info)")
+        sections.append("**Tracked matches:**\n" + "\n".join(lines))
+
+    if prop_details:
+        lines = [
+            f"- `{entry['event_id']}` — {entry['player_name']} ({entry['stat_label']})"
+            for entry in prop_details
+        ]
+        sections.append("**Tracked player props:**\n" + "\n".join(lines))
+
+    await interaction.followup.send("\n\n".join(sections), ephemeral=True)
 
 
 def main():
