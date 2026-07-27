@@ -5,3 +5,4 @@ __pycache__/
 venv/
 tracks_state.json
 props_state.json
+*password*.txt
