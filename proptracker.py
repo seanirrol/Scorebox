@@ -26,6 +26,12 @@ import state
 log = logging.getLogger("scorebox.proptracker")
 
 POST_MATCH_DELETE_SECONDS = 24 * 3600
+
+# Tolerate this many consecutive "event not found" polls before giving up -
+# guards against a transient Sofascore hiccup silently killing tracking for
+# an event that's still very much alive.
+MAX_CONSECUTIVE_MISSES = 3
+
 _active_props: dict[str, asyncio.Task] = {}
 
 # message_id -> (channel_id, event_id, entity_id, stat_key, owner_id) - lets
@@ -160,13 +166,22 @@ async def _track_loop(
     key = prop_key(channel_id, event_id, entity_id, stat_key)
     deadline = time.monotonic() + config.MAX_TRACK_HOURS * 3600
 
+    consecutive_misses = 0
     try:
         while time.monotonic() < deadline:
             await asyncio.sleep(config.UPDATE_INTERVAL_SECONDS)
 
             event = await asyncio.to_thread(sofascore.get_event, event_id)
             if not event:
-                break
+                consecutive_misses += 1
+                log.warning(
+                    "Event %s not found on Sofascore (miss %d/%d)",
+                    event_id, consecutive_misses, MAX_CONSECUTIVE_MISSES,
+                )
+                if consecutive_misses >= MAX_CONSECUTIVE_MISSES:
+                    break
+                continue
+            consecutive_misses = 0
             current_value, is_home = await asyncio.to_thread(
                 sofascore.get_stat_value, event, entity_id, is_tennis, stat_key
             )

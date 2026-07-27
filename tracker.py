@@ -19,6 +19,12 @@ log = logging.getLogger("scorebox.tracker")
 # How long a finished match's final score stays posted before auto-deleting.
 POST_MATCH_DELETE_SECONDS = 24 * 3600
 
+# Tolerate this many consecutive "game not found" polls before giving up -
+# 365scores' pagination can transiently return an incomplete list (e.g. a
+# mid-fetch network hiccup), which would otherwise silently kill tracking
+# for a game that's still very much alive.
+MAX_CONSECUTIVE_MISSES = 3
+
 # Keyed by f"{channel_id}:{game_id}" -> asyncio.Task
 _active_tracks: dict[str, asyncio.Task] = {}
 
@@ -141,13 +147,22 @@ async def _track_loop(message: discord.Message, sport_id: int, game_id, channel_
     key = track_key(channel_id, game_id)
     deadline = time.monotonic() + config.MAX_TRACK_HOURS * 3600
 
+    consecutive_misses = 0
     try:
         while time.monotonic() < deadline:
             await asyncio.sleep(config.UPDATE_INTERVAL_SECONDS)
 
             game = await asyncio.to_thread(scores365.get_live_update, sport_id, game_id)
             if not game:
-                break
+                consecutive_misses += 1
+                log.warning(
+                    "Game %s not found in 365scores' current list (miss %d/%d)",
+                    game_id, consecutive_misses, MAX_CONSECUTIVE_MISSES,
+                )
+                if consecutive_misses >= MAX_CONSECUTIVE_MISSES:
+                    break
+                continue
+            consecutive_misses = 0
 
             embed, file = await build_embed(game, sport_id)
             try:
