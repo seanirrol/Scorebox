@@ -42,6 +42,10 @@ SPORT_DISPLAY_LABELS = {
     "hockey": "NHL",
 }
 
+# Sentinel stat_key for computed stats that don't come from a simple boxscore
+# label lookup - handled specially in get_stat_value.
+TOTAL_BASES_KEY = ("__computed__", "total_bases")
+
 # label -> (label within its stat group, a second "discriminator" label that
 # must also be present in that same group). ESPN's stat groups don't carry a
 # usable "name" field for baseball/basketball (confirmed None live), and some
@@ -59,6 +63,7 @@ STAT_CATALOG = {
         "Strikeouts (Pitching)": ("K", "IP"),
         "Earned Runs": ("ER", "IP"),
         "Innings Pitched": ("IP", "IP"),
+        "Total Bases": TOTAL_BASES_KEY,
     },
     "basketball": {
         "Points": ("PTS", None),
@@ -217,6 +222,26 @@ def _find_athlete_team(event: dict, entity_id: str) -> tuple[Optional[dict], Opt
     return None, None
 
 
+# play type -> bases earned. Confirmed live against a real finished game's
+# play-by-play, cross-checked against boxscore H/HR totals.
+_BASE_VALUES = {"single": 1, "double": 2, "triple": 3, "home-run": 4}
+
+
+def _compute_total_bases(event: dict, entity_id: str) -> int:
+    """Sums bases earned from this player's hits, from the event's own
+    play-by-play (single=1, double=2, triple=3, HR=4) - ESPN's boxscore
+    doesn't expose a Total Bases field or a hit-type breakdown directly."""
+    total = 0
+    for play in event.get("plays", []):
+        play_type = (play.get("type") or {}).get("type")
+        if play_type not in _BASE_VALUES:
+            continue
+        batter = next((p for p in play.get("participants", []) if p.get("type") == "batter"), None)
+        if batter and batter.get("athlete", {}).get("id") == entity_id:
+            total += _BASE_VALUES[play_type]
+    return total
+
+
 def get_stat_value(event: dict, entity_id: str, stat_key: tuple) -> tuple[Optional[str], Optional[bool], Optional[dict]]:
     """Returns (value, is_home, team). team/is_home are set whenever the
     player appears anywhere in the boxscore; value is None if they don't
@@ -225,6 +250,9 @@ def get_stat_value(event: dict, entity_id: str, stat_key: tuple) -> tuple[Option
     team, is_home = _find_athlete_team(event, entity_id)
     if team is None:
         return None, None, None
+
+    if stat_key == TOTAL_BASES_KEY:
+        return _compute_total_bases(event, entity_id), is_home, team
 
     label, discriminator = stat_key
     for team_entry in (event.get("boxscore") or {}).get("players", []):
