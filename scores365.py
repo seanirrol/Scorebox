@@ -13,8 +13,11 @@ import datetime
 import re
 import time
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 import requests
+
+EASTERN = ZoneInfo("America/New_York")
 
 BASE_URL = "https://webws.365scores.com/web"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -346,14 +349,27 @@ def score_only_line(game: dict) -> str:
 
 
 def _starts_in_text(game: dict) -> str:
+    """Fixed Eastern-time kickoff, e.g. "17:00 Today" / "18:00 Tomorrow" /
+    "18:00 Jul 29" for anything further out."""
     kickoff = start_epoch(game)
     if not kickoff:
         return "Kickoff: TBD"
-    seconds = kickoff - time.time()
-    if seconds <= 0:
-        return "Starting soon"
-    hours, minutes = divmod(int(seconds // 60), 60)
-    return f"Starts in {hours}h{minutes:02d}m" if hours else f"Starts in {minutes}m"
+    dt = datetime.datetime.fromtimestamp(kickoff, tz=EASTERN)
+    today = datetime.datetime.now(tz=EASTERN).date()
+    if dt.date() == today:
+        day_label = "Today"
+    elif dt.date() == today + datetime.timedelta(days=1):
+        day_label = "Tomorrow"
+    else:
+        day_label = dt.strftime("%b %d")
+    return f"{dt.strftime('%H:%M')} {day_label}"
+
+
+def next_eastern_midnight_epoch(from_ts: float) -> float:
+    """Epoch timestamp of the next Eastern-time midnight strictly after from_ts."""
+    now = datetime.datetime.fromtimestamp(from_ts, tz=EASTERN)
+    next_midnight = (now + datetime.timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return next_midnight.timestamp()
 
 
 def status_line(game: dict, sport_id: Optional[int] = None) -> str:

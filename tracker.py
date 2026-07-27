@@ -159,6 +159,31 @@ async def _track_loop(message: discord.Message, sport_id: int, game_id, channel_
             await asyncio.sleep(config.UPDATE_INTERVAL_SECONDS)
 
             game = await asyncio.to_thread(scores365.get_live_update, sport_id, game_id)
+
+            # A notstarted match's score/status can't change before kickoff,
+            # so hibernate instead of polling every cycle - this is also what
+            # was driving the rate-limit contention with several simultaneous
+            # trackers. Wakes once per Eastern-time day boundary (to keep the
+            # displayed "Today"/"Tomorrow" label accurate) and once more just
+            # before it actually starts, editing the message each time.
+            while game and scores365.map_status_type(game.get("statusGroup")) == "notstarted":
+                kickoff = scores365.start_epoch(game)
+                if not kickoff:
+                    break
+                seconds_until_kickoff = kickoff - time.time()
+                if seconds_until_kickoff <= 90:
+                    break
+                wake_at = min(kickoff - 60, scores365.next_eastern_midnight_epoch(time.time()))
+                hibernate_for = wake_at - time.time()
+                # Hibernating shouldn't eat into the MAX_TRACK_HOURS budget
+                # meant for the actual live match - push the deadline out by
+                # the same amount so a distant kickoff doesn't get silently
+                # killed before it ever goes live.
+                deadline += hibernate_for
+                log.info("Game %s not starting soon; hibernating %.0fs", game_id, hibernate_for)
+                await asyncio.sleep(hibernate_for)
+                game = await asyncio.to_thread(scores365.get_live_update, sport_id, game_id)
+
             if not game:
                 consecutive_misses += 1
                 log.warning(
@@ -169,23 +194,6 @@ async def _track_loop(message: discord.Message, sport_id: int, game_id, channel_
                     break
                 continue
             consecutive_misses = 0
-
-            if scores365.map_status_type(game.get("statusGroup")) == "notstarted":
-                kickoff = scores365.start_epoch(game)
-                seconds_until_kickoff = (kickoff - time.time()) if kickoff else 0
-                if seconds_until_kickoff > 90:
-                    hibernate_for = seconds_until_kickoff - 60
-                    # Hibernating shouldn't eat into the MAX_TRACK_HOURS budget
-                    # meant for the actual live match - push the deadline out
-                    # by the same amount so a distant kickoff doesn't get
-                    # silently killed before it ever goes live.
-                    deadline += hibernate_for
-                    log.info(
-                        "Game %s starts in %.0fs; hibernating until ~1 minute before kickoff",
-                        game_id, seconds_until_kickoff,
-                    )
-                    await asyncio.sleep(hibernate_for)
-                    continue
 
             embed, file = await build_embed(game, sport_id)
             try:
