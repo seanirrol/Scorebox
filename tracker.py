@@ -20,6 +20,8 @@ log = logging.getLogger("scorebox.tracker")
 # How long a finished match's final score stays posted before auto-deleting.
 POST_MATCH_DELETE_SECONDS = 24 * 3600
 
+TRASH_EMOJI = "🗑️"
+
 # Tolerate this many consecutive "game not found" polls before giving up -
 # 365scores' pagination can transiently return an incomplete list (e.g. a
 # mid-fetch network hiccup), which would otherwise silently kill tracking
@@ -156,7 +158,7 @@ def stop_tracking(channel_id: int, game_id) -> bool:
     return False
 
 
-async def _track_loop(message: discord.Message, sport_id: int, game_id, channel_id: int):
+async def _track_loop(message: discord.Message, sport_id: int, game_id, channel_id: int, owner_id: int):
     key = track_key(channel_id, game_id)
     deadline = time.monotonic() + config.MAX_TRACK_HOURS * 3600
 
@@ -178,6 +180,7 @@ async def _track_loop(message: discord.Message, sport_id: int, game_id, channel_
             # trackers. Wakes once per Eastern-time day boundary (to keep the
             # displayed "Today"/"Tomorrow" label accurate) and once more just
             # before it actually starts, editing the message each time.
+            hibernated = False
             while game and scores365.map_status_type(game.get("statusGroup")) == "notstarted":
                 kickoff = scores365.start_epoch(game)
                 if not kickoff:
@@ -192,6 +195,7 @@ async def _track_loop(message: discord.Message, sport_id: int, game_id, channel_
                 # the same amount so a distant kickoff doesn't get silently
                 # killed before it ever goes live.
                 deadline += hibernate_for
+                hibernated = True
                 log.info("Game %s not starting soon; hibernating %.0fs", game_id, hibernate_for)
                 await asyncio.sleep(hibernate_for)
                 game = await asyncio.to_thread(scores365.get_live_update, sport_id, game_id)
@@ -208,6 +212,37 @@ async def _track_loop(message: discord.Message, sport_id: int, game_id, channel_
             consecutive_misses = 0
 
             embed, file = await build_embed(game, sport_id)
+
+            if hibernated:
+                # The final wake right before kickoff - bump the card to the
+                # bottom of the channel instead of editing a message that may
+                # be buried under whatever chat happened during the (possibly
+                # long) hibernation. This is the one moment reposting helps
+                # rather than hurts, since it's about to actually go live.
+                try:
+                    new_message = await message.channel.send(embed=embed, file=file)
+                except discord.HTTPException as e:
+                    log.warning("Failed to repost tracking message near kickoff: %s", e)
+                else:
+                    try:
+                        await new_message.add_reaction(TRASH_EMOJI)
+                    except discord.HTTPException as e:
+                        log.warning("Failed to react to reposted tracking message: %s", e)
+                    try:
+                        await new_message.pin()
+                    except discord.HTTPException as e:
+                        log.warning("Failed to pin reposted tracking message: %s", e)
+                    old_message = message
+                    message = new_message
+                    _message_owners.pop(old_message.id, None)
+                    register_message(message.id, channel_id, game_id, owner_id)
+                    _persist(channel_id, game_id, message.id, sport_id, owner_id)
+                    try:
+                        await old_message.delete()
+                    except discord.HTTPException as e:
+                        log.warning("Failed to delete old tracking message after repost: %s", e)
+                continue
+
             try:
                 await message.edit(embed=embed, attachments=[file])
                 consecutive_edit_failures = 0
@@ -245,7 +280,7 @@ def start_tracking(message: discord.Message, sport_id: int, game: dict, channel_
     key = track_key(channel_id, game_id)
     if key in _active_tracks:
         return
-    task = asyncio.create_task(_track_loop(message, sport_id, game_id, channel_id))
+    task = asyncio.create_task(_track_loop(message, sport_id, game_id, channel_id, owner_id))
     _active_tracks[key] = task
     register_message(message.id, channel_id, game_id, owner_id)
     _persist(channel_id, game_id, message.id, sport_id, owner_id)
