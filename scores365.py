@@ -249,7 +249,7 @@ def names_match(a: str, b: str) -> bool:
     return smaller.issubset(larger)
 
 
-def _start_epoch(game: dict) -> float:
+def start_epoch(game: dict) -> float:
     start = game.get("startTime")
     if not start:
         return 0.0
@@ -291,7 +291,7 @@ def find_match_for_team(team: str, sport: Optional[str] = None) -> Optional[tupl
             status = map_status_type(game.get("statusGroup"))
             rank = _STATUS_RANK.get(status, 3)
             if best is None or rank < best_rank or (
-                rank == best_rank and abs(_start_epoch(game) - now) < abs(_start_epoch(best) - now)
+                rank == best_rank and abs(start_epoch(game) - now) < abs(start_epoch(best) - now)
             ):
                 best, best_sport_id, best_rank = game, sport_id, rank
 
@@ -346,10 +346,10 @@ def score_only_line(game: dict) -> str:
 
 
 def _starts_in_text(game: dict) -> str:
-    start_epoch = _start_epoch(game)
-    if not start_epoch:
+    kickoff = start_epoch(game)
+    if not kickoff:
         return "Kickoff: TBD"
-    seconds = start_epoch - time.time()
+    seconds = kickoff - time.time()
     if seconds <= 0:
         return "Starting soon"
     hours, minutes = divmod(int(seconds // 60), 60)

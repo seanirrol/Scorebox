@@ -170,6 +170,23 @@ async def _track_loop(message: discord.Message, sport_id: int, game_id, channel_
                 continue
             consecutive_misses = 0
 
+            if scores365.map_status_type(game.get("statusGroup")) == "notstarted":
+                kickoff = scores365.start_epoch(game)
+                seconds_until_kickoff = (kickoff - time.time()) if kickoff else 0
+                if seconds_until_kickoff > 90:
+                    hibernate_for = seconds_until_kickoff - 60
+                    # Hibernating shouldn't eat into the MAX_TRACK_HOURS budget
+                    # meant for the actual live match - push the deadline out
+                    # by the same amount so a distant kickoff doesn't get
+                    # silently killed before it ever goes live.
+                    deadline += hibernate_for
+                    log.info(
+                        "Game %s starts in %.0fs; hibernating until ~1 minute before kickoff",
+                        game_id, seconds_until_kickoff,
+                    )
+                    await asyncio.sleep(hibernate_for)
+                    continue
+
             embed, file = await build_embed(game, sport_id)
             try:
                 await message.edit(embed=embed, attachments=[file])
