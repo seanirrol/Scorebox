@@ -61,7 +61,10 @@ async def build_embed(game: dict, sport_id: Optional[int] = None) -> tuple[disco
         if kickoff:
             embed.description = f"<t:{int(kickoff)}:f>"
 
-    period_text = scores365.status_line(game, sport_id)
+    # Pre-match, the pill is redundant now that the localized kickoff time
+    # shows above the image (embed description) - skip it there and only
+    # show the live period/clock (e.g. "2nd Half (98:00)") once it starts.
+    period_text = "" if status == "notstarted" else scores365.status_line(game, sport_id)
 
     # Each row is [main score, smaller sub-tier(s)...] left-to-right, main
     # score first (rendered biggest/boldest, on the left) - tennis gets
