@@ -130,6 +130,16 @@ def list_tracked(channel_id: int) -> list[str]:
     return [key.split(":", 1)[1] for key in _active_tracks if key.startswith(prefix)]
 
 
+def list_tracked_details(channel_id: int) -> list[dict]:
+    """Same game IDs as list_tracked, paired with their sport_id (from
+    persisted state) so callers can look up team names for display."""
+    game_ids = set(list_tracked(channel_id))  # strings, e.g. "4790091"
+    return [
+        entry for entry in state.load_tracks().values()
+        if entry["channel_id"] == channel_id and str(entry["game_id"]) in game_ids
+    ]
+
+
 def _persist(channel_id: int, game_id, message_id: int, sport_id, owner_id: int):
     data = state.load_tracks()
     data[track_key(channel_id, game_id)] = {

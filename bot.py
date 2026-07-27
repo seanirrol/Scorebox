@@ -261,12 +261,23 @@ async def tracked(interaction: discord.Interaction):
     if not _channel_allowed(interaction):
         await _reject_wrong_channel(interaction)
         return
-    game_ids = tracker.list_tracked(interaction.channel_id)
-    if not game_ids:
-        await interaction.response.send_message("No matches are being tracked in this channel.", ephemeral=True)
+    await interaction.response.defer(ephemeral=True)
+    details = tracker.list_tracked_details(interaction.channel_id)
+    if not details:
+        await interaction.followup.send("No matches are being tracked in this channel.", ephemeral=True)
         return
-    listing = "\n".join(f"- `{gid}`" for gid in game_ids)
-    await interaction.response.send_message(f"Tracked game IDs in this channel:\n{listing}", ephemeral=True)
+
+    lines = []
+    for entry in details:
+        game = await asyncio.to_thread(scores365.get_live_update, entry["sport_id"], entry["game_id"])
+        if game:
+            home = (game.get("homeCompetitor") or {}).get("name", "?")
+            away = (game.get("awayCompetitor") or {}).get("name", "?")
+            lines.append(f"- `{entry['game_id']}` — {home} vs {away}")
+        else:
+            lines.append(f"- `{entry['game_id']}` — (couldn't fetch match info)")
+    listing = "\n".join(lines)
+    await interaction.followup.send(f"Tracked matches in this channel:\n{listing}", ephemeral=True)
 
 
 def main():
