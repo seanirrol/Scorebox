@@ -261,7 +261,7 @@ async def track(interaction: discord.Interaction, sport: app_commands.Choice[str
         await interaction.followup.send("That match is already being tracked in this channel.", ephemeral=True)
         return
 
-    embed, file = await tracker.build_embed(game, sport_id)
+    embed, file = await tracker.build_embed(game, sport_id, team)
     message = await interaction.followup.send(embed=embed, file=file, wait=True)
 
     # interaction followup messages are bound to a webhook token that expires
@@ -274,7 +274,7 @@ async def track(interaction: discord.Interaction, sport: app_commands.Choice[str
     if scores365.is_finished(game):
         return  # Nothing to track, match is already over.
 
-    tracker.start_tracking(message, sport_id, game, interaction.channel_id, interaction.user.id)
+    tracker.start_tracking(message, sport_id, game, interaction.channel_id, interaction.user.id, team)
 
 
 async def stat_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
