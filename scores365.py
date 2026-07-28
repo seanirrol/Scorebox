@@ -336,6 +336,27 @@ def main_scores(game: dict) -> Optional[tuple]:
     return (home_score, away_score)
 
 
+def grade_moneyline(game: dict, picked_team: str) -> Optional[str]:
+    """Grades a moneyline pick against a finished game's final score.
+    Returns "won"/"lost"/"push" (a tie), or None if there's no final score
+    yet or picked_team doesn't match either side."""
+    home = (game.get("homeCompetitor") or {}).get("name", "")
+    away = (game.get("awayCompetitor") or {}).get("name", "")
+    scores = main_scores(game)
+    if not scores:
+        return None
+    home_score, away_score = scores
+    if names_match(home, picked_team):
+        picked_score, other_score = home_score, away_score
+    elif names_match(away, picked_team):
+        picked_score, other_score = away_score, home_score
+    else:
+        return None
+    if picked_score == other_score:
+        return "push"
+    return "won" if picked_score > other_score else "lost"
+
+
 def format_score_line(game: dict) -> str:
     home = (game.get("homeCompetitor") or {}).get("name", "?")
     away = (game.get("awayCompetitor") or {}).get("name", "?")

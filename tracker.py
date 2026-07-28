@@ -43,13 +43,27 @@ _STATUS_COLOR = {
 }
 
 
-async def build_embed(game: dict, sport_id: Optional[int] = None) -> tuple[discord.Embed, discord.File]:
-    """Returns (embed, file) - the score image must be sent/edited alongside the embed."""
+_RESULT_TITLES = {"won": "✅ Pick Won", "lost": "❌ Pick Lost", "push": "➖ Push"}
+
+
+async def build_embed(
+    game: dict, sport_id: Optional[int] = None, picked_team: Optional[str] = None
+) -> tuple[discord.Embed, discord.File]:
+    """Returns (embed, file) - the score image must be sent/edited alongside the embed.
+
+    picked_team is only set for auto-tracked picks (not manual /track usage,
+    which isn't grading a bet) - once the match finishes, it's compared
+    against the final score to show a Won/Lost/Push badge in the embed title.
+    """
     home_competitor = game.get("homeCompetitor") or {}
     away_competitor = game.get("awayCompetitor") or {}
     status = scores365.map_status_type(game.get("statusGroup"))
 
     embed = discord.Embed(color=_STATUS_COLOR.get(status, 0x95A5A6))
+    if status == "finished" and picked_team:
+        result = scores365.grade_moneyline(game, picked_team)
+        if result:
+            embed.title = _RESULT_TITLES[result]
 
     author_bits = [b for b in (scores365.sport_label(sport_id), game.get("competitionDisplayName")) if b]
     if author_bits:
@@ -141,11 +155,11 @@ def list_tracked_details(channel_id: int) -> list[dict]:
     ]
 
 
-def _persist(channel_id: int, game_id, message_id: int, sport_id, owner_id: int):
+def _persist(channel_id: int, game_id, message_id: int, sport_id, owner_id: int, picked_team: Optional[str] = None):
     data = state.load_tracks()
     data[track_key(channel_id, game_id)] = {
         "channel_id": channel_id, "game_id": game_id, "message_id": message_id,
-        "sport_id": sport_id, "owner_id": owner_id,
+        "sport_id": sport_id, "owner_id": owner_id, "picked_team": picked_team,
     }
     state.save_tracks(data)
 
@@ -169,7 +183,10 @@ def stop_tracking(channel_id: int, game_id) -> bool:
     return False
 
 
-async def _track_loop(message: discord.Message, sport_id: int, game_id, channel_id: int, owner_id: int):
+async def _track_loop(
+    message: discord.Message, sport_id: int, game_id, channel_id: int, owner_id: int,
+    picked_team: Optional[str] = None,
+):
     key = track_key(channel_id, game_id)
     deadline = time.monotonic() + config.MAX_TRACK_HOURS * 3600
 
@@ -222,7 +239,7 @@ async def _track_loop(message: discord.Message, sport_id: int, game_id, channel_
                 continue
             consecutive_misses = 0
 
-            embed, file = await build_embed(game, sport_id)
+            embed, file = await build_embed(game, sport_id, picked_team)
 
             if hibernated:
                 # The final wake right before kickoff - bump the card to the
@@ -243,7 +260,7 @@ async def _track_loop(message: discord.Message, sport_id: int, game_id, channel_
                     message = new_message
                     _message_owners.pop(old_message.id, None)
                     register_message(message.id, channel_id, game_id, owner_id)
-                    _persist(channel_id, game_id, message.id, sport_id, owner_id)
+                    _persist(channel_id, game_id, message.id, sport_id, owner_id, picked_team)
                     try:
                         await old_message.delete()
                     except discord.HTTPException as e:
@@ -278,15 +295,18 @@ async def _track_loop(message: discord.Message, sport_id: int, game_id, channel_
         _forget(channel_id, game_id)
 
 
-def start_tracking(message: discord.Message, sport_id: int, game: dict, channel_id: int, owner_id: int):
+def start_tracking(
+    message: discord.Message, sport_id: int, game: dict, channel_id: int, owner_id: int,
+    picked_team: Optional[str] = None,
+):
     game_id = game["id"]
     key = track_key(channel_id, game_id)
     if key in _active_tracks:
         return
-    task = asyncio.create_task(_track_loop(message, sport_id, game_id, channel_id, owner_id))
+    task = asyncio.create_task(_track_loop(message, sport_id, game_id, channel_id, owner_id, picked_team))
     _active_tracks[key] = task
     register_message(message.id, channel_id, game_id, owner_id)
-    _persist(channel_id, game_id, message.id, sport_id, owner_id)
+    _persist(channel_id, game_id, message.id, sport_id, owner_id, picked_team)
 
 
 async def resume_all(client: discord.Client):
@@ -316,5 +336,5 @@ async def resume_all(client: discord.Client):
         # start_tracking/_track_loop - it re-registers the message (so the
         # 🗑️ reaction keeps working) and re-arms the 24h auto-delete timer,
         # which would otherwise be silently lost on every restart.
-        start_tracking(message, sport_id, game, channel_id, owner_id)
+        start_tracking(message, sport_id, game, channel_id, owner_id, entry.get("picked_team"))
         log.info("Resumed tracking game %s in channel %s", game_id, channel_id)

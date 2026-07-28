@@ -278,3 +278,18 @@ def get_stat_value(event: dict, entity_id: str, stat_key: tuple) -> tuple[Option
                     stats = a.get("stats", [])
                     return (stats[idx] if idx < len(stats) else None), is_home, team
     return None, is_home, team
+
+
+def grade_over_under(value, direction: str, line: float) -> Optional[str]:
+    """Grades an over/under prop against a finished event's final stat value.
+    Returns "won"/"lost"/"push" (exactly on the line), or None if value isn't
+    a usable number (e.g. the player never appeared in the boxscore)."""
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if numeric == line:
+        return "push"
+    if direction == "over":
+        return "won" if numeric > line else "lost"
+    return "won" if numeric < line else "lost"

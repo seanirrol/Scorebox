@@ -116,18 +116,21 @@ async def _auto_track(channel: discord.abc.Messageable, sport_value: str, team: 
     if tracker.is_tracked(channel.id, game_id):
         return
 
-    embed, file = await tracker.build_embed(game, sport_id)
+    embed, file = await tracker.build_embed(game, sport_id, team)
     message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
     tracker.register_message(message.id, channel.id, game_id, None)
     await message.add_reaction(TRASH_EMOJI)
 
     if scores365.is_finished(game):
         return
-    tracker.start_tracking(message, sport_id, game, channel.id, None)
+    tracker.start_tracking(message, sport_id, game, channel.id, None, team)
     log.info("Auto-tracked pick '%s' -> game %s", team, game_id)
 
 
-async def _auto_playerprops(channel: discord.abc.Messageable, sport_value: str, player: str, stat: str):
+async def _auto_playerprops(
+    channel: discord.abc.Messageable, sport_value: str, player: str, stat: str,
+    direction: Optional[str] = None, line: Optional[float] = None,
+):
     """Mirrors /playerprops' core logic for an auto-detected pick."""
     stat_key = espn.STAT_CATALOG.get(sport_value, {}).get(stat)
     if not stat_key:
@@ -152,7 +155,8 @@ async def _auto_playerprops(channel: discord.abc.Messageable, sport_value: str, 
 
     current_value, is_home, team = await asyncio.to_thread(espn.get_stat_value, event, entity["id"], stat_key)
     embed, file = await proptracker.build_embed(
-        entity["name"], entity["id"], entity["photo_url"], sport_value, stat, current_value, is_home, team, event
+        entity["name"], entity["id"], entity["photo_url"], sport_value, stat, current_value, is_home, team, event,
+        direction, line,
     )
     message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
     proptracker.register_message(message.id, channel.id, event_id, entity["id"], stat_key, None)
@@ -162,7 +166,7 @@ async def _auto_playerprops(channel: discord.abc.Messageable, sport_value: str, 
         return
     proptracker.start_tracking(
         message, channel.id, event_id, entity["id"], entity["team_id"], entity["photo_url"],
-        sport_value, stat_key, stat, entity["name"], None,
+        sport_value, stat_key, stat, entity["name"], None, direction, line,
     )
     log.info("Auto-tracked player prop pick: %s - %s", player, stat)
 
@@ -190,7 +194,10 @@ async def on_message(message: discord.Message):
             if pick["kind"] == "track":
                 await _auto_track(target_channel, pick["sport"], pick["team"])
             else:
-                await _auto_playerprops(target_channel, pick["sport"], pick["player"], pick["stat"])
+                await _auto_playerprops(
+                    target_channel, pick["sport"], pick["player"], pick["stat"],
+                    pick.get("direction"), pick.get("line"),
+                )
         except Exception as e:
             log.warning("Failed to auto-track pick %s: %s", pick, e)
 

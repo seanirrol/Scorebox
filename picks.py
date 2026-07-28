@@ -45,7 +45,7 @@ _HEADER_SPORT_MAP = {
 }
 
 _LINE_RE = re.compile(r"^\s*(?:\d+[.)]\s*)?\[([^\]]+)\]\s*(.+)$")
-_PLAYER_STAT_RE = re.compile(r"^(.+?)\s+(?:Over|Under)\s+[\d.]+\s+(.+?)\s*(?:\(|$)", re.IGNORECASE)
+_PLAYER_STAT_RE = re.compile(r"^(.+?)\s+(Over|Under)\s+([\d.]+)\s+(.+?)\s*(?:\(|$)", re.IGNORECASE)
 
 # For a baseball "Strikeouts" prop with no other context, pitcher strikeouts
 # is the overwhelmingly common bet type - default there rather than guessing
@@ -164,12 +164,17 @@ def _parse_player_prop(sport_key: str, sport: str, description: str) -> Optional
     # De La Cruz - Over 1.5 Total Bases") stays attached to group(1) since the
     # regex only anchors on whitespace before Over/Under, not the dash itself.
     player = re.sub(r"[\s-]+$", "", pm.group(1)).strip()
-    raw_stat = pm.group(2).strip()
+    direction = pm.group(2).lower()
+    line = float(pm.group(3))
+    raw_stat = pm.group(4).strip()
     prop_sport = _PROP_SPORT_OVERRIDE.get(sport_key, sport)
     stat_label = _match_stat_label(prop_sport, raw_stat)
     if not player or not stat_label:
         return None
-    return {"kind": "playerprops", "sport": prop_sport, "player": player, "stat": stat_label}
+    return {
+        "kind": "playerprops", "sport": prop_sport, "player": player, "stat": stat_label,
+        "direction": direction, "line": line,
+    }
 
 
 def _parse_with_category(category: str, description: str) -> Optional[dict]:

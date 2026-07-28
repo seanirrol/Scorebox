@@ -92,6 +92,7 @@ def unregister_message(message_id: int):
 def _persist(
     channel_id: int, event_id, entity_id: str, stat_key: tuple, message_id: int,
     sport: str, team_id: str, photo_url: Optional[str], stat_label: str, player_name: str, owner_id: int,
+    direction: Optional[str] = None, line: Optional[float] = None,
 ):
     data = state.load_props()
     data[prop_key(channel_id, event_id, entity_id, stat_key)] = {
@@ -99,6 +100,7 @@ def _persist(
         "stat_key": list(stat_key), "message_id": message_id, "sport": sport,
         "team_id": team_id, "photo_url": photo_url, "stat_label": stat_label,
         "player_name": player_name, "owner_id": owner_id,
+        "direction": direction, "line": line,
     }
     state.save_props(data)
 
@@ -126,6 +128,9 @@ def _fmt_value(v) -> str:
     return "-" if v is None else str(v)
 
 
+_RESULT_TITLES = {"won": "✅ Pick Won", "lost": "❌ Pick Lost", "push": "➖ Push"}
+
+
 async def build_embed(
     player_name: str,
     entity_id: str,
@@ -136,11 +141,18 @@ async def build_embed(
     is_home,
     team: Optional[dict],
     event: dict,
+    direction: Optional[str] = None,
+    line: Optional[float] = None,
 ) -> tuple[discord.Embed, discord.File]:
     """
     Returns (embed, file). Sport/tournament goes in the embed author line and
     matchup + status/kickoff-time in the description - both outside the
     image, same placement as /track's author/description.
+
+    direction/line are only set for auto-tracked picks (not manual
+    /playerprops usage, which has no line to grade against) - once the event
+    finishes, they're compared against the final stat value to show a
+    Won/Lost/Push badge in the embed title.
     """
     comp = (event.get("header", {}).get("competitions") or [{}])[0]
     status = comp.get("status", {}).get("type", {})
@@ -173,6 +185,10 @@ async def build_embed(
     file = discord.File(io.BytesIO(image_bytes), filename="score.png")
 
     embed = discord.Embed(color=_STATUS_COLOR.get(status_type, 0x95A5A6))
+    if status_type == "finished" and direction is not None and line is not None:
+        result = espn.grade_over_under(current_value, direction, line)
+        if result:
+            embed.title = _RESULT_TITLES[result]
     embed.set_author(name=sport_tournament)
     embed.description = description
     embed.set_image(url="attachment://score.png")
@@ -193,6 +209,8 @@ async def _track_loop(
     stat_label: str,
     player_name: str,
     owner_id: int,
+    direction: Optional[str] = None,
+    line: Optional[float] = None,
 ):
     key = prop_key(channel_id, event_id, entity_id, stat_key)
     deadline = time.monotonic() + config.MAX_TRACK_HOURS * 3600
@@ -245,7 +263,8 @@ async def _track_loop(
 
             current_value, is_home, team = await asyncio.to_thread(espn.get_stat_value, event, entity_id, stat_key)
             embed, file = await build_embed(
-                player_name, entity_id, photo_url, sport, stat_label, current_value, is_home, team, event
+                player_name, entity_id, photo_url, sport, stat_label, current_value, is_home, team, event,
+                direction, line,
             )
 
             if hibernated:
@@ -265,7 +284,10 @@ async def _track_loop(
                     message = new_message
                     _message_owners.pop(old_message.id, None)
                     register_message(message.id, channel_id, event_id, entity_id, stat_key, owner_id)
-                    _persist(channel_id, event_id, entity_id, stat_key, message.id, sport, team_id, photo_url, stat_label, player_name, owner_id)
+                    _persist(
+                        channel_id, event_id, entity_id, stat_key, message.id, sport, team_id, photo_url,
+                        stat_label, player_name, owner_id, direction, line,
+                    )
                     try:
                         await old_message.delete()
                     except discord.HTTPException as e:
@@ -312,16 +334,24 @@ def start_tracking(
     stat_label: str,
     player_name: str,
     owner_id: int,
+    direction: Optional[str] = None,
+    line: Optional[float] = None,
 ):
     key = prop_key(channel_id, event_id, entity_id, stat_key)
     if key in _active_props:
         return
     task = asyncio.create_task(
-        _track_loop(message, channel_id, event_id, entity_id, team_id, photo_url, sport, stat_key, stat_label, player_name, owner_id)
+        _track_loop(
+            message, channel_id, event_id, entity_id, team_id, photo_url, sport, stat_key, stat_label,
+            player_name, owner_id, direction, line,
+        )
     )
     _active_props[key] = task
     register_message(message.id, channel_id, event_id, entity_id, stat_key, owner_id)
-    _persist(channel_id, event_id, entity_id, stat_key, message.id, sport, team_id, photo_url, stat_label, player_name, owner_id)
+    _persist(
+        channel_id, event_id, entity_id, stat_key, message.id, sport, team_id, photo_url, stat_label,
+        player_name, owner_id, direction, line,
+    )
 
 
 async def resume_all(client: discord.Client):
@@ -352,5 +382,6 @@ async def resume_all(client: discord.Client):
         start_tracking(
             message, channel_id, event_id, entity_id, entry["team_id"], entry.get("photo_url"), entry["sport"],
             stat_key, entry["stat_label"], entry["player_name"], entry.get("owner_id"),
+            entry.get("direction"), entry.get("line"),
         )
         log.info("Resumed prop tracking for %s in channel %s", entry["player_name"], channel_id)
