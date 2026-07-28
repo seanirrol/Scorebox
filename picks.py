@@ -86,8 +86,23 @@ def _match_stat_label(sport: str, raw_stat: str) -> Optional[str]:
     return None
 
 
+# Partial-game qualifiers (settle on a sub-period, not the final score) -
+# tracking the full game via /track would show a live/final score that
+# doesn't reflect whether one of these actually won or lost, so they're
+# skipped rather than mistakenly tracked as if they were a full-game pick.
+_PARTIAL_GAME_MARKERS = (
+    "first 5 innings", "first five innings", "1st 5 innings", "f5",
+    "first 4 innings", "first four innings", "1st 4 innings", "f4",
+    "first half", "1st half", "second half", "2nd half",
+    "first quarter", "1st quarter",
+)
+
+
 def _parse_team_pick(description: str) -> Optional[str]:
     text = _clean_line(description)
+    lowered = text.lower()
+    if any(marker in lowered for marker in _PARTIAL_GAME_MARKERS):
+        return None
     for sep in (" vs. ", " vs ", " v. ", " v "):
         if sep in text:
             return text.split(sep, 1)[0].strip()
