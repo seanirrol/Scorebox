@@ -163,7 +163,16 @@ async def build_embed(
     """
     comp = (event.get("header", {}).get("competitions") or [{}])[0]
     status = comp.get("status", {}).get("type", {})
-    status_type = {"pre": "notstarted", "in": "inprogress", "post": "finished"}.get(status.get("state"), "notstarted")
+    # espn.is_finished() is the single source of truth for "finished", since
+    # a naive state=="post" check also matches postponed/canceled games
+    # (confirmed live) - those fall back to "notstarted" here rather than
+    # showing a false "Final" badge.
+    if espn.is_finished(event):
+        status_type = "finished"
+    elif status.get("state") == "in":
+        status_type = "inprogress"
+    else:
+        status_type = "notstarted"
 
     competitors = comp.get("competitors", [])
     home_name = next((c.get("team", {}).get("displayName", "?") for c in competitors if c.get("homeAway") == "home"), "?")

@@ -203,8 +203,12 @@ def get_event(sport: str, event_id: str) -> Optional[dict]:
 
 
 def is_finished(event: dict) -> bool:
-    status = (event.get("header", {}).get("competitions") or [{}])[0].get("status", {})
-    return status.get("type", {}).get("state") == "post"
+    """True only for an actually-completed game - ESPN buckets postponed/
+    suspended/canceled games under the same state="post" as a real finish
+    (confirmed live: a postponed game had state="post" but completed=False,
+    with name="STATUS_POSTPONED"), so state alone isn't enough."""
+    status_type = (event.get("header", {}).get("competitions") or [{}])[0].get("status", {}).get("type", {})
+    return status_type.get("state") == "post" and status_type.get("completed", False)
 
 
 def match_status_text(event: dict, sport: str) -> str:
@@ -212,7 +216,9 @@ def match_status_text(event: dict, sport: str) -> str:
     status_type = comp.get("status", {}).get("type", {})
     state = status_type.get("state")
     if state == "post":
-        return "Final"
+        # ESPN's own detail text already distinguishes "Final" from
+        # "Postponed"/"Canceled"/etc, so trust it rather than assuming Final.
+        return status_type.get("detail") or "Final"
     if state == "pre":
         start = comp.get("date")
         if not start:
