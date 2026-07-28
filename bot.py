@@ -351,15 +351,31 @@ async def playerprops(interaction: discord.Interaction, sport: app_commands.Choi
         )
 
 
-@tree.command(name="untrack", description="Stop auto-updating a tracked match in this channel")
-@app_commands.describe(game_id="Game ID shown by /tracked")
-async def untrack(interaction: discord.Interaction, game_id: str):
+@tree.command(name="untrack", description="Stop auto-updating a tracked match or player prop in this channel")
+@app_commands.describe(
+    game_id="Game ID shown by /tracked",
+    player="Player name, to target one specific player prop if a game has more than one tracked (optional)",
+)
+async def untrack(interaction: discord.Interaction, game_id: str, player: Optional[str] = None):
     if not _channel_allowed(interaction):
         await _reject_wrong_channel(interaction)
         return
-    stopped = tracker.stop_tracking(interaction.channel_id, game_id)
+
+    stopped = []
+    if tracker.stop_tracking(interaction.channel_id, game_id):
+        stopped.append(f"game `{game_id}`")
+
+    for entry in proptracker.list_tracked_details(interaction.channel_id):
+        if str(entry["event_id"]) != str(game_id):
+            continue
+        if player and player.lower() not in entry["player_name"].lower():
+            continue
+        stat_key = tuple(entry["stat_key"])
+        if proptracker.stop_tracking(interaction.channel_id, entry["event_id"], entry["entity_id"], stat_key):
+            stopped.append(f"{entry['player_name']} ({entry['stat_label']})")
+
     if stopped:
-        await interaction.response.send_message(f"Stopped tracking game `{game_id}`.", ephemeral=True)
+        await interaction.response.send_message(f"Stopped tracking: {', '.join(stopped)}.", ephemeral=True)
     else:
         await interaction.response.send_message(f"No active tracking found for game `{game_id}`.", ephemeral=True)
 
