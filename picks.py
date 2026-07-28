@@ -54,6 +54,15 @@ _AMBIGUOUS_STAT_DEFAULTS = {
     ("baseball", "strikeouts"): "Strikeouts (Pitching)",
 }
 
+# _SPORT_MAP collapses "nba"/"wnba" to the same "basketball" key since
+# 365scores' team search spans both leagues under one sport type - but ESPN's
+# player-prop lookup is scoped to a single league per sport key, so a WNBA
+# prop needs to be routed to its own "wnba" ESPN sport instead of "basketball"
+# (which only points at the NBA endpoint). Team picks aren't affected by this.
+_PROP_SPORT_OVERRIDE = {
+    "wnba": "wnba",
+}
+
 
 def _strip_trailing_parens(text: str) -> str:
     return re.sub(r"\s*\([^)]*\)\s*$", "", text).strip()
@@ -145,24 +154,45 @@ def _is_simple_pick_name(text: str) -> Optional[str]:
     return stripped
 
 
+def _parse_player_prop(sport_key: str, sport: str, description: str) -> Optional[dict]:
+    if sport not in espn.SPORT_PATHS:
+        return None
+    pm = _PLAYER_STAT_RE.match(description)
+    if not pm:
+        return None
+    # Trailing " -" separator sometimes used before "Over/Under" (e.g. "Elly
+    # De La Cruz - Over 1.5 Total Bases") stays attached to group(1) since the
+    # regex only anchors on whitespace before Over/Under, not the dash itself.
+    player = re.sub(r"[\s-]+$", "", pm.group(1)).strip()
+    raw_stat = pm.group(2).strip()
+    prop_sport = _PROP_SPORT_OVERRIDE.get(sport_key, sport)
+    stat_label = _match_stat_label(prop_sport, raw_stat)
+    if not player or not stat_label:
+        return None
+    return {"kind": "playerprops", "sport": prop_sport, "player": player, "stat": stat_label}
+
+
 def _parse_with_category(category: str, description: str) -> Optional[dict]:
-    is_prop = category.lower().endswith("props")
+    is_prop_category = category.lower().endswith("props")
     sport_key = category.lower().replace("props", "").strip()
     sport = _SPORT_MAP.get(sport_key)
     if not sport:
         return None
 
-    if is_prop:
-        if sport not in espn.SPORT_PATHS:
-            return None
-        pm = _PLAYER_STAT_RE.match(description)
-        if not pm:
-            return None
-        player, raw_stat = pm.group(1).strip(), pm.group(2).strip()
-        stat_label = _match_stat_label(sport, raw_stat)
-        if not player or not stat_label:
-            return None
-        return {"kind": "playerprops", "sport": sport, "player": player, "stat": stat_label}
+    # A description shaped like "Player Over/Under N Stat" is a player prop
+    # even when the category itself is bare (e.g. "[MLB]" rather than
+    # "[MLB Props]") - confirmed live that real messages mix both taggings
+    # for the same bet type. A team-vs-team matchup line (e.g. "Angels vs
+    # Giants - Over 8.5 Total Runs") is excluded even though it also matches
+    # the Over/Under shape, since that's a game total, not a single player's
+    # stat.
+    has_matchup = any(sep in description for sep in (" vs. ", " vs ", " v. ", " v "))
+    if not has_matchup:
+        prop = _parse_player_prop(sport_key, sport, description)
+        if prop:
+            return prop
+        if is_prop_category:
+            return None  # explicitly tagged as a prop but couldn't be confidently parsed - don't guess it's a team pick
 
     team = _parse_team_pick(description)
     if not team:

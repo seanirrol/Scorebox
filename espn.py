@@ -31,6 +31,7 @@ UNSUPPORTED_SPORTS = {"tennis", "soccer", "volleyball", "rugby"}
 SPORT_PATHS = {
     "baseball": ("baseball", "mlb"),
     "basketball": ("basketball", "nba"),
+    "wnba": ("basketball", "wnba"),
     "nfl": ("football", "nfl"),
     "hockey": ("hockey", "nhl"),
 }
@@ -38,6 +39,7 @@ SPORT_PATHS = {
 SPORT_DISPLAY_LABELS = {
     "baseball": "MLB",
     "basketball": "NBA",
+    "wnba": "WNBA",
     "nfl": "NFL",
     "hockey": "NHL",
 }
@@ -95,6 +97,8 @@ STAT_CATALOG = {
         "Penalty Minutes": ("PIM", None),
     },
 }
+# WNBA uses the same generic basketball boxscore labels as NBA.
+STAT_CATALOG["wnba"] = STAT_CATALOG["basketball"]
 
 
 class EspnError(Exception):
