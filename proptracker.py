@@ -176,23 +176,27 @@ async def build_embed(
     league_name = ((event.get("header", {}).get("league") or {}).get("name")) or sport_label
     sport_tournament = f"{sport_label} • {league_name}" if league_name != sport_label else sport_label
 
-    # The pick's own line (e.g. "Over 6.5") stays visible for the card's
-    # whole lifetime, same as moneyline cards showing "<Team> ML" - without
-    # it there's no way to tell what the current value needs to beat.
-    description_lines = [f"{direction.title()} {line:g}"] if direction is not None and line is not None else []
+    # The pick's own line (e.g. "Chris Sale Over 6.5 Strikeouts") stays
+    # visible below the matchup for the card's whole lifetime, same as
+    # moneyline cards showing "<Team> ML" - without it there's no way to
+    # tell at a glance what the current value needs to beat. Live/final
+    # status is drawn inside the image as a pill instead (see
+    # scoreimage.render_player_card), same treatment as /track's cards.
+    description_lines = [matchup]
+    if direction is not None and line is not None:
+        description_lines.append(f"{player_name} {direction.title()} {line:g} {stat_label}")
     if status_type == "notstarted" and comp.get("date"):
         try:
             kickoff = int(datetime.datetime.fromisoformat(comp["date"].replace("Z", "+00:00")).timestamp())
-            description_lines += [matchup, f"<t:{kickoff}:f>"]
+            description_lines.append(f"<t:{kickoff}:f>")
         except ValueError:
-            description_lines.append(matchup)
-    else:
-        description_lines += [matchup, espn.match_status_text(event, sport)]
+            pass
     description = "\n".join(description_lines)
 
+    period_text = "" if status_type == "notstarted" else espn.match_status_text(event, sport)
     image_bytes = await asyncio.to_thread(
         scoreimage.render_player_card,
-        team_name, photo_url, player_name, stat_label, _fmt_value(current_value), status_type,
+        team_name, photo_url, player_name, stat_label, _fmt_value(current_value), status_type, period_text,
     )
     file = discord.File(io.BytesIO(image_bytes), filename="score.png")
 

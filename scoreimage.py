@@ -212,13 +212,16 @@ def render_player_card(
     stat_label: str,
     value_text: str,
     status: str,
+    period_text: str = "",
 ) -> bytes:
     """
     A single-player card: circular photo on the left, name/team/stat
     label/value stacked to its right - saves vertical space versus stacking
-    everything under a centered photo. Sport/tournament, matchup, and match
-    status live in the embed text above the image instead (see
-    proptracker.build_embed), same as /track's author/description.
+    everything under a centered photo. Sport/tournament and matchup live in
+    the embed text above the image instead (see proptracker.build_embed),
+    same as /track's author/description - but the live/final status is drawn
+    as a pill here, same placement and style as render_score_card's, so both
+    card types show it the same way (e.g. "Final").
     """
     photo = _fetch_circular_logo(photo_url, size=PLAYER_PHOTO_SIZE)
     measure = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
@@ -252,7 +255,14 @@ def render_player_card(
     text_block_h = name_block_h + PLAYER_NAME_GAP + small_team_h + SMALL_TEAM_NAME_GAP + stat_label_h + STAT_LABEL_GAP + value_h
 
     content_h = max(text_block_h, PLAYER_PHOTO_SIZE)
-    height = TOP_PADDING + content_h + BOTTOM_PADDING
+
+    pill_w = pill_h = 0
+    if period_text:
+        bbox = measure.textbbox((0, 0), period_text, font=_PERIOD_FONT)
+        pad_x, pad_y = 8, 3
+        pill_w, pill_h = (bbox[2] - bbox[0]) + pad_x * 2, (bbox[3] - bbox[1]) + pad_y * 2
+
+    height = TOP_PADDING + (pill_h + PILL_GAP if period_text else 0) + content_h + BOTTOM_PADDING
 
     img = Image.new("RGBA", (WIDTH, int(height)), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
@@ -266,11 +276,19 @@ def render_player_card(
         width=1,
     )
 
-    photo_top = TOP_PADDING + (content_h - PLAYER_PHOTO_SIZE) / 2
+    content_top = TOP_PADDING
+    if period_text:
+        pill_center_y = content_top + pill_h / 2
+        left = WIDTH / 2 - pill_w / 2
+        draw.rounded_rectangle([left, content_top, left + pill_w, content_top + pill_h], radius=pill_h / 2, fill=status_color)
+        draw.text((WIDTH / 2, pill_center_y), period_text, font=_PERIOD_FONT, fill=_PILL_TEXT_COLOR, anchor="mm")
+        content_top += pill_h + PILL_GAP
+
+    photo_top = content_top + (content_h - PLAYER_PHOTO_SIZE) / 2
     if photo:
         img.paste(photo, (int(photo_x), int(photo_top)), photo)
 
-    y = TOP_PADDING + (content_h - text_block_h) / 2
+    y = content_top + (content_h - text_block_h) / 2
 
     name_top = y
     for i, line in enumerate(name_lines):
