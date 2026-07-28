@@ -176,14 +176,19 @@ async def build_embed(
     league_name = ((event.get("header", {}).get("league") or {}).get("name")) or sport_label
     sport_tournament = f"{sport_label} • {league_name}" if league_name != sport_label else sport_label
 
+    # The pick's own line (e.g. "Over 6.5") stays visible for the card's
+    # whole lifetime, same as moneyline cards showing "<Team> ML" - without
+    # it there's no way to tell what the current value needs to beat.
+    description_lines = [f"{direction.title()} {line:g}"] if direction is not None and line is not None else []
     if status_type == "notstarted" and comp.get("date"):
         try:
             kickoff = int(datetime.datetime.fromisoformat(comp["date"].replace("Z", "+00:00")).timestamp())
-            description = f"{matchup}\n<t:{kickoff}:f>"
+            description_lines += [matchup, f"<t:{kickoff}:f>"]
         except ValueError:
-            description = matchup
+            description_lines.append(matchup)
     else:
-        description = f"{matchup}\n{espn.match_status_text(event, sport)}"
+        description_lines += [matchup, espn.match_status_text(event, sport)]
+    description = "\n".join(description_lines)
 
     image_bytes = await asyncio.to_thread(
         scoreimage.render_player_card,
