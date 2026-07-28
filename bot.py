@@ -173,6 +173,10 @@ async def on_message(message: discord.Message):
     if message.author.id == client.user.id or not config.ALLOWED_CHANNEL_IDS:
         return
 
+    log.info("Picks channel message received: %r", message.content)
+    parsed = picks.parse_picks_message(message.content)
+    log.info("Parsed %d pick(s) from that message", len(parsed))
+
     target_channel_id = next(iter(config.ALLOWED_CHANNEL_IDS))
     try:
         target_channel = client.get_channel(target_channel_id) or await client.fetch_channel(target_channel_id)
@@ -180,7 +184,7 @@ async def on_message(message: discord.Message):
         log.warning("Auto-track: couldn't reach scores channel %s: %s", target_channel_id, e)
         return
 
-    for pick in picks.parse_picks_message(message.content):
+    for pick in parsed:
         try:
             if pick["kind"] == "track":
                 await _auto_track(target_channel, pick["sport"], pick["team"])
