@@ -31,6 +31,18 @@ _SPORT_MAP = {
     "volleyball": "volleyball",
 }
 
+# Bare section headers can use the sport's full name ("Basketball") instead
+# of the league abbreviation bracket tags always use ("NBA") - confirmed live
+# a "Basketball" header was silently dropped because only "nba" was
+# recognized. "Football" is deliberately left out: ambiguous between NFL and
+# soccer depending on the source, so it's safer to skip than guess.
+_HEADER_SPORT_MAP = {
+    **_SPORT_MAP,
+    "baseball": "baseball",
+    "basketball": "basketball",
+    "hockey": "hockey",
+}
+
 _LINE_RE = re.compile(r"^\s*(?:\d+[.)]\s*)?\[([^\]]+)\]\s*(.+)$")
 _PLAYER_STAT_RE = re.compile(r"^(.+?)\s+(?:Over|Under)\s+[\d.]+\s+(.+?)\s*(?:\(|$)", re.IGNORECASE)
 
@@ -95,7 +107,12 @@ _PROP_REJECT_WORDS = {
 
 
 def _bullet_strip(line: str) -> str:
-    return re.sub(r"^[•\-\*]\s*", "", line).strip()
+    # Strips an optional leading list marker - either a bullet char or a
+    # "1." / "2)" numbering (confirmed live: numbered-but-unbracketed lines
+    # like "1. Aces Moneyline (Fanatics -557)" left the "1." in place, which
+    # then tripped _is_simple_pick_name's digit-rejection check meant for
+    # actual prop bets, not list numbering).
+    return re.sub(r"^(?:\d+[.)]\s*)?[•\-\*]?\s*", "", line).strip()
 
 
 def _is_simple_pick_name(text: str) -> Optional[str]:
@@ -189,14 +206,14 @@ def parse_picks_message(content: str) -> list[dict]:
             continue
 
         bare = _bullet_strip(line)
-        if bare.lower() in _SPORT_MAP:
+        if bare.lower() in _HEADER_SPORT_MAP:
             current_category = bare
             continue
 
         if not current_category or current_category.lower().endswith("props"):
             continue  # no context yet, or a Props section - bullets there aren't structured enough to parse safely
 
-        sport = _SPORT_MAP.get(current_category.lower())
+        sport = _HEADER_SPORT_MAP.get(current_category.lower())
         if not sport:
             continue
 
