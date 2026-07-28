@@ -129,6 +129,7 @@ def _fmt_value(v) -> str:
 
 
 _RESULT_TITLES = {"won": "✅ Pick Won", "lost": "❌ Pick Lost", "push": "➖ Push"}
+_RESULT_REACTIONS = {"won": "✅", "lost": "❌"}
 
 
 async def build_embed(
@@ -308,6 +309,13 @@ async def _track_loop(
                 continue
 
             if espn.is_finished(event):
+                if direction is not None and line is not None:
+                    reaction = _RESULT_REACTIONS.get(espn.grade_over_under(current_value, direction, line))
+                    if reaction:
+                        try:
+                            await message.add_reaction(reaction)
+                        except discord.HTTPException as e:
+                            log.warning("Failed to add result reaction: %s", e)
                 await asyncio.sleep(POST_MATCH_DELETE_SECONDS)
                 try:
                     await message.delete()

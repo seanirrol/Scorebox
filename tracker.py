@@ -44,6 +44,7 @@ _STATUS_COLOR = {
 
 
 _RESULT_TITLES = {"won": "✅ Pick Won", "lost": "❌ Pick Lost", "push": "➖ Push"}
+_RESULT_REACTIONS = {"won": "✅", "lost": "❌"}
 
 
 async def build_embed(
@@ -69,14 +70,19 @@ async def build_embed(
     if author_bits:
         embed.set_author(name=" • ".join(author_bits))
 
-    # Discord's own <t:...:f> tag renders "Today"/"Tomorrow"/weekday name and
-    # the clock time already localized to whoever's viewing it - no need to
-    # compute that ourselves per-viewer. Only shown pre-match; dropped once
-    # live to save space, since the card itself covers it from then on.
+    # The picked team stays visible for the card's whole lifetime (auto-
+    # tracked picks only - manual /track has no pick to label). Discord's own
+    # <t:...:f> tag renders "Today"/"Tomorrow"/weekday name and the clock time
+    # already localized to whoever's viewing it - no need to compute that
+    # ourselves per-viewer. Only shown pre-match; dropped once live to save
+    # space, since the card itself covers it from then on.
+    description_lines = [f"{picked_team} ML"] if picked_team else []
     if status == "notstarted":
         kickoff = scores365.start_epoch(game)
         if kickoff:
-            embed.description = f"<t:{int(kickoff)}:f>"
+            description_lines.append(f"<t:{int(kickoff)}:f>")
+    if description_lines:
+        embed.description = "\n".join(description_lines)
 
     # Pre-match, the pill is redundant now that the localized kickoff time
     # shows above the image (embed description) - skip it there and only
@@ -281,6 +287,13 @@ async def _track_loop(
                 continue
 
             if scores365.is_finished(game):
+                if picked_team:
+                    reaction = _RESULT_REACTIONS.get(scores365.grade_moneyline(game, picked_team))
+                    if reaction:
+                        try:
+                            await message.add_reaction(reaction)
+                        except discord.HTTPException as e:
+                            log.warning("Failed to add result reaction: %s", e)
                 await asyncio.sleep(POST_MATCH_DELETE_SECONDS)
                 try:
                     await message.delete()
