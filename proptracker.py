@@ -33,6 +33,12 @@ log = logging.getLogger("scorebox.proptracker")
 
 POST_MATCH_DELETE_SECONDS = 24 * 3600
 
+# While hibernating pre-game, how often to re-check whether the player has
+# shown up in ESPN's boxscore yet (lineups typically post 1-3 hours before
+# first pitch/tip-off) - keeps a "?" team name from sitting unrefreshed for
+# however many hours are left until kickoff.
+_LINEUP_CHECK_INTERVAL_SECONDS = 30 * 60
+
 # Tolerate this many consecutive "event not found"/edit-failure polls before
 # giving up - guards against a transient ESPN or Discord hiccup silently
 # killing tracking for something that's still very much alive.
@@ -227,8 +233,16 @@ async def _track_loop(
 
             # A notstarted event's stats can't change before it starts, so
             # hibernate instead of polling every cycle. Wakes once per
-            # Eastern-time day boundary and once more just before it starts.
+            # Eastern-time day boundary and once more just before it starts -
+            # but each individual sleep is capped at _LINEUP_CHECK_INTERVAL_
+            # SECONDS so a card whose player hasn't appeared in ESPN's
+            # boxscore yet (lineups aren't posted until a couple hours before
+            # first pitch - confirmed live the boxscore's athlete lists are
+            # empty/missing that far out) gets re-checked periodically and its
+            # team name refreshed in place, instead of showing "?" for
+            # however many hours are left until kickoff.
             hibernated = False
+            team_shown = False
             while event and not espn.is_finished(event):
                 status = (event.get("header", {}).get("competitions") or [{}])[0].get("status", {})
                 if status.get("type", {}).get("state") != "pre":
@@ -244,12 +258,29 @@ async def _track_loop(
                 if seconds_until_start <= 90:
                     break
                 wake_at = min(kickoff - 60, scores365.next_eastern_midnight_epoch(time.time()))
-                hibernate_for = wake_at - time.time()
+                hibernate_for = min(wake_at - time.time(), _LINEUP_CHECK_INTERVAL_SECONDS)
                 deadline += hibernate_for
                 hibernated = True
                 log.info("Event %s not starting soon; hibernating %.0fs", event_id, hibernate_for)
                 await asyncio.sleep(hibernate_for)
                 event = await asyncio.to_thread(espn.get_event, sport, event_id)
+
+                if not team_shown and event:
+                    current_value, is_home, team = await asyncio.to_thread(
+                        espn.get_stat_value, event, entity_id, stat_key
+                    )
+                    if team is not None:
+                        team_shown = True
+                        refreshed_embed, refreshed_file = await build_embed(
+                            player_name, entity_id, photo_url, sport, stat_label, current_value, is_home, team,
+                            event, direction, line,
+                        )
+                        try:
+                            await throttle.run(
+                                channel_id, lambda: message.edit(embed=refreshed_embed, attachments=[refreshed_file])
+                            )
+                        except discord.HTTPException as e:
+                            log.warning("Failed to refresh prop card once team resolved: %s", e)
 
             if not event:
                 consecutive_misses += 1
