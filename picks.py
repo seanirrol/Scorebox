@@ -85,6 +85,33 @@ def _parse_team_pick(description: str) -> Optional[str]:
     return text or None
 
 
+# Words that show up in prop/spread-style bets, not a plain moneyline pick -
+# a bare bullet line containing any of these (or a digit) is skipped rather
+# than guessed at, since there's no clear separator to isolate just the name.
+_PROP_REJECT_WORDS = {
+    "over", "under", "winner", "set", "sets", "breaks", "total", "totals",
+    "spread", "runs", "points", "goals", "rounds", "games",
+}
+
+
+def _bullet_strip(line: str) -> str:
+    return re.sub(r"^[•\-\*]\s*", "", line).strip()
+
+
+def _is_simple_pick_name(text: str) -> Optional[str]:
+    """A bare 'Name' or 'Name ML' with nothing else attached - rejects
+    anything with digits or prop-betting keywords, which signal a more
+    complex bet we can't safely reduce to just a name."""
+    stripped = re.sub(r"\b(?:ML|Moneyline)\b\s*$", "", text, flags=re.IGNORECASE).strip()
+    if not stripped or re.search(r"\d", stripped):
+        return None
+    if any(word.lower() in _PROP_REJECT_WORDS for word in stripped.split()):
+        return None
+    if not re.match(r"^[A-Za-z.'\- ]+$", stripped):
+        return None
+    return stripped
+
+
 def _parse_with_category(category: str, description: str) -> Optional[dict]:
     is_prop = category.lower().endswith("props")
     sport_key = category.lower().replace("props", "").strip()
@@ -128,12 +155,23 @@ def parse_pick_line(line: str) -> Optional[dict]:
 
 def parse_picks_message(content: str) -> list[dict]:
     """
-    Parses every line of a message, skipping anything unparseable. A line
-    with no "[Category]" tag of its own inherits the most recent tagged
-    category above it - picks are often formatted with the tag only on the
-    first side of a matchup, e.g.:
-      "1. [Tennis] Marcos Giron (Fanatics -1985)"
-      "Ugo Humbert (Bet365 -995)"
+    Parses every line of a message, skipping anything unparseable. Handles
+    two styles:
+
+    1. Bracket-tagged, one category per line:
+         "1. [Tennis] Marcos Giron (Fanatics -1985)"
+         "Ugo Humbert (Bet365 -995)"  <- inherits "Tennis" from the line above
+
+    2. Bare section header followed by a bullet list, e.g.:
+         "Tennis"
+         "- Marcos Giron (Fanatics -1985)"
+         "- Marcos Giron 0 Set 1 Winner (Fanatics -585)"  <- skipped, prop bet
+         "- Jakub Mensik ML (DraftKings -583)"
+
+    Bullet/untagged lines only ever track a plain "Name" or "Name ML" pick -
+    anything with digits or prop-betting words (Over, Winner, Breaks, etc.)
+    attached is skipped rather than guessed at, since there's no clear
+    separator to isolate just the name from a more complex bet.
     """
     results = []
     current_category = None
@@ -141,14 +179,29 @@ def parse_picks_message(content: str) -> list[dict]:
         line = raw_line.strip()
         if not line:
             continue
+
         m = _LINE_RE.match(line)
         if m:
             current_category, description = m.group(1).strip(), m.group(2).strip()
-        elif current_category:
-            description = line
-        else:
+            pick = _parse_with_category(current_category, description)
+            if pick:
+                results.append(pick)
             continue
-        pick = _parse_with_category(current_category, description)
-        if pick:
-            results.append(pick)
+
+        bare = _bullet_strip(line)
+        if bare.lower() in _SPORT_MAP:
+            current_category = bare
+            continue
+
+        if not current_category or current_category.lower().endswith("props"):
+            continue  # no context yet, or a Props section - bullets there aren't structured enough to parse safely
+
+        sport = _SPORT_MAP.get(current_category.lower())
+        if not sport:
+            continue
+
+        name = _is_simple_pick_name(_clean_line(bare))
+        if not name:
+            continue
+        results.append({"kind": "track", "sport": sport, "team": name})
     return results
