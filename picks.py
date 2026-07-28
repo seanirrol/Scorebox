@@ -23,6 +23,7 @@ import espn
 _SPORT_MAP = {
     "mlb": "baseball",
     "nba": "basketball",
+    "wnba": "basketball",
     "nfl": "nfl",
     "nhl": "hockey",
     "soccer": "soccer",
