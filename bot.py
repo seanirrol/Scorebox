@@ -24,6 +24,7 @@ import espn
 import picks
 import proptracker
 import scores365
+import throttle
 import tracker
 
 logging.basicConfig(level=logging.INFO)
@@ -116,7 +117,7 @@ async def _auto_track(channel: discord.abc.Messageable, sport_value: str, team: 
         return
 
     embed, file = await tracker.build_embed(game, sport_id)
-    message = await channel.send(embed=embed, file=file)
+    message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
     tracker.register_message(message.id, channel.id, game_id, None)
     await message.add_reaction(TRASH_EMOJI)
 
@@ -153,7 +154,7 @@ async def _auto_playerprops(channel: discord.abc.Messageable, sport_value: str, 
     embed, file = await proptracker.build_embed(
         entity["name"], entity["id"], entity["photo_url"], sport_value, stat, current_value, is_home, team, event
     )
-    message = await channel.send(embed=embed, file=file)
+    message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
     proptracker.register_message(message.id, channel.id, event_id, entity["id"], stat_key, None)
     await message.add_reaction(TRASH_EMOJI)
 

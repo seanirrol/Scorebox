@@ -14,6 +14,7 @@ import config
 import scoreimage
 import scores365
 import state
+import throttle
 
 log = logging.getLogger("scorebox.tracker")
 
@@ -230,7 +231,7 @@ async def _track_loop(message: discord.Message, sport_id: int, game_id, channel_
                 # long) hibernation. This is the one moment reposting helps
                 # rather than hurts, since it's about to actually go live.
                 try:
-                    new_message = await message.channel.send(embed=embed, file=file)
+                    new_message = await throttle.run(channel_id, lambda: message.channel.send(embed=embed, file=file))
                 except discord.HTTPException as e:
                     log.warning("Failed to repost tracking message near kickoff: %s", e)
                 else:
@@ -250,7 +251,7 @@ async def _track_loop(message: discord.Message, sport_id: int, game_id, channel_
                 continue
 
             try:
-                await message.edit(embed=embed, attachments=[file])
+                await throttle.run(channel_id, lambda: message.edit(embed=embed, attachments=[file]))
                 consecutive_edit_failures = 0
             except discord.HTTPException as e:
                 consecutive_edit_failures += 1
