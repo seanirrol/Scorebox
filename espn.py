@@ -20,6 +20,8 @@ from typing import Optional
 
 import requests
 
+import scores365
+
 SITE_BASE = "https://site.api.espn.com/apis/site/v2/sports"
 SEARCH_URL = "https://site.web.api.espn.com/apis/search/v2"
 ATHLETE_BASE = "https://site.api.espn.com/apis/common/v3/sports"
@@ -114,7 +116,7 @@ def _get(url: str, **params) -> dict:
         raise EspnError(f"ESPN request failed: {e}") from e
 
 
-def _team_logo_url(team: dict) -> Optional[str]:
+def team_logo_url(team: dict) -> Optional[str]:
     logos = team.get("logos") or []
     default = next((lg for lg in logos if "default" in lg.get("rel", [])), None)
     return (default or logos[0])["href"] if (default or logos) else None
@@ -144,10 +146,27 @@ def find_player(name: str, sport: str) -> Optional[dict]:
             "name": athlete.get("displayName", content.get("displayName", name)),
             "team_id": team["id"],
             "team_name": team.get("displayName", ""),
-            "team_logo_url": _team_logo_url(team),
+            "team_logo_url": team_logo_url(team),
             "photo_url": (content.get("image") or {}).get("default"),
             "sport": sport,
         }
+    return None
+
+
+def find_team(name: str, sport: str) -> Optional[dict]:
+    """Search ESPN's team list for a fuzzy name match (confirmed live: the
+    site.api.espn.com teams endpoint returns all 30 MLB teams with id/
+    displayName). Returns {"id", "name", "logo_url"} or None."""
+    if sport not in SPORT_PATHS:
+        return None
+    sport_slug, league_slug = SPORT_PATHS[sport]
+    data = _get(f"{SITE_BASE}/{sport_slug}/{league_slug}/teams")
+    leagues = ((data.get("sports") or [{}])[0]).get("leagues") or [{}]
+    for entry in leagues[0].get("teams", []):
+        team = entry.get("team", {})
+        display_name = team.get("displayName", "")
+        if display_name and scores365.names_match(display_name, name):
+            return {"id": team.get("id"), "name": display_name, "logo_url": team_logo_url(team)}
     return None
 
 
@@ -293,3 +312,46 @@ def grade_over_under(value, direction: str, line: float) -> Optional[str]:
     if direction == "over":
         return "won" if numeric > line else "lost"
     return "won" if numeric < line else "lost"
+
+
+def get_first_inning_breakdown(event: dict) -> Optional[tuple[int, int]]:
+    """Returns (home_runs, away_runs) scored in the 1st inning, once it's
+    fully complete - MLB's per-team `linescores` list only grows as innings
+    are actually played (confirmed live: a finished game's list length
+    matched its actual inning count), but the *current* inning's entry
+    already appears mid-inning with a running value (confirmed live against
+    a game in the bottom of the 1st) - so "1st inning complete" is judged by
+    status.period advancing past 1 (or the game ending), not by linescores
+    length alone. Returns None if the 1st inning isn't decided yet, or the
+    game ended without ever recording a linescore (e.g. postponed)."""
+    comp = (event.get("header", {}).get("competitions") or [{}])[0]
+    status = comp.get("status", {})
+    period = status.get("period") or 0
+    state = status.get("type", {}).get("state")
+    if period <= 1 and state != "post":
+        return None
+
+    home_runs = away_runs = None
+    for c in comp.get("competitors", []):
+        linescores = c.get("linescores") or []
+        if not linescores:
+            return None
+        try:
+            runs = int(linescores[0].get("displayValue", 0))
+        except (TypeError, ValueError):
+            return None
+        if c.get("homeAway") == "home":
+            home_runs = runs
+        else:
+            away_runs = runs
+    if home_runs is None or away_runs is None:
+        return None
+    return home_runs, away_runs
+
+
+def grade_yrfi(total_runs: int, pick_type: str) -> str:
+    """pick_type is "YRFI" (yes runs 1st inning) or "NRFI" (no runs)."""
+    scored = total_runs > 0
+    if pick_type == "YRFI":
+        return "won" if scored else "lost"
+    return "lost" if scored else "won"

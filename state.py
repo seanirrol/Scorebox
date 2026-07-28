@@ -17,6 +17,7 @@ from typing import Any
 _DIR = os.path.dirname(os.path.abspath(__file__))
 TRACKS_FILE = os.path.join(_DIR, "tracks_state.json")
 PROPS_FILE = os.path.join(_DIR, "props_state.json")
+INNINGS_FILE = os.path.join(_DIR, "innings_state.json")
 
 
 def _load(path: str) -> dict[str, Any]:
@@ -48,3 +49,11 @@ def load_props() -> dict[str, Any]:
 
 def save_props(data: dict[str, Any]):
     _save(PROPS_FILE, data)
+
+
+def load_innings() -> dict[str, Any]:
+    return _load(INNINGS_FILE)
+
+
+def save_innings(data: dict[str, Any]):
+    _save(INNINGS_FILE, data)

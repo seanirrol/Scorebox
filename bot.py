@@ -21,6 +21,7 @@ from discord import app_commands
 
 import config
 import espn
+import inningtracker
 import picks
 import proptracker
 import scores365
@@ -55,6 +56,7 @@ async def on_ready():
     log.info("Logged in as %s", client.user)
     await tracker.resume_all(client)
     await proptracker.resume_all(client)
+    await inningtracker.resume_all(client)
 
 
 @client.event
@@ -67,6 +69,9 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     if not info:
         info = proptracker.get_message_owner(payload.message_id)
         kind = "prop"
+    if not info:
+        info = inningtracker.get_message_owner(payload.message_id)
+        kind = "inning"
     if not info:
         return
 
@@ -89,9 +94,12 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     if kind == "track":
         channel_id, game_id, _ = info
         tracker.stop_tracking(channel_id, game_id)
-    else:
+    elif kind == "prop":
         channel_id, event_id, entity_id, stat_key, _ = info
         proptracker.stop_tracking(channel_id, event_id, entity_id, stat_key)
+    else:
+        channel_id, event_id, pick_type, _ = info
+        inningtracker.stop_tracking(channel_id, event_id, pick_type)
 
     try:
         await message.delete()
@@ -171,6 +179,38 @@ async def _auto_playerprops(
     log.info("Auto-tracked player prop pick: %s - %s", player, stat)
 
 
+async def _auto_inning_runs(channel: discord.abc.Messageable, team: str, pick_type: str):
+    """YRFI/NRFI picks settle after just the 1st inning, not the whole game
+    - see inningtracker.py. Always baseball, so no sport param needed."""
+    try:
+        entity = await asyncio.to_thread(espn.find_team, team, "baseball")
+    except espn.EspnError as e:
+        log.info("Auto-inning-runs: couldn't reach ESPN for '%s': %s", team, e)
+        return
+    if not entity:
+        log.info("Auto-inning-runs: no team found for '%s'", team)
+        return
+
+    event_id = await asyncio.to_thread(espn.find_current_event_id, "baseball", entity["id"])
+    if not event_id:
+        return
+    event = await asyncio.to_thread(espn.get_event, "baseball", event_id)
+    if not event:
+        return
+    if inningtracker.is_tracked(channel.id, event_id, pick_type):
+        return
+
+    embed, file = await inningtracker.build_embed(event, pick_type)
+    message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
+    inningtracker.register_message(message.id, channel.id, event_id, pick_type, None)
+    await message.add_reaction(TRASH_EMOJI)
+
+    if espn.get_first_inning_breakdown(event) is not None:
+        return  # 1st inning was already decided by the time this pick was posted
+    inningtracker.start_tracking(message, channel.id, event_id, pick_type, entity["id"], None)
+    log.info("Auto-tracked inning-runs pick '%s' (%s) -> event %s", team, pick_type, event_id)
+
+
 @client.event
 async def on_message(message: discord.Message):
     if config.PICKS_CHANNEL_ID is None or message.channel.id != config.PICKS_CHANNEL_ID:
@@ -193,6 +233,8 @@ async def on_message(message: discord.Message):
         try:
             if pick["kind"] == "track":
                 await _auto_track(target_channel, pick["sport"], pick["team"])
+            elif pick["kind"] == "inning_runs":
+                await _auto_inning_runs(target_channel, pick["team"], pick["pick_type"])
             else:
                 await _auto_playerprops(
                     target_channel, pick["sport"], pick["player"], pick["stat"],
@@ -374,6 +416,12 @@ async def untrack(interaction: discord.Interaction, game_id: str, player: Option
         if proptracker.stop_tracking(interaction.channel_id, entry["event_id"], entry["entity_id"], stat_key):
             stopped.append(f"{entry['player_name']} ({entry['stat_label']})")
 
+    for entry in inningtracker.list_tracked_details(interaction.channel_id):
+        if str(entry["event_id"]) != str(game_id):
+            continue
+        if inningtracker.stop_tracking(interaction.channel_id, entry["event_id"], entry["pick_type"]):
+            stopped.append(entry["pick_type"])
+
     if stopped:
         await interaction.response.send_message(f"Stopped tracking: {', '.join(stopped)}.", ephemeral=True)
     else:
@@ -388,7 +436,8 @@ async def tracked(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
     match_details = tracker.list_tracked_details(interaction.channel_id)
     prop_details = proptracker.list_tracked_details(interaction.channel_id)
-    if not match_details and not prop_details:
+    inning_details = inningtracker.list_tracked_details(interaction.channel_id)
+    if not match_details and not prop_details and not inning_details:
         await interaction.followup.send("Nothing is being tracked in this channel.", ephemeral=True)
         return
 
@@ -412,6 +461,10 @@ async def tracked(interaction: discord.Interaction):
             for entry in prop_details
         ]
         sections.append("**Tracked player props:**\n" + "\n".join(lines))
+
+    if inning_details:
+        lines = [f"- `{entry['event_id']}` — {entry['pick_type']}" for entry in inning_details]
+        sections.append("**Tracked 1st-inning picks:**\n" + "\n".join(lines))
 
     await interaction.followup.send("\n\n".join(sections), ephemeral=True)
 

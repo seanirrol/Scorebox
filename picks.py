@@ -47,6 +47,12 @@ _HEADER_SPORT_MAP = {
 _LINE_RE = re.compile(r"^\s*(?:\d+[.)]\s*)?\[([^\]]+)\]\s*(.+)$")
 _PLAYER_STAT_RE = re.compile(r"^(.+?)\s+(Over|Under)\s+([\d.]+)\s+(.+?)\s*(?:\(|$)", re.IGNORECASE)
 
+# "Team A vs Team B - YRFI - Yes Runs 1st Inning (...)" - settles after just
+# the 1st inning, not the whole game, so it's routed to inningtracker.py
+# rather than /track's kind="track" (see _parse_yrfi_line). Only one of the
+# two team names is captured - either one is enough to look the game up.
+_YRFI_LINE_RE = re.compile(r"^(.+?)\s+vs\.?\s+.+?-\s*(YRFI|NRFI)\b", re.IGNORECASE)
+
 # For a baseball "Strikeouts" prop with no other context, pitcher strikeouts
 # is the overwhelmingly common bet type - default there rather than guessing
 # batting vs pitching from wording alone (both exist in our stat catalog).
@@ -177,7 +183,26 @@ def _parse_player_prop(sport_key: str, sport: str, description: str) -> Optional
     }
 
 
+def _is_yrfi_header(text: str) -> bool:
+    lowered = text.lower()
+    return "yrfi" in lowered and "nrfi" in lowered
+
+
+def _parse_yrfi_line(text: str) -> Optional[dict]:
+    cleaned = _clean_line(text)
+    m = _YRFI_LINE_RE.match(cleaned)
+    if not m:
+        return None
+    team = m.group(1).strip()
+    if not team:
+        return None
+    return {"kind": "inning_runs", "sport": "baseball", "team": team, "pick_type": m.group(2).upper()}
+
+
 def _parse_with_category(category: str, description: str) -> Optional[dict]:
+    if _is_yrfi_header(category):
+        return _parse_yrfi_line(description)
+
     is_prop_category = category.lower().endswith("props")
     sport_key = category.lower().replace("props", "").strip()
     sport = _SPORT_MAP.get(sport_key)
@@ -257,12 +282,21 @@ def parse_picks_message(content: str) -> list[dict]:
             continue
 
         bare = _bullet_strip(line)
+        if _is_yrfi_header(bare):
+            current_category = "__yrfi__"
+            continue
         if bare.lower() in _HEADER_SPORT_MAP:
             current_category = bare
             continue
 
         if not current_category or current_category.lower().endswith("props"):
             continue  # no context yet, or a Props section - bullets there aren't structured enough to parse safely
+
+        if current_category == "__yrfi__":
+            pick = _parse_yrfi_line(bare)
+            if pick:
+                results.append(pick)
+            continue
 
         sport = _HEADER_SPORT_MAP.get(current_category.lower())
         if not sport:
