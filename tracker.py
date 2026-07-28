@@ -71,23 +71,16 @@ async def build_embed(
         embed.set_author(name=" • ".join(author_bits))
 
     # The picked team stays visible for the card's whole lifetime (auto-
-    # tracked picks only - manual /track has no pick to label). Discord's own
-    # <t:...:f> tag renders "Today"/"Tomorrow"/weekday name and the clock time
-    # already localized to whoever's viewing it - no need to compute that
-    # ourselves per-viewer. Only shown pre-match; dropped once live to save
-    # space, since the card itself covers it from then on.
-    description_lines = [f"{picked_team} ML"] if picked_team else []
-    if status == "notstarted":
-        kickoff = scores365.start_epoch(game)
-        if kickoff:
-            description_lines.append(f"<t:{int(kickoff)}:f>")
-    if description_lines:
-        embed.description = "\n".join(description_lines)
+    # tracked picks only - manual /track has no pick to label).
+    if picked_team:
+        embed.description = f"{picked_team} ML"
 
-    # Pre-match, the pill is redundant now that the localized kickoff time
-    # shows above the image (embed description) - skip it there and only
-    # show the live period/clock (e.g. "2nd Half (98:00)") once it starts.
-    period_text = "" if status == "notstarted" else scores365.status_line(game, sport_id)
+    # The pill shows the kickoff time pre-match (fixed Eastern time, drawn
+    # into the image - not per-viewer localized like Discord's <t:...:f> tag
+    # would be, but keeps it in the same spot as the live period/clock and
+    # "Final" once the match starts, instead of separate embed text above
+    # the image).
+    period_text = scores365.status_line(game, sport_id)
 
     # Each row is [main score, smaller sub-tier(s)...] left-to-right, main
     # score first (rendered biggest/boldest, on the left) - tennis gets

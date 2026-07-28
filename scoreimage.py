@@ -84,6 +84,14 @@ _SCORE_COLOR = {
     "inprogress": (255, 23, 68, 255),  # neon red
     "finished": (46, 204, 113, 255),  # green
 }
+# The score/value digits themselves use a separate palette from the pill -
+# neon red digits were hard to read at a glance on a live card, so those go
+# white while the pill above them stays red.
+_SCORE_TEXT_COLOR = {
+    "notstarted": (52, 152, 219, 255),  # blue
+    "inprogress": (255, 255, 255, 255),  # white
+    "finished": (46, 204, 113, 255),  # green
+}
 
 _logo_cache: dict[str, Image.Image] = {}
 
@@ -225,7 +233,8 @@ def render_player_card(
     """
     photo = _fetch_circular_logo(photo_url, size=PLAYER_PHOTO_SIZE)
     measure = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
-    status_color = _SCORE_COLOR.get(status, (255, 255, 255, 255))
+    pill_color = _SCORE_COLOR.get(status, (255, 255, 255, 255))
+    value_color = _SCORE_TEXT_COLOR.get(status, (255, 255, 255, 255))
 
     max_text_width = WIDTH - MARGIN * 2 - PLAYER_PHOTO_SIZE - PHOTO_GAP
 
@@ -280,7 +289,7 @@ def render_player_card(
     if period_text:
         pill_center_y = content_top + pill_h / 2
         left = WIDTH / 2 - pill_w / 2
-        draw.rounded_rectangle([left, content_top, left + pill_w, content_top + pill_h], radius=pill_h / 2, fill=status_color)
+        draw.rounded_rectangle([left, content_top, left + pill_w, content_top + pill_h], radius=pill_h / 2, fill=pill_color)
         draw.text((WIDTH / 2, pill_center_y), period_text, font=_PERIOD_FONT, fill=_PILL_TEXT_COLOR, anchor="mm")
         content_top += pill_h + PILL_GAP
 
@@ -302,7 +311,7 @@ def render_player_card(
     draw.text((text_x, y + stat_label_h / 2), stat_label_text, font=_STAT_LABEL_FONT, fill=_NAME_COLOR, anchor="lm")
     y += stat_label_h + STAT_LABEL_GAP
 
-    draw.text((text_x, y + value_h / 2), value_line, font=_VALUE_FONT, fill=status_color, anchor="lm")
+    draw.text((text_x, y + value_h / 2), value_line, font=_VALUE_FONT, fill=value_color, anchor="lm")
 
     buf = io.BytesIO()
     img.save(buf, format="PNG")
@@ -332,7 +341,8 @@ def render_score_card(
     # A throwaway draw context just for text measurement, before the final
     # image (whose height depends on that measurement) exists.
     measure = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
-    score_color = _SCORE_COLOR.get(status, (255, 255, 255, 255))
+    pill_color = _SCORE_COLOR.get(status, (255, 255, 255, 255))
+    score_color = _SCORE_TEXT_COLOR.get(status, (255, 255, 255, 255))
 
     n = len(home_cols)
     col_fonts = [_MAIN_SCORE_FONT if i == 0 else _SUB_SCORE_FONT for i in range(n)]
@@ -374,7 +384,7 @@ def render_score_card(
     if period_text:
         pill_center_y = y + pill_h / 2
         left, top = WIDTH / 2 - pill_w / 2, y
-        draw.rounded_rectangle([left, top, left + pill_w, top + pill_h], radius=pill_h / 2, fill=score_color)
+        draw.rounded_rectangle([left, top, left + pill_w, top + pill_h], radius=pill_h / 2, fill=pill_color)
         draw.text((WIDTH / 2, pill_center_y), period_text, font=_PERIOD_FONT, fill=_PILL_TEXT_COLOR, anchor="mm")
         y += pill_h + PILL_GAP
 
