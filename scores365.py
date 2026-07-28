@@ -234,7 +234,12 @@ def _normalize(name: str) -> str:
 
 
 def _meaningful_words(name: str) -> set[str]:
-    words = set(re.sub(r"[^a-z0-9\s]", " ", (name or "").lower()).split())
+    # Fuse hyphens/apostrophes into the word instead of splitting on them
+    # (e.g. "Xin-Yu" -> "xinyu", not "xin"/"yu" - confirmed live that
+    # splitting broke matching a pick's "Xinyu" against 365scores' own
+    # "Xin-Yu Wang" once the 2-letter "yu" piece got filtered out below).
+    collapsed = re.sub(r"[-']", "", (name or "").lower())
+    words = set(re.sub(r"[^a-z0-9\s]", " ", collapsed).split())
     filtered = {w for w in words if len(w) > 2}
     return filtered or words
 
