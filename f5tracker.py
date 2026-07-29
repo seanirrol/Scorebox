@@ -188,6 +188,7 @@ async def _track_loop(
             # A notstarted game's inning-by-inning score can't change before
             # it starts, so hibernate instead of polling every cycle - same
             # pattern as tracker.py.
+            hibernated = False
             while game and scores365.map_status_type(game.get("statusGroup")) == "notstarted":
                 kickoff = scores365.start_epoch(game)
                 if not kickoff:
@@ -198,6 +199,7 @@ async def _track_loop(
                 wake_at = min(kickoff - 60, scores365.next_eastern_midnight_epoch(time.time()))
                 hibernate_for = wake_at - time.time()
                 deadline += hibernate_for
+                hibernated = True
                 log.info("F5 game %s not starting soon; hibernating %.0fs", game_id, hibernate_for)
                 await asyncio.sleep(hibernate_for)
                 game = await asyncio.to_thread(scores365.get_live_update, sport_id, game_id)
@@ -214,6 +216,32 @@ async def _track_loop(
             consecutive_misses = 0
 
             embed, file = await build_embed(game, sport_id, picked_team)
+
+            if hibernated:
+                # The final wake right before kickoff - bump the card to the
+                # bottom of the channel instead of editing a message that may
+                # be buried under whatever chat happened during the (possibly
+                # long) hibernation. Same treatment as tracker.py/proptracker.py.
+                try:
+                    new_message = await throttle.run(channel_id, lambda: message.channel.send(embed=embed, file=file))
+                except discord.HTTPException as e:
+                    log.warning("Failed to repost F5 tracking message near kickoff: %s", e)
+                else:
+                    try:
+                        await new_message.add_reaction(TRASH_EMOJI)
+                    except discord.HTTPException as e:
+                        log.warning("Failed to react to reposted F5 tracking message: %s", e)
+                    old_message = message
+                    message = new_message
+                    _message_owners.pop(old_message.id, None)
+                    register_message(message.id, channel_id, game_id, owner_id)
+                    _persist(channel_id, game_id, message.id, sport_id, owner_id, picked_team)
+                    try:
+                        await old_message.delete()
+                    except discord.HTTPException as e:
+                        log.warning("Failed to delete old F5 tracking message after repost: %s", e)
+                continue
+
             try:
                 await throttle.run(channel_id, lambda: message.edit(embed=embed, attachments=[file]))
                 consecutive_edit_failures = 0

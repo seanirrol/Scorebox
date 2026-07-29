@@ -185,6 +185,7 @@ async def _track_loop(message: discord.Message, channel_id: int, event_id, pick_
             # so hibernate instead of polling every cycle - same pattern as
             # tracker.py/proptracker.py. Wakes once per Eastern-time day
             # boundary and once more just before it starts.
+            hibernated = False
             while event:
                 comp = (event.get("header", {}).get("competitions") or [{}])[0]
                 if comp.get("status", {}).get("type", {}).get("state") != "pre":
@@ -202,6 +203,7 @@ async def _track_loop(message: discord.Message, channel_id: int, event_id, pick_
                 wake_at = min(kickoff - 60, scores365.next_eastern_midnight_epoch(time.time()))
                 hibernate_for = wake_at - time.time()
                 deadline += hibernate_for
+                hibernated = True
                 log.info("Event %s not starting soon; hibernating %.0fs", event_id, hibernate_for)
                 await asyncio.sleep(hibernate_for)
                 event = await asyncio.to_thread(espn.get_event, "baseball", event_id)
@@ -218,6 +220,32 @@ async def _track_loop(message: discord.Message, channel_id: int, event_id, pick_
             consecutive_misses = 0
 
             embed, file = await build_embed(event, pick_type)
+
+            if hibernated:
+                # The final wake right before kickoff - bump the card to the
+                # bottom of the channel instead of editing a message that may
+                # be buried under whatever chat happened during the (possibly
+                # long) hibernation. Same treatment as tracker.py/proptracker.py.
+                try:
+                    new_message = await throttle.run(channel_id, lambda: message.channel.send(embed=embed, file=file))
+                except discord.HTTPException as e:
+                    log.warning("Failed to repost inning tracking message near kickoff: %s", e)
+                else:
+                    try:
+                        await new_message.add_reaction(TRASH_EMOJI)
+                    except discord.HTTPException as e:
+                        log.warning("Failed to react to reposted inning tracking message: %s", e)
+                    old_message = message
+                    message = new_message
+                    _message_owners.pop(old_message.id, None)
+                    register_message(message.id, channel_id, event_id, pick_type, owner_id)
+                    _persist(channel_id, event_id, pick_type, message.id, team_id, owner_id)
+                    try:
+                        await old_message.delete()
+                    except discord.HTTPException as e:
+                        log.warning("Failed to delete old inning tracking message after repost: %s", e)
+                continue
+
             try:
                 await throttle.run(channel_id, lambda: message.edit(embed=embed, attachments=[file]))
                 consecutive_edit_failures = 0
