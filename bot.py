@@ -33,7 +33,7 @@ logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("scorebox.bot")
 
 intents = discord.Intents.default()
-intents.message_content = True  # needed to read pick messages in config.PICKS_CHANNEL_ID
+intents.message_content = True  # needed to read pick messages in config.PICKS_CHANNEL_MAP
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
@@ -256,16 +256,14 @@ async def _auto_inning_runs(channel: discord.abc.Messageable, team: str, pick_ty
 
 @client.event
 async def on_message(message: discord.Message):
-    if config.PICKS_CHANNEL_ID is None or message.channel.id != config.PICKS_CHANNEL_ID:
-        return
-    if message.author.id == client.user.id or not config.ALLOWED_CHANNEL_IDS:
+    target_channel_id = config.PICKS_CHANNEL_MAP.get(message.channel.id)
+    if target_channel_id is None or message.author.id == client.user.id:
         return
 
     log.info("Picks channel message received: %r", message.content)
     parsed = picks.parse_picks_message(message.content)
     log.info("Parsed %d pick(s) from that message", len(parsed))
 
-    target_channel_id = next(iter(config.ALLOWED_CHANNEL_IDS))
     try:
         target_channel = client.get_channel(target_channel_id) or await client.fetch_channel(target_channel_id)
     except discord.HTTPException as e:

@@ -23,8 +23,21 @@ ALLOWED_CHANNEL_IDS = (
     else None
 )
 
-# If set, messages posted in this channel are auto-parsed for picks, which
-# get tracked automatically via /track or /playerprops - posted into the
-# first channel in ALLOWED_CHANNEL_ID (the "scores" channel).
-_picks_channel_id = os.environ.get("PICKS_CHANNEL_ID", "").strip()
-PICKS_CHANNEL_ID = int(_picks_channel_id) if _picks_channel_id else None
+# Maps each picks channel to its own target scores channel - messages posted
+# in a mapped channel are auto-parsed for picks, which get tracked
+# automatically (via the same logic as /track/.../playerprops) and posted
+# into that specific target channel. The bot can post cross-server as long
+# as it's a member of both, so this also covers e.g. a test-server picks
+# channel that posts into the live server's scores channel, alongside a
+# separate pair fully contained within the test server. Format (comma-
+# separated "picks_id:target_id" pairs):
+#   PICKS_CHANNEL_MAP=111111111111111111:222222222222222222,333...:444...
+_picks_channel_map_raw = os.environ.get("PICKS_CHANNEL_MAP", "").strip()
+PICKS_CHANNEL_MAP: dict[int, int] = {}
+for _pair in _picks_channel_map_raw.split(","):
+    _pair = _pair.strip()
+    if not _pair:
+        continue
+    _picks_id, _, _target_id = _pair.partition(":")
+    if _picks_id.strip() and _target_id.strip():
+        PICKS_CHANNEL_MAP[int(_picks_id.strip())] = int(_target_id.strip())
