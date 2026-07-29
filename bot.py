@@ -8,12 +8,13 @@ Commands:
   /score sport:<pick> team:<name>                  One-off lookup of a team's live/today match.
   /track sport:<pick> team:<name>                  Posts a live-updating embed that refreshes automatically.
   /playerprops sport:<pick> player: stat:           Tracks a player's live stat (e.g. Points, Earned Runs, Aces).
-  /untrack game_id:<id>                             Stops an active tracking loop in this channel.
+  /untrack game_id:<id[,id...]>                     Stops one or more active tracking loops in this channel.
   /tracked                                          Lists games currently being tracked in this channel.
 """
 
 import asyncio
 import logging
+import re
 from typing import Optional
 
 import discord
@@ -438,9 +439,37 @@ async def playerprops(interaction: discord.Interaction, sport: app_commands.Choi
         )
 
 
-@tree.command(name="untrack", description="Stop auto-updating a tracked match or player prop in this channel")
+def _untrack_one(channel_id: int, game_id: str, player: Optional[str]) -> list[str]:
+    """Stops every tracker (match/total/F5/prop/1st-inning) matching this one
+    game_id in this channel. Returns what was actually stopped, if anything."""
+    stopped = []
+    if tracker.stop_tracking(channel_id, game_id):
+        stopped.append("moneyline/total pick")
+
+    if f5tracker.stop_tracking(channel_id, game_id):
+        stopped.append("F5 pick")
+
+    for entry in proptracker.list_tracked_details(channel_id):
+        if str(entry["event_id"]) != str(game_id):
+            continue
+        if player and player.lower() not in entry["player_name"].lower():
+            continue
+        stat_key = tuple(entry["stat_key"])
+        if proptracker.stop_tracking(channel_id, entry["event_id"], entry["entity_id"], stat_key):
+            stopped.append(f"{entry['player_name']} ({entry['stat_label']})")
+
+    for entry in inningtracker.list_tracked_details(channel_id):
+        if str(entry["event_id"]) != str(game_id):
+            continue
+        if inningtracker.stop_tracking(channel_id, entry["event_id"], entry["pick_type"]):
+            stopped.append(entry["pick_type"])
+
+    return stopped
+
+
+@tree.command(name="untrack", description="Stop auto-updating one or more tracked matches/player props in this channel")
 @app_commands.describe(
-    game_id="Game ID shown by /tracked",
+    game_id="Game ID(s) shown by /tracked - separate multiple with commas or spaces",
     player="Player name, to target one specific player prop if a game has more than one tracked (optional)",
 )
 async def untrack(interaction: discord.Interaction, game_id: str, player: Optional[str] = None):
@@ -448,32 +477,20 @@ async def untrack(interaction: discord.Interaction, game_id: str, player: Option
         await _reject_wrong_channel(interaction)
         return
 
-    stopped = []
-    if tracker.stop_tracking(interaction.channel_id, game_id):
-        stopped.append(f"game `{game_id}`")
+    game_ids = [gid for gid in re.split(r"[,\s]+", game_id.strip()) if gid]
+    if not game_ids:
+        await interaction.response.send_message("No game ID given.", ephemeral=True)
+        return
 
-    if f5tracker.stop_tracking(interaction.channel_id, game_id):
-        stopped.append(f"F5 pick on game `{game_id}`")
+    lines = []
+    for gid in game_ids:
+        stopped = _untrack_one(interaction.channel_id, gid, player)
+        if stopped:
+            lines.append(f"`{gid}` — stopped: {', '.join(stopped)}")
+        else:
+            lines.append(f"`{gid}` — nothing found")
 
-    for entry in proptracker.list_tracked_details(interaction.channel_id):
-        if str(entry["event_id"]) != str(game_id):
-            continue
-        if player and player.lower() not in entry["player_name"].lower():
-            continue
-        stat_key = tuple(entry["stat_key"])
-        if proptracker.stop_tracking(interaction.channel_id, entry["event_id"], entry["entity_id"], stat_key):
-            stopped.append(f"{entry['player_name']} ({entry['stat_label']})")
-
-    for entry in inningtracker.list_tracked_details(interaction.channel_id):
-        if str(entry["event_id"]) != str(game_id):
-            continue
-        if inningtracker.stop_tracking(interaction.channel_id, entry["event_id"], entry["pick_type"]):
-            stopped.append(entry["pick_type"])
-
-    if stopped:
-        await interaction.response.send_message(f"Stopped tracking: {', '.join(stopped)}.", ephemeral=True)
-    else:
-        await interaction.response.send_message(f"No active tracking found for game `{game_id}`.", ephemeral=True)
+    await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
 
 @tree.command(name="tracked", description="List matches and player props currently being tracked in this channel")
