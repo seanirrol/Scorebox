@@ -43,8 +43,8 @@ _STATUS_COLOR = {
 }
 
 
-_RESULT_TITLES = {"won": "<a:pickwon:1505454446790840470> Pick Won", "lost": "❌ Pick Lost", "push": "➖ Push"}
-_RESULT_REACTIONS = {"won": "<:winmark:1519738030456307712>", "lost": "<:lossmark:1519737846943191080>"}
+_RESULT_TITLES = {"won": "<:winmark:1532115635071488221> Pick Won", "lost": "<:lossmark:1532115600162422894> Pick Lost", "push": "➖ Push"}
+_RESULT_REACTIONS = {"won": "<:winmark:1532115635071488221>", "lost": "<:lossmark:1532115600162422894>"}
 
 
 def _grade(game: dict, picked_team: Optional[str], total_direction: Optional[str], total_line: Optional[float]) -> Optional[str]:
