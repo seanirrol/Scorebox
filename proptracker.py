@@ -165,14 +165,20 @@ async def build_embed(
     status = comp.get("status", {}).get("type", {})
     # espn.is_finished() is the single source of truth for "finished", since
     # a naive state=="post" check also matches postponed/canceled games
-    # (confirmed live) - those fall back to "notstarted" here rather than
-    # showing a false "Final" badge.
+    # (confirmed live) - those get their own "postponed" status instead,
+    # rather than showing a false "Final" badge.
     if espn.is_finished(event):
         status_type = "finished"
+    elif espn.is_postponed(event):
+        status_type = "postponed"
     elif status.get("state") == "in":
         status_type = "inprogress"
     else:
         status_type = "notstarted"
+    # No color/pill styling exists for "postponed" specifically - reuse the
+    # notstarted (blue) look, since the pill *text* (below) already says
+    # "Postponed"/"Canceled" via espn.match_status_text's detail field.
+    render_status = "notstarted" if status_type == "postponed" else status_type
 
     competitors = comp.get("competitors", [])
     home_name = next((c.get("team", {}).get("displayName", "?") for c in competitors if c.get("homeAway") == "home"), "?")
@@ -205,7 +211,7 @@ async def build_embed(
     period_text = "" if status_type == "notstarted" else espn.match_status_text(event, sport)
     image_bytes = await asyncio.to_thread(
         scoreimage.render_player_card,
-        team_name, photo_url, player_name, stat_label, _fmt_value(current_value), status_type, period_text,
+        team_name, photo_url, player_name, stat_label, _fmt_value(current_value), render_status, period_text,
     )
     file = discord.File(io.BytesIO(image_bytes), filename="score.png")
 
@@ -357,14 +363,18 @@ async def _track_loop(
                     break
                 continue
 
-            if espn.is_finished(event):
-                if direction is not None and line is not None:
+            if espn.is_finished(event) or espn.is_postponed(event):
+                if espn.is_finished(event) and direction is not None and line is not None:
                     reaction = _RESULT_REACTIONS.get(espn.grade_over_under(current_value, direction, line))
                     if reaction:
                         try:
                             await message.add_reaction(reaction)
                         except discord.HTTPException as e:
                             log.warning("Failed to add result reaction: %s", e)
+                # A postponed/canceled event never produces a graded result -
+                # no reaction, but still cleans up after the same 24h window
+                # rather than polling every cycle until MAX_TRACK_HOURS runs
+                # out and leaving the stale card behind forever.
                 await asyncio.sleep(POST_MATCH_DELETE_SECONDS)
                 try:
                     await message.delete()

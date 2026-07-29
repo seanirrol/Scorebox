@@ -211,6 +211,15 @@ def is_finished(event: dict) -> bool:
     return status_type.get("state") == "post" and status_type.get("completed", False)
 
 
+def is_postponed(event: dict) -> bool:
+    """True for a postponed/suspended/canceled event - terminal (state="post")
+    but never completed, so is_finished() never returns True for it either.
+    Lets callers still treat it as "won't produce a result" and clean up
+    (nothing left to poll for), distinct from a real final score."""
+    status_type = (event.get("header", {}).get("competitions") or [{}])[0].get("status", {}).get("type", {})
+    return status_type.get("state") == "post" and not status_type.get("completed", False)
+
+
 def match_status_text(event: dict, sport: str) -> str:
     comp = (event.get("header", {}).get("competitions") or [{}])[0]
     status_type = comp.get("status", {}).get("type", {})

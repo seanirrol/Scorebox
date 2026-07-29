@@ -120,9 +120,10 @@ async def build_embed(event: dict, pick_type: str) -> tuple[discord.Embed, disco
     breakdown = espn.get_first_inning_breakdown(event)
     decided = breakdown is not None
     result = espn.grade_yrfi(sum(breakdown), pick_type) if decided else None
+    postponed = not decided and espn.is_postponed(event)
 
     league_name = ((event.get("header", {}).get("league") or {}).get("name")) or "MLB"
-    embed_color = {"won": 0x2ECC71, "lost": 0xE74C3C}.get(result, 0x3498DB)
+    embed_color = 0x95A5A6 if postponed else {"won": 0x2ECC71, "lost": 0xE74C3C}.get(result, 0x3498DB)
     embed = discord.Embed(color=embed_color)
     if result:
         embed.title = _RESULT_TITLES[result]
@@ -140,6 +141,12 @@ async def build_embed(event: dict, pick_type: str) -> tuple[discord.Embed, disco
     if decided:
         period_text = "1st Inning Final"
         card_status = "finished"
+    elif postponed:
+        # No color/pill styling exists for "postponed" specifically - reuse
+        # the notstarted (blue) look, same as proptracker.py's equivalent,
+        # since the pill text itself already says "Postponed"/"Canceled".
+        period_text = espn.match_status_text(event, "baseball")
+        card_status = "notstarted"
     elif state_name == "in":
         period_text = status.get("type", {}).get("detail") or "Live"
         card_status = "inprogress"
@@ -225,14 +232,19 @@ async def _track_loop(message: discord.Message, channel_id: int, event_id, pick_
                 continue
 
             breakdown = espn.get_first_inning_breakdown(event)
-            if breakdown is not None:
-                result = espn.grade_yrfi(sum(breakdown), pick_type)
-                reaction = _RESULT_REACTIONS.get(result)
-                if reaction:
-                    try:
-                        await message.add_reaction(reaction)
-                    except discord.HTTPException as e:
-                        log.warning("Failed to add result reaction: %s", e)
+            if breakdown is not None or espn.is_postponed(event):
+                if breakdown is not None:
+                    result = espn.grade_yrfi(sum(breakdown), pick_type)
+                    reaction = _RESULT_REACTIONS.get(result)
+                    if reaction:
+                        try:
+                            await message.add_reaction(reaction)
+                        except discord.HTTPException as e:
+                            log.warning("Failed to add result reaction: %s", e)
+                # A postponed/canceled event never produces a graded result -
+                # no reaction, but still cleans up after the same 24h window
+                # rather than polling every cycle until MAX_TRACK_HOURS runs
+                # out and leaving the stale card behind forever.
                 await asyncio.sleep(POST_RESULT_DELETE_SECONDS)
                 try:
                     await message.delete()
