@@ -135,7 +135,7 @@ def _fmt_value(v) -> str:
 
 
 _RESULT_TITLES = {"won": "<a:pickwon:1505454446790840470> Pick Won", "lost": "❌ Pick Lost", "push": "➖ Push"}
-_RESULT_REACTIONS = {"won": "✅", "lost": "❌"}
+_RESULT_REACTIONS = {"won": "<:winmark:1519738030456307712>", "lost": "<:lossmark:1519737846943191080>"}
 
 
 async def build_embed(

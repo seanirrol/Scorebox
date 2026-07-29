@@ -42,7 +42,7 @@ _active: dict[str, asyncio.Task] = {}
 _message_owners: dict[int, tuple] = {}
 
 _RESULT_TITLES = {"won": "<a:pickwon:1505454446790840470> Pick Won", "lost": "❌ Pick Lost"}
-_RESULT_REACTIONS = {"won": "✅", "lost": "❌"}
+_RESULT_REACTIONS = {"won": "<:winmark:1519738030456307712>", "lost": "<:lossmark:1519737846943191080>"}
 
 _PICK_LABELS = {"YRFI": "Yes Runs 1st Inning", "NRFI": "No Runs 1st Inning"}
 
