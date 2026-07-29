@@ -499,9 +499,20 @@ async def tracked(interaction: discord.Interaction):
             if game:
                 home = (game.get("homeCompetitor") or {}).get("name", "?")
                 away = (game.get("awayCompetitor") or {}).get("name", "?")
-                lines.append(f"- `{entry['game_id']}` — {home} vs {away}")
+                label = f"{home} vs {away}"
             else:
-                lines.append(f"- `{entry['game_id']}` — (couldn't fetch match info)")
+                label = "(couldn't fetch match info)"
+
+            # Distinguishes a plain /track (no pick) from a moneyline or
+            # total pick - without this, all three looked identical here.
+            if entry.get("picked_team"):
+                pick_suffix = f" — {entry['picked_team']} ML"
+            elif entry.get("total_direction") and entry.get("total_line") is not None:
+                pick_suffix = f" — {entry['total_direction'].title()} {entry['total_line']:g}"
+            else:
+                pick_suffix = ""
+
+            lines.append(f"- `{entry['game_id']}` — {label}{pick_suffix}")
         sections.append("**Tracked matches:**\n" + "\n".join(lines))
 
     if prop_details:
