@@ -76,6 +76,16 @@ async def build_embed(
         result = _grade(game, picked_team, total_direction, total_line)
         if result:
             embed.title = _RESULT_TITLES[result]
+    elif status == "inprogress" and total_direction == "over" and total_line is not None:
+        # The combined score only ever climbs during a game - once an Over
+        # line is already cleared, it can't un-clear, so it's safe to tag
+        # the pick a win before the match actually ends. Unders and
+        # moneyline picks are deliberately excluded here - a leading score
+        # can still change, and an Under total could still climb past the
+        # line later, so only a cleared Over is ever safe to call early.
+        current_scores = scores365.main_scores(game)
+        if current_scores and (current_scores[0] + current_scores[1]) > total_line:
+            embed.title = _RESULT_TITLES["won"]
 
     author_bits = [b for b in (scores365.sport_label(sport_id), game.get("competitionDisplayName")) if b]
     if author_bits:

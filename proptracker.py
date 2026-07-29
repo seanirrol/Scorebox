@@ -228,6 +228,19 @@ async def build_embed(
         result = espn.grade_over_under(current_value, direction, line)
         if result:
             embed.title = _RESULT_TITLES[result]
+    elif status_type == "inprogress" and direction == "over" and line is not None:
+        # A counting stat (hits, runs, yards, etc.) only ever climbs during a
+        # game - once an Over line is already cleared, it can't un-clear, so
+        # it's safe to tag the pick a win before the match actually ends.
+        # Unders are deliberately excluded - the value could still climb past
+        # the line later, so an early "Won" tag there could turn out wrong.
+        # Exact-equal isn't tagged either - that's still genuinely undecided
+        # (could become a push or an Over by the final value).
+        try:
+            if current_value is not None and float(current_value) > line:
+                embed.title = _RESULT_TITLES["won"]
+        except (TypeError, ValueError):
+            pass
     embed.set_author(name=sport_tournament)
     embed.description = description
     embed.set_image(url="attachment://score.png")
