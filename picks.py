@@ -193,6 +193,29 @@ def _is_simple_pick_name(text: str) -> Optional[str]:
     return stripped
 
 
+# Used only when a bare line has no sport context at all (no [Category] tag,
+# no preceding header) - the stat wording itself can still safely identify
+# the sport when it's unique to exactly one sport's catalog (e.g. "Earned
+# Runs" only exists for baseball). A stat that exists in more than one
+# sport's catalog (e.g. "Hits" in both baseball and hockey, "Assists" in
+# both basketball and hockey) still can't be guessed and returns None, same
+# as any other unparseable line. "wnba" is excluded from the candidate set
+# since it's a literal alias of "basketball" here (identical catalog dict) -
+# inferring NBA vs WNBA from stat wording alone isn't possible, so an
+# inferred basketball prop defaults to the NBA player pool, same as any
+# other header-less basketball pick.
+_INFER_SPORT_CANDIDATES = [s for s in espn.STAT_CATALOG if s != "wnba"]
+
+
+def _infer_sport_from_stat(description: str) -> Optional[str]:
+    pm = _PLAYER_STAT_RE.match(description)
+    if not pm:
+        return None
+    raw_stat = pm.group(4).strip()
+    matches = {sport for sport in _INFER_SPORT_CANDIDATES if _match_stat_label(sport, raw_stat)}
+    return matches.pop() if len(matches) == 1 else None
+
+
 def _parse_player_prop(sport_key: str, sport: str, description: str) -> Optional[dict]:
     if sport not in espn.SPORT_PATHS:
         return None
@@ -357,8 +380,21 @@ def parse_picks_message(content: str) -> list[dict]:
             current_category = bare
             continue
 
-        if not current_category or current_category.lower().endswith("props"):
-            continue  # no context yet, or a Props section - bullets there aren't structured enough to parse safely
+        if not current_category:
+            # No header/tag anywhere above this line - last resort before
+            # giving up: a player-prop-shaped line whose stat wording is
+            # unique to exactly one sport can still be safely inferred (see
+            # _infer_sport_from_stat). Anything else genuinely has no way to
+            # know the sport, so it's skipped rather than guessed.
+            sport = _infer_sport_from_stat(bare)
+            if sport:
+                prop = _parse_player_prop(sport, sport, bare)
+                if prop:
+                    results.append(prop)
+            continue
+
+        if current_category.lower().endswith("props"):
+            continue  # a Props section - bullets there aren't structured enough to parse safely
 
         if current_category == "__yrfi__":
             pick = _parse_yrfi_line(bare)
