@@ -139,8 +139,20 @@ async def build_embed(game: dict, sport_id: Optional[int], picked_team: str) -> 
         period_text = ""
         card_status = "notstarted"
 
-    home_cols = [str(breakdown[0])] if decided else ["-"]
-    away_cols = [str(breakdown[1])] if decided else ["-"]
+    if decided:
+        # Frozen at whatever the score was through the 5th inning - the
+        # number that actually decided the pick - even though the game (and
+        # its overall score) may keep going past this point.
+        home_cols = [str(breakdown[0])]
+        away_cols = [str(breakdown[1])]
+    else:
+        # Not decided yet doesn't mean nothing to show - the live overall
+        # score is already sitting there mid-game (confirmed: this was
+        # showing "-" through the entire 1st-5th innings instead of the
+        # actual running score).
+        live_scores = scores365.main_scores(game)
+        home_cols = [scores365.fmt_score(live_scores[0])] if live_scores else ["-"]
+        away_cols = [scores365.fmt_score(live_scores[1])] if live_scores else ["-"]
 
     home_name = home_competitor.get("name", "?")
     away_name = away_competitor.get("name", "?")
