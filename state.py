@@ -18,6 +18,7 @@ _DIR = os.path.dirname(os.path.abspath(__file__))
 TRACKS_FILE = os.path.join(_DIR, "tracks_state.json")
 PROPS_FILE = os.path.join(_DIR, "props_state.json")
 INNINGS_FILE = os.path.join(_DIR, "innings_state.json")
+F5_FILE = os.path.join(_DIR, "f5_state.json")
 
 
 def _load(path: str) -> dict[str, Any]:
@@ -57,3 +58,11 @@ def load_innings() -> dict[str, Any]:
 
 def save_innings(data: dict[str, Any]):
     _save(INNINGS_FILE, data)
+
+
+def load_f5() -> dict[str, Any]:
+    return _load(F5_FILE)
+
+
+def save_f5(data: dict[str, Any]):
+    _save(F5_FILE, data)

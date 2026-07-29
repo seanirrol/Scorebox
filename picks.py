@@ -53,6 +53,27 @@ _PLAYER_STAT_RE = re.compile(r"^(.+?)\s+(Over|Under)\s+([\d.]+)\s+(.+?)\s*(?:\(|
 # two team names is captured - either one is enough to look the game up.
 _YRFI_LINE_RE = re.compile(r"^(.+?)\s+vs\.?\s+.+?-\s*(YRFI|NRFI)\b", re.IGNORECASE)
 
+# "F5"/"First 5 Innings" moneyline - settles after the 5th inning, not the
+# whole game, so it's routed to f5tracker.py rather than /track's kind="track"
+# (see _parse_f5_pick). Only matches the moneyline flavor of an F5 bet - an F5
+# total/spread would need its own linescore-based grading that this doesn't
+# do, so those still fall through to _PARTIAL_GAME_MARKERS below and get
+# skipped rather than mistakenly tracked as a full-game pick.
+_F5_MARKER_RE = re.compile(
+    r"\bf5\b|\bfirst\s+5\s+innings\b|\bfirst\s+five\s+innings\b|\b1st\s+5\s+innings\b", re.IGNORECASE
+)
+
+# "Team A @ Team B - Over 9.5" or "... - Over 8.5 Total Runs" - a game total,
+# not a single player's stat (_parse_player_prop requires a stat word after
+# the number and would never match this shape). Checked before team-pick
+# parsing so it doesn't get silently mis-tracked as a moneyline pick on Team
+# A (confirmed this was actually happening for the "Total Runs" wording
+# example already called out in this module's own docstring).
+_TOTAL_LINE_RE = re.compile(
+    r"^(.+?)\s*(?:@|vs\.?|v\.?)\s*(.+?)\s*-\s*(Over|Under)\s+([\d.]+)(?:\s+Total\s+\w+)?\s*$",
+    re.IGNORECASE,
+)
+
 # For a baseball "Strikeouts" prop with no other context, pitcher strikeouts
 # is the overwhelmingly common bet type - default there rather than guessing
 # batting vs pitching from wording alone (both exist in our stat catalog).
@@ -199,25 +220,48 @@ def _parse_yrfi_line(text: str) -> Optional[dict]:
     return {"kind": "inning_runs", "sport": "baseball", "team": team, "pick_type": m.group(2).upper()}
 
 
-def _parse_with_category(category: str, description: str) -> Optional[dict]:
-    if _is_yrfi_header(category):
-        return _parse_yrfi_line(description)
-
-    is_prop_category = category.lower().endswith("props")
-    sport_key = category.lower().replace("props", "").strip()
-    sport = _SPORT_MAP.get(sport_key)
-    if not sport:
+def _parse_f5_pick(description: str) -> Optional[str]:
+    text = _clean_line(description)
+    if not _F5_MARKER_RE.search(text):
         return None
+    if "moneyline" not in text.lower() and not re.search(r"\bml\b", text, re.IGNORECASE):
+        return None  # F5 total/spread - not something we grade yet, don't guess
+    text = _F5_MARKER_RE.sub("", text)
+    return _parse_team_pick(text)
+
+
+def _parse_total_pick(sport: str, description: str) -> Optional[dict]:
+    text = _clean_line(description)
+    m = _TOTAL_LINE_RE.match(text)
+    if not m:
+        return None
+    team_a, team_b = m.group(1).strip(), m.group(2).strip()
+    if not team_a or not team_b:
+        return None
+    return {
+        "kind": "total", "sport": sport, "team": team_a,
+        "direction": m.group(3).lower(), "line": float(m.group(4)),
+    }
+
+
+def _parse_description(sport: str, sport_key: str, description: str, is_prop_category: bool) -> Optional[dict]:
+    total = _parse_total_pick(sport, description)
+    if total:
+        return total
 
     # A description shaped like "Player Over/Under N Stat" is a player prop
     # even when the category itself is bare (e.g. "[MLB]" rather than
     # "[MLB Props]") - confirmed live that real messages mix both taggings
     # for the same bet type. A team-vs-team matchup line (e.g. "Angels vs
     # Giants - Over 8.5 Total Runs") is excluded even though it also matches
-    # the Over/Under shape, since that's a game total, not a single player's
-    # stat.
+    # the Over/Under shape, since that's a game total (handled above), not a
+    # single player's stat.
     has_matchup = any(sep in description for sep in (" vs. ", " vs ", " v. ", " v "))
     if not has_matchup:
+        f5_team = _parse_f5_pick(description)
+        if f5_team:
+            return {"kind": "f5_moneyline", "sport": sport, "team": f5_team}
+
         prop = _parse_player_prop(sport_key, sport, description)
         if prop:
             return prop
@@ -228,6 +272,18 @@ def _parse_with_category(category: str, description: str) -> Optional[dict]:
     if not team:
         return None
     return {"kind": "track", "sport": sport, "team": team}
+
+
+def _parse_with_category(category: str, description: str) -> Optional[dict]:
+    if _is_yrfi_header(category):
+        return _parse_yrfi_line(description)
+
+    is_prop_category = category.lower().endswith("props")
+    sport_key = category.lower().replace("props", "").strip()
+    sport = _SPORT_MAP.get(sport_key)
+    if not sport:
+        return None
+    return _parse_description(sport, sport_key, description, is_prop_category)
 
 
 def parse_pick_line(line: str) -> Optional[dict]:
@@ -300,6 +356,17 @@ def parse_picks_message(content: str) -> list[dict]:
 
         sport = _HEADER_SPORT_MAP.get(current_category.lower())
         if not sport:
+            continue
+
+        # Total/F5/prop picks have their own unambiguous shape (an explicit
+        # "- Over N" or "F5"/"Moneyline" marker) that's safe to try even on a
+        # bare bullet - but a plain "track" result from _parse_description
+        # would also fire for basically any leftover text (it just strips
+        # cutwords), which is too loose for an untagged bullet line, so that
+        # case still falls through to the stricter _is_simple_pick_name check.
+        pick = _parse_description(sport, current_category.lower(), _clean_line(bare), is_prop_category=False)
+        if pick and pick["kind"] != "track":
+            results.append(pick)
             continue
 
         name = _is_simple_pick_name(_clean_line(bare))

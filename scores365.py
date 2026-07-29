@@ -357,6 +357,70 @@ def grade_moneyline(game: dict, picked_team: str) -> Optional[str]:
     return "won" if picked_score > other_score else "lost"
 
 
+_INNING_STAGE_NAMES = {
+    1: "1st Inning", 2: "2nd Inning", 3: "3rd Inning", 4: "4th Inning", 5: "5th Inning",
+    6: "6th Inning", 7: "7th Inning", 8: "8th Inning", 9: "9th Inning",
+}
+
+
+def innings_breakdown(game_id, through_inning: int) -> Optional[tuple[int, int]]:
+    """Sums each side's runs through the given inning (e.g. through_inning=5
+    for an F5/"First 5 Innings" moneyline pick), once that inning is fully
+    complete. Confirmed live via the per-game detail call's `stages` array -
+    each inning is its own entry (e.g. "5th Inning") with isEnded=True once
+    it's actually finished (the current live inning shows isLive=True
+    instead, and not-yet-reached innings carry neither flag with a -1
+    sentinel score) - and this works for any league 365scores covers under
+    a sport (confirmed live for both MLB and KBO games), unlike espn.py's
+    equivalent used for YRFI/NRFI, which is hardcoded to the MLB endpoint
+    only. Returns None if the target inning hasn't finished yet, an earlier
+    inning is missing (e.g. a postponed/rain-shortened game), or the detail
+    call failed."""
+    detail = _get_game_detail(game_id)
+    if not detail:
+        return None
+    innings = {s.get("name"): s for s in (detail.get("stages") or [])}
+    home_total = away_total = 0
+    for n in range(1, through_inning + 1):
+        stage = innings.get(_INNING_STAGE_NAMES.get(n))
+        if not stage or not stage.get("isEnded"):
+            return None
+        home_total += stage.get("homeCompetitorScore") or 0
+        away_total += stage.get("awayCompetitorScore") or 0
+    return int(home_total), int(away_total)
+
+
+def grade_f5_moneyline(game: dict, home_runs: int, away_runs: int, picked_team: str) -> Optional[str]:
+    """Grades an F5 (First 5 Innings) moneyline pick against the summed
+    1st-5th inning score - same push-on-tie rule as grade_moneyline, just
+    against the partial-game total instead of the final score."""
+    home = (game.get("homeCompetitor") or {}).get("name", "")
+    away = (game.get("awayCompetitor") or {}).get("name", "")
+    if names_match(home, picked_team):
+        picked_runs, other_runs = home_runs, away_runs
+    elif names_match(away, picked_team):
+        picked_runs, other_runs = away_runs, home_runs
+    else:
+        return None
+    if picked_runs == other_runs:
+        return "push"
+    return "won" if picked_runs > other_runs else "lost"
+
+
+def grade_total(game: dict, direction: str, line: float) -> Optional[str]:
+    """Grades a game-total (Over/Under combined final score) pick. Returns
+    "won"/"lost"/"push" (exact match), or None if there's no final score yet."""
+    scores = main_scores(game)
+    if not scores:
+        return None
+    total = scores[0] + scores[1]
+    if total == line:
+        return "push"
+    if direction == "over":
+        return "won" if total > line else "lost"
+    return "won" if total < line else "lost"
+
+
 def format_score_line(game: dict) -> str:
     home = (game.get("homeCompetitor") or {}).get("name", "?")
     away = (game.get("awayCompetitor") or {}).get("name", "?")
