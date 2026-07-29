@@ -58,6 +58,19 @@ _PLAYER_STAT_RE = re.compile(r"^(.+?)\s+(Over|Under)\s+([\d.]+)\s+(.+?)\s*(?:\(|
 # two team names is captured - either one is enough to look the game up.
 _YRFI_LINE_RE = re.compile(r"^(.+?)\s+vs\.?\s+.+?-\s*(YRFI|NRFI)\b", re.IGNORECASE)
 
+# "Team A vs Team B - Over 0.5 1st Inning (...)" means exactly the same bet
+# as YRFI ("at least 1 run scores in the 1st inning") worded differently -
+# 0.5 is the only line where "any run" vs "no runs" are the two possible
+# outcomes, so it's routed to the same inningtracker.py kind rather than
+# treated as a game/team total. Only the 0.5 line is recognized - "Over 1.5
+# 1st Inning" means something else (2+ runs) that inningtracker.py doesn't
+# grade, so that's deliberately left unmatched and falls through to being
+# skipped rather than guessed.
+_INNING_RUN_TOTAL_RE = re.compile(
+    r"^(.+?)\s*(?:@|vs\.?|v\.?)\s*(.+?)\s*-\s*(Over|Under)\s+0\.5\s+1st\s+Inning\b",
+    re.IGNORECASE,
+)
+
 # "F5"/"First 5 Innings" moneyline - settles after the 5th inning, not the
 # whole game, so it's routed to f5tracker.py rather than /track's kind="track"
 # (see _parse_f5_pick). Only matches the moneyline flavor of an F5 bet - an F5
@@ -255,6 +268,18 @@ def _parse_yrfi_line(text: str) -> Optional[dict]:
     return {"kind": "inning_runs", "sport": "baseball", "team": team, "pick_type": m.group(2).upper()}
 
 
+def _parse_inning_run_total(description: str) -> Optional[dict]:
+    text = _clean_line(description)
+    m = _INNING_RUN_TOTAL_RE.match(text)
+    if not m:
+        return None
+    team = m.group(1).strip()
+    if not team:
+        return None
+    pick_type = "YRFI" if m.group(3).lower() == "over" else "NRFI"
+    return {"kind": "inning_runs", "sport": "baseball", "team": team, "pick_type": pick_type}
+
+
 def _parse_f5_pick(description: str) -> Optional[str]:
     text = _clean_line(description)
     if not _F5_MARKER_RE.search(text):
@@ -280,6 +305,11 @@ def _parse_total_pick(sport: str, description: str) -> Optional[dict]:
 
 
 def _parse_description(sport: str, sport_key: str, description: str, is_prop_category: bool) -> Optional[dict]:
+    if sport == "baseball":
+        inning_total = _parse_inning_run_total(description)
+        if inning_total:
+            return inning_total
+
     total = _parse_total_pick(sport, description)
     if total:
         return total
