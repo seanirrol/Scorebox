@@ -98,7 +98,7 @@ def unregister_message(message_id: int):
 def _persist(
     channel_id: int, event_id, entity_id: str, stat_key: tuple, message_id: int,
     sport: str, team_id: str, photo_url: Optional[str], stat_label: str, player_name: str, owner_id: int,
-    direction: Optional[str] = None, line: Optional[float] = None,
+    direction: Optional[str] = None, line: Optional[float] = None, known_team_name: Optional[str] = None,
 ):
     data = state.load_props()
     data[prop_key(channel_id, event_id, entity_id, stat_key)] = {
@@ -106,7 +106,7 @@ def _persist(
         "stat_key": list(stat_key), "message_id": message_id, "sport": sport,
         "team_id": team_id, "photo_url": photo_url, "stat_label": stat_label,
         "player_name": player_name, "owner_id": owner_id,
-        "direction": direction, "line": line,
+        "direction": direction, "line": line, "known_team_name": known_team_name,
     }
     state.save_props(data)
 
@@ -150,6 +150,7 @@ async def build_embed(
     event: dict,
     direction: Optional[str] = None,
     line: Optional[float] = None,
+    known_team_name: Optional[str] = None,
 ) -> tuple[discord.Embed, discord.File]:
     """
     Returns (embed, file). Sport/tournament goes in the embed author line and
@@ -160,6 +161,13 @@ async def build_embed(
     /playerprops usage, which has no line to grade against) - once the event
     finishes, they're compared against the final stat value to show a
     Won/Lost/Push badge in the embed title.
+
+    known_team_name is the player's roster team from the original ESPN
+    player search (espn.find_player), independent of this specific event's
+    boxscore - used as a fallback so the card shows a real team name
+    immediately instead of "?" for however many hours it takes ESPN to
+    publish this event's lineups (team can't change between search and event
+    lookup within the same tracking session).
     """
     comp = (event.get("header", {}).get("competitions") or [{}])[0]
     status = comp.get("status", {}).get("type", {})
@@ -185,7 +193,7 @@ async def build_embed(
     away_name = next((c.get("team", {}).get("displayName", "?") for c in competitors if c.get("homeAway") == "away"), "?")
     matchup = f"{home_name} v {away_name}"
 
-    team_name = (team or {}).get("displayName", "?")
+    team_name = (team or {}).get("displayName") or known_team_name or "?"
 
     sport_label = espn.SPORT_DISPLAY_LABELS.get(sport, sport.title())
     league_name = ((event.get("header", {}).get("league") or {}).get("name")) or sport_label
@@ -242,6 +250,7 @@ async def _track_loop(
     owner_id: int,
     direction: Optional[str] = None,
     line: Optional[float] = None,
+    known_team_name: Optional[str] = None,
 ):
     key = prop_key(channel_id, event_id, entity_id, stat_key)
     deadline = time.monotonic() + config.MAX_TRACK_HOURS * 3600
@@ -297,7 +306,7 @@ async def _track_loop(
                         team_shown = True
                         refreshed_embed, refreshed_file = await build_embed(
                             player_name, entity_id, photo_url, sport, stat_label, current_value, is_home, team,
-                            event, direction, line,
+                            event, direction, line, known_team_name,
                         )
                         try:
                             await throttle.run(
@@ -320,7 +329,7 @@ async def _track_loop(
             current_value, is_home, team = await asyncio.to_thread(espn.get_stat_value, event, entity_id, stat_key)
             embed, file = await build_embed(
                 player_name, entity_id, photo_url, sport, stat_label, current_value, is_home, team, event,
-                direction, line,
+                direction, line, known_team_name,
             )
 
             if hibernated:
@@ -342,7 +351,7 @@ async def _track_loop(
                     register_message(message.id, channel_id, event_id, entity_id, stat_key, owner_id)
                     _persist(
                         channel_id, event_id, entity_id, stat_key, message.id, sport, team_id, photo_url,
-                        stat_label, player_name, owner_id, direction, line,
+                        stat_label, player_name, owner_id, direction, line, known_team_name,
                     )
                     try:
                         await old_message.delete()
@@ -403,6 +412,7 @@ def start_tracking(
     owner_id: int,
     direction: Optional[str] = None,
     line: Optional[float] = None,
+    known_team_name: Optional[str] = None,
 ):
     key = prop_key(channel_id, event_id, entity_id, stat_key)
     if key in _active_props:
@@ -410,14 +420,14 @@ def start_tracking(
     task = asyncio.create_task(
         _track_loop(
             message, channel_id, event_id, entity_id, team_id, photo_url, sport, stat_key, stat_label,
-            player_name, owner_id, direction, line,
+            player_name, owner_id, direction, line, known_team_name,
         )
     )
     _active_props[key] = task
     register_message(message.id, channel_id, event_id, entity_id, stat_key, owner_id)
     _persist(
         channel_id, event_id, entity_id, stat_key, message.id, sport, team_id, photo_url, stat_label,
-        player_name, owner_id, direction, line,
+        player_name, owner_id, direction, line, known_team_name,
     )
 
 
@@ -449,6 +459,6 @@ async def resume_all(client: discord.Client):
         start_tracking(
             message, channel_id, event_id, entity_id, entry["team_id"], entry.get("photo_url"), entry["sport"],
             stat_key, entry["stat_label"], entry["player_name"], entry.get("owner_id"),
-            entry.get("direction"), entry.get("line"),
+            entry.get("direction"), entry.get("line"), entry.get("known_team_name"),
         )
         log.info("Resumed prop tracking for %s in channel %s", entry["player_name"], channel_id)

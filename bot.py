@@ -208,7 +208,7 @@ async def _auto_playerprops(
     current_value, is_home, team = await asyncio.to_thread(espn.get_stat_value, event, entity["id"], stat_key)
     embed, file = await proptracker.build_embed(
         entity["name"], entity["id"], entity["photo_url"], sport_value, stat, current_value, is_home, team, event,
-        direction, line,
+        direction, line, entity["team_name"],
     )
     message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
     proptracker.register_message(message.id, channel.id, event_id, entity["id"], stat_key, None)
@@ -218,7 +218,7 @@ async def _auto_playerprops(
         return
     proptracker.start_tracking(
         message, channel.id, event_id, entity["id"], entity["team_id"], entity["photo_url"],
-        sport_value, stat_key, stat, entity["name"], None, direction, line,
+        sport_value, stat_key, stat, entity["name"], None, direction, line, entity["team_name"],
     )
     log.info("Auto-tracked player prop pick: %s - %s", player, stat)
 
@@ -421,7 +421,8 @@ async def playerprops(interaction: discord.Interaction, sport: app_commands.Choi
 
     current_value, is_home, team = await asyncio.to_thread(espn.get_stat_value, event, entity["id"], stat_key)
     embed, file = await proptracker.build_embed(
-        entity["name"], entity["id"], entity["photo_url"], sport.value, stat, current_value, is_home, team, event
+        entity["name"], entity["id"], entity["photo_url"], sport.value, stat, current_value, is_home, team, event,
+        known_team_name=entity["team_name"],
     )
     message = await interaction.followup.send(embed=embed, file=file, wait=True)
 
@@ -436,6 +437,7 @@ async def playerprops(interaction: discord.Interaction, sport: app_commands.Choi
         proptracker.start_tracking(
             message, interaction.channel_id, event_id, entity["id"], entity["team_id"], entity["photo_url"],
             sport.value, stat_key, stat, entity["name"], interaction.user.id,
+            known_team_name=entity["team_name"],
         )
 
 
