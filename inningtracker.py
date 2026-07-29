@@ -41,7 +41,7 @@ _active: dict[str, asyncio.Task] = {}
 # reaction-based delete handler in bot.py look up who can delete a message.
 _message_owners: dict[int, tuple] = {}
 
-_RESULT_TITLES = {"won": "✅ Pick Won", "lost": "❌ Pick Lost"}
+_RESULT_TITLES = {"won": "<a:pickwon:1505454446790840470> Pick Won", "lost": "❌ Pick Lost"}
 _RESULT_REACTIONS = {"won": "✅", "lost": "❌"}
 
 _PICK_LABELS = {"YRFI": "Yes Runs 1st Inning", "NRFI": "No Runs 1st Inning"}

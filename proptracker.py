@@ -134,7 +134,7 @@ def _fmt_value(v) -> str:
     return "-" if v is None else str(v)
 
 
-_RESULT_TITLES = {"won": "✅ Pick Won", "lost": "❌ Pick Lost", "push": "➖ Push"}
+_RESULT_TITLES = {"won": "<a:pickwon:1505454446790840470> Pick Won", "lost": "❌ Pick Lost", "push": "➖ Push"}
 _RESULT_REACTIONS = {"won": "✅", "lost": "❌"}
 
 
