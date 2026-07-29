@@ -79,11 +79,18 @@ _TOTAL_LINE_RE = re.compile(
     re.IGNORECASE,
 )
 
-# For a baseball "Strikeouts" prop with no other context, pitcher strikeouts
-# is the overwhelmingly common bet type - default there rather than guessing
-# batting vs pitching from wording alone (both exist in our stat catalog).
+# Maps wording that doesn't literally match a STAT_CATALOG label to the
+# label it actually means - either because the bet type is genuinely
+# ambiguous (a baseball "Strikeouts" prop with no other context: pitcher
+# strikeouts is the overwhelmingly common bet type, so default there rather
+# than guessing batting vs pitching from wording alone), or because it's
+# just a common phrasing variant of an existing label (confirmed live:
+# "Dustin May Over 1.5 Earned Runs Allowed" silently dropped the whole pick,
+# since the catalog only has "Earned Runs" - unambiguous, since there's no
+# separate batting-context "Earned Runs" to confuse it with).
 _AMBIGUOUS_STAT_DEFAULTS = {
     ("baseball", "strikeouts"): "Strikeouts (Pitching)",
+    ("baseball", "earned runs allowed"): "Earned Runs",
 }
 
 # _SPORT_MAP collapses "nba"/"wnba" to the same "basketball" key since
