@@ -20,8 +20,13 @@ from typing import Optional
 import espn
 
 # Bracket category (lowercased, "Props" suffix stripped) -> our sport key.
+# Baseball has multiple league names in the wild (MLB, KBO, ...) that all map
+# to the same "baseball" sport key - 365scores/ESPN aren't scoped per-league
+# for team/game lookups (confirmed live: 365scores' baseball feed already
+# includes KBO games alongside MLB), just the label users type differs.
 _SPORT_MAP = {
     "mlb": "baseball",
+    "kbo": "baseball",
     "nba": "basketball",
     "wnba": "basketball",
     "nfl": "nfl",
