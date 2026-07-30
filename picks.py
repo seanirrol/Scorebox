@@ -81,14 +81,17 @@ _F5_MARKER_RE = re.compile(
     r"\bf5\b|\bfirst\s+5\s+innings\b|\bfirst\s+five\s+innings\b|\b1st\s+5\s+innings\b", re.IGNORECASE
 )
 
-# "Team A @ Team B - Over 9.5" or "... - Over 8.5 Total Runs" - a game total,
-# not a single player's stat (_parse_player_prop requires a stat word after
-# the number and would never match this shape). Checked before team-pick
-# parsing so it doesn't get silently mis-tracked as a moneyline pick on Team
-# A (confirmed this was actually happening for the "Total Runs" wording
-# example already called out in this module's own docstring).
+# "Team A @ Team B - Over 9.5", "... - Over 8.5 Total Runs", or "Team A vs
+# Team B Under 4" (no dash at all - confirmed live, a real soccer pick was
+# worded this way) - a game total, not a single player's stat
+# (_parse_player_prop requires a stat word after the number and would never
+# match this shape). Checked before team-pick parsing so it doesn't get
+# silently mis-tracked as a moneyline pick on Team A (confirmed this was
+# actually happening for the "Total Runs" wording example already called
+# out in this module's own docstring). The dash is optional since not every
+# source includes one.
 _TOTAL_LINE_RE = re.compile(
-    r"^(.+?)\s*(?:@|vs\.?|v\.?)\s*(.+?)\s*-\s*(Over|Under)\s+([\d.]+)(?:\s+Total\s+\w+)?\s*$",
+    r"^(.+?)\s*(?:@|vs\.?|v\.?)\s*(.+?)\s*(?:-\s*)?(Over|Under)\s+([\d.]+)(?:\s+Total\s+\w+)?\s*$",
     re.IGNORECASE,
 )
 
