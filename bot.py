@@ -533,6 +533,121 @@ def _untrack_one(channel_id: int, game_id: str, player: Optional[str]) -> list[s
     return stopped
 
 
+def _posted_ts(message_id: int) -> int:
+    """Discord message IDs are snowflakes that already encode their creation
+    time - no need to persist a separate 'tracked since' timestamp anywhere,
+    every tracker already stores message_id."""
+    return int(discord.utils.snowflake_time(message_id).timestamp())
+
+
+class _UntrackSelect(discord.ui.Select):
+    """One dropdown covering up to 25 tracked items - see UntrackView for how
+    more than 25 are split across multiple dropdowns (a Select's own option
+    list is capped at 25 by Discord)."""
+
+    def __init__(self, indexed_items: list[tuple[int, dict]]):
+        options = [
+            discord.SelectOption(
+                label=item["label"][:100],
+                value=str(i),
+                description=(f"ID {item['id_label']} • posted "
+                             f"{discord.utils.snowflake_time(item['message_id']).strftime('%b %d, %I:%M %p UTC')}")[:100],
+            )
+            for i, item in indexed_items
+        ]
+        super().__init__(placeholder="Select tracked pick(s) to untrack...", min_values=1, max_values=len(options), options=options)
+        self._by_value = {str(i): item for i, item in indexed_items}
+
+    async def callback(self, interaction: discord.Interaction):
+        lines = []
+        for value in self.values:
+            item = self._by_value[value]
+            stopped = item["stop"]()
+            lines.append(f"{'🗑️' if stopped else '⚠️'} {item['label']} — {'untracked' if stopped else 'already gone'}")
+        await interaction.response.send_message("\n".join(lines), ephemeral=True)
+
+
+class UntrackView(discord.ui.View):
+    """Lets /tracked's ephemeral listing be untracked by picking from a
+    dropdown instead of copy-pasting game IDs into /untrack. Chunks into
+    multiple dropdowns (a View allows up to 5 components) if there are more
+    than 25 tracked items in the channel."""
+
+    def __init__(self, items: list[dict]):
+        super().__init__(timeout=300)
+        indexed = list(enumerate(items))
+        for start in range(0, min(len(indexed), 125), 25):
+            self.add_item(_UntrackSelect(indexed[start:start + 25]))
+
+
+async def _gather_tracked_items(channel_id: int) -> list[dict]:
+    """One entry per active tracker (match/total/F5/prop/1st-inning), each
+    with a display label and a zero-arg 'stop' callable - shared by /tracked's
+    text listing and its untrack dropdown so the two never drift apart."""
+    items = []
+
+    for entry in tracker.list_tracked_details(channel_id):
+        game = await asyncio.to_thread(scores365.get_live_update, entry["sport_id"], entry["game_id"])
+        if game:
+            home = (game.get("homeCompetitor") or {}).get("name", "?")
+            away = (game.get("awayCompetitor") or {}).get("name", "?")
+            matchup = f"{home} vs {away}"
+        else:
+            matchup = "(couldn't fetch match info)"
+        if entry.get("picked_team"):
+            pick_suffix = f" — {entry['picked_team']} ML"
+        elif entry.get("team_total") and entry.get("total_direction") and entry.get("total_line") is not None:
+            pick_suffix = f" — {entry['team_total']} {entry['total_direction'].title()} {entry['total_line']:g}"
+        elif entry.get("total_direction") and entry.get("total_line") is not None:
+            pick_suffix = f" — {entry['total_direction'].title()} {entry['total_line']:g}"
+        else:
+            pick_suffix = ""
+        items.append({
+            "kind": "match", "label": f"{matchup}{pick_suffix}", "id_label": entry["game_id"],
+            "message_id": entry["message_id"],
+            "stop": lambda cid=channel_id, gid=entry["game_id"]: tracker.stop_tracking(cid, gid),
+        })
+
+    for entry in proptracker.list_tracked_details(channel_id):
+        items.append({
+            "kind": "prop", "label": f"{entry['player_name']} ({entry['stat_label']})", "id_label": entry["event_id"],
+            "message_id": entry["message_id"],
+            "stop": lambda cid=channel_id, eid=entry["event_id"], enid=entry["entity_id"], sk=tuple(entry["stat_key"]):
+                proptracker.stop_tracking(cid, eid, enid, sk),
+        })
+
+    for entry in inningtracker.list_tracked_details(channel_id):
+        items.append({
+            "kind": "inning", "label": entry["pick_type"], "id_label": entry["event_id"],
+            "message_id": entry["message_id"],
+            "stop": lambda cid=channel_id, eid=entry["event_id"], pt=entry["pick_type"]:
+                inningtracker.stop_tracking(cid, eid, pt),
+        })
+
+    for entry in f5tracker.list_tracked_details(channel_id):
+        if entry.get("picked_team") and entry.get("total_direction") and entry.get("total_line") is not None:
+            pick_label = f"{entry['picked_team']} F5 {entry['total_direction'].title()} {entry['total_line']:g}"
+        elif entry.get("total_direction") and entry.get("total_line") is not None:
+            pick_label = f"F5 {entry['total_direction'].title()} {entry['total_line']:g}"
+        else:
+            pick_label = f"{entry['picked_team']} F5 ML"
+        items.append({
+            "kind": "f5", "label": pick_label, "id_label": entry["game_id"],
+            "message_id": entry["message_id"],
+            "stop": lambda cid=channel_id, gid=entry["game_id"]: f5tracker.stop_tracking(cid, gid),
+        })
+
+    for entry in inning1tracker.list_tracked_details(channel_id):
+        pick_label = "Draw" if entry["pick"].upper() == "DRAW" else entry["pick"]
+        items.append({
+            "kind": "inning1", "label": f"1st Inning: {pick_label}", "id_label": entry["game_id"],
+            "message_id": entry["message_id"],
+            "stop": lambda cid=channel_id, gid=entry["game_id"]: inning1tracker.stop_tracking(cid, gid),
+        })
+
+    return items
+
+
 @tree.command(name="untrack", description="Stop auto-updating one or more tracked matches/player props in this channel")
 @app_commands.describe(
     game_id="Game ID(s) shown by /tracked - separate multiple with commas or spaces",
@@ -559,80 +674,37 @@ async def untrack(interaction: discord.Interaction, game_id: str, player: Option
     await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
 
+_SECTION_TITLES = {
+    "match": "Tracked matches",
+    "prop": "Tracked player props",
+    "inning": "Tracked 1st-inning picks",
+    "f5": "Tracked F5 (1st 5 innings) picks",
+    "inning1": "Tracked 1st inning result picks",
+}
+
+
 @tree.command(name="tracked", description="List matches and player props currently being tracked in this channel")
 async def tracked(interaction: discord.Interaction):
     if not _channel_allowed(interaction):
         await _reject_wrong_channel(interaction)
         return
     await interaction.response.defer(ephemeral=True)
-    match_details = tracker.list_tracked_details(interaction.channel_id)
-    prop_details = proptracker.list_tracked_details(interaction.channel_id)
-    inning_details = inningtracker.list_tracked_details(interaction.channel_id)
-    f5_details = f5tracker.list_tracked_details(interaction.channel_id)
-    inning1_details = inning1tracker.list_tracked_details(interaction.channel_id)
-    if not match_details and not prop_details and not inning_details and not f5_details and not inning1_details:
+    items = await _gather_tracked_items(interaction.channel_id)
+    if not items:
         await interaction.followup.send("Nothing is being tracked in this channel.", ephemeral=True)
         return
 
     sections = []
-
-    if match_details:
-        lines = []
-        for entry in match_details:
-            game = await asyncio.to_thread(scores365.get_live_update, entry["sport_id"], entry["game_id"])
-            if game:
-                home = (game.get("homeCompetitor") or {}).get("name", "?")
-                away = (game.get("awayCompetitor") or {}).get("name", "?")
-                label = f"{home} vs {away}"
-            else:
-                label = "(couldn't fetch match info)"
-
-            # Distinguishes a plain /track (no pick) from a moneyline, team
-            # total, or combined total pick - without this, they all looked
-            # identical here.
-            if entry.get("picked_team"):
-                pick_suffix = f" — {entry['picked_team']} ML"
-            elif entry.get("team_total") and entry.get("total_direction") and entry.get("total_line") is not None:
-                pick_suffix = f" — {entry['team_total']} {entry['total_direction'].title()} {entry['total_line']:g}"
-            elif entry.get("total_direction") and entry.get("total_line") is not None:
-                pick_suffix = f" — {entry['total_direction'].title()} {entry['total_line']:g}"
-            else:
-                pick_suffix = ""
-
-            lines.append(f"- `{entry['game_id']}` — {label}{pick_suffix}")
-        sections.append("**Tracked matches:**\n" + "\n".join(lines))
-
-    if prop_details:
+    for kind, title in _SECTION_TITLES.items():
         lines = [
-            f"- `{entry['event_id']}` — {entry['player_name']} ({entry['stat_label']})"
-            for entry in prop_details
+            f"- `{item['id_label']}` — {item['label']} • posted <t:{_posted_ts(item['message_id'])}:R>"
+            for item in items if item["kind"] == kind
         ]
-        sections.append("**Tracked player props:**\n" + "\n".join(lines))
+        if lines:
+            sections.append(f"**{title}:**\n" + "\n".join(lines))
 
-    if inning_details:
-        lines = [f"- `{entry['event_id']}` — {entry['pick_type']}" for entry in inning_details]
-        sections.append("**Tracked 1st-inning picks:**\n" + "\n".join(lines))
-
-    if f5_details:
-        lines = []
-        for entry in f5_details:
-            if entry.get("picked_team") and entry.get("total_direction") and entry.get("total_line") is not None:
-                pick_label = f"{entry['picked_team']} F5 {entry['total_direction'].title()} {entry['total_line']:g}"
-            elif entry.get("total_direction") and entry.get("total_line") is not None:
-                pick_label = f"F5 {entry['total_direction'].title()} {entry['total_line']:g}"
-            else:
-                pick_label = f"{entry['picked_team']} F5 ML"
-            lines.append(f"- `{entry['game_id']}` — {pick_label}")
-        sections.append("**Tracked F5 (1st 5 innings) picks:**\n" + "\n".join(lines))
-
-    if inning1_details:
-        lines = [
-            f"- `{entry['game_id']}` — {'Draw' if entry['pick'].upper() == 'DRAW' else entry['pick']}"
-            for entry in inning1_details
-        ]
-        sections.append("**Tracked 1st inning result picks:**\n" + "\n".join(lines))
-
-    await interaction.followup.send("\n\n".join(sections), ephemeral=True)
+    view = UntrackView(items)
+    await interaction.followup.send("\n\n".join(sections), view=view, ephemeral=True)
 
 
 def main():
