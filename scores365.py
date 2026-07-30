@@ -407,6 +407,57 @@ def grade_f5_moneyline(game: dict, home_runs: int, away_runs: int, picked_team: 
     return "won" if picked_runs > other_runs else "lost"
 
 
+def grade_f5_team_total(
+    game: dict, home_runs: int, away_runs: int, team: str, direction: str, line: float
+) -> Optional[str]:
+    """Grades an F5 (First 5 Innings) *team* total pick - one side's own
+    1st-5th inning runs against a line, not compared against the other
+    side (see grade_f5_moneyline for that). Returns "won"/"lost"/"push"
+    (exact match), or None if team doesn't match either side."""
+    home = (game.get("homeCompetitor") or {}).get("name", "")
+    away = (game.get("awayCompetitor") or {}).get("name", "")
+    if names_match(home, team):
+        value = home_runs
+    elif names_match(away, team):
+        value = away_runs
+    else:
+        return None
+    if value == line:
+        return "push"
+    if direction == "over":
+        return "won" if value > line else "lost"
+    return "won" if value < line else "lost"
+
+
+def partial_f5_team_total(game_id, team: str, home_name: str, away_name: str) -> Optional[int]:
+    """Sums whichever of the team's 1st-5th innings have actually completed
+    so far, stopping at the first one that hasn't - unlike
+    innings_breakdown, doesn't require the whole window to be done. Lets an
+    Over pick be tagged a win the moment the partial total already clears
+    the line, same idea as tracker.py/proptracker.py's early-win tagging,
+    rather than waiting for all 5 innings to finish. Returns None if the
+    team doesn't match either side, or nothing's completed yet."""
+    detail = _get_game_detail(game_id)
+    if not detail:
+        return None
+    if names_match(home_name, team):
+        key = "homeCompetitorScore"
+    elif names_match(away_name, team):
+        key = "awayCompetitorScore"
+    else:
+        return None
+    innings = {s.get("name"): s for s in (detail.get("stages") or [])}
+    total = 0
+    counted_any = False
+    for n in range(1, 6):
+        stage = innings.get(_INNING_STAGE_NAMES.get(n))
+        if not stage or not stage.get("isEnded"):
+            break
+        total += stage.get(key) or 0
+        counted_any = True
+    return int(total) if counted_any else None
+
+
 def grade_total(game: dict, direction: str, line: float) -> Optional[str]:
     """Grades a game-total (Over/Under combined final score) pick. Returns
     "won"/"lost"/"push" (exact match), or None if there's no final score yet."""

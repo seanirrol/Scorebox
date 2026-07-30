@@ -152,9 +152,12 @@ async def _auto_track(
     log.info("Auto-tracked pick '%s' -> game %s", team, game_id)
 
 
-async def _auto_f5(channel: discord.abc.Messageable, sport_value: str, team: str):
-    """F5 (First 5 Innings) moneyline picks settle after the 5th inning, not
-    the whole game - see f5tracker.py."""
+async def _auto_f5(
+    channel: discord.abc.Messageable, sport_value: str, team: str,
+    total_direction: Optional[str] = None, total_line: Optional[float] = None,
+):
+    """F5 (First 5 Innings) picks - moneyline or team total - settle after
+    the 5th inning, not the whole game - see f5tracker.py."""
     try:
         result = await asyncio.to_thread(scores365.find_match_for_team, team, sport_value)
     except scores365.ScoresError as e:
@@ -168,14 +171,14 @@ async def _auto_f5(channel: discord.abc.Messageable, sport_value: str, team: str
     if f5tracker.is_tracked(channel.id, game_id):
         return
 
-    embed, file = await f5tracker.build_embed(game, sport_id, team)
+    embed, file = await f5tracker.build_embed(game, sport_id, team, total_direction, total_line)
     message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
     f5tracker.register_message(message.id, channel.id, game_id, None)
     await message.add_reaction(TRASH_EMOJI)
 
     if await asyncio.to_thread(scores365.innings_breakdown, game_id, f5tracker.THROUGH_INNING) is not None:
         return  # F5 was already decided by the time this pick was posted
-    f5tracker.start_tracking(message, sport_id, game, channel.id, None, team)
+    f5tracker.start_tracking(message, sport_id, game, channel.id, None, team, total_direction, total_line)
     log.info("Auto-tracked F5 pick '%s' -> game %s", team, game_id)
 
 
@@ -279,6 +282,8 @@ async def on_message(message: discord.Message):
                 await _auto_track(target_channel, pick["sport"], pick["team"], pick["direction"], pick["line"])
             elif pick["kind"] == "f5_moneyline":
                 await _auto_f5(target_channel, pick["sport"], pick["team"])
+            elif pick["kind"] == "f5_total":
+                await _auto_f5(target_channel, pick["sport"], pick["team"], pick["direction"], pick["line"])
             elif pick["kind"] == "inning_runs":
                 await _auto_inning_runs(target_channel, pick["team"], pick["pick_type"])
             else:
@@ -546,7 +551,13 @@ async def tracked(interaction: discord.Interaction):
         sections.append("**Tracked 1st-inning picks:**\n" + "\n".join(lines))
 
     if f5_details:
-        lines = [f"- `{entry['game_id']}` — {entry['picked_team']} F5 ML" for entry in f5_details]
+        lines = []
+        for entry in f5_details:
+            if entry.get("total_direction") and entry.get("total_line") is not None:
+                pick_label = f"{entry['picked_team']} F5 {entry['total_direction'].title()} {entry['total_line']:g}"
+            else:
+                pick_label = f"{entry['picked_team']} F5 ML"
+            lines.append(f"- `{entry['game_id']}` — {pick_label}")
         sections.append("**Tracked F5 (1st 5 innings) picks:**\n" + "\n".join(lines))
 
     await interaction.followup.send("\n\n".join(sections), ephemeral=True)

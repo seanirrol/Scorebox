@@ -71,14 +71,26 @@ _INNING_RUN_TOTAL_RE = re.compile(
     re.IGNORECASE,
 )
 
-# "F5"/"First 5 Innings" moneyline - settles after the 5th inning, not the
-# whole game, so it's routed to f5tracker.py rather than /track's kind="track"
-# (see _parse_f5_pick). Only matches the moneyline flavor of an F5 bet - an F5
-# total/spread would need its own linescore-based grading that this doesn't
-# do, so those still fall through to _PARTIAL_GAME_MARKERS below and get
-# skipped rather than mistakenly tracked as a full-game pick.
+# "F5"/"First 5 Innings" moneyline OR team total - both settle after the 5th
+# inning, not the whole game, so they're routed to f5tracker.py rather than
+# /track's kind="track" (see _parse_f5_pick / _parse_f5_total_pick). A
+# combined-game F5 total (both sides' runs summed) still isn't handled -
+# only a single team's own total - so that flavor still falls through to
+# _PARTIAL_GAME_MARKERS below and gets skipped rather than mistakenly
+# tracked as a full-game pick.
 _F5_MARKER_RE = re.compile(
     r"\bf5\b|\bfirst\s+5\s+innings\b|\bfirst\s+five\s+innings\b|\b1st\s+5\s+innings\b", re.IGNORECASE
+)
+
+# "Kia Tigers F5 Total Over 2.5" / "Kia Tigers F5 Team Total Over 2.5" /
+# "Kia Tigers First 5 Innings Over 2.5" - one team's own 1st-5th inning run
+# total against a line, not compared to the other side (see
+# grade_f5_team_total). "Team"/"Total" are both optional wording - only the
+# F5 marker + Over/Under + number are actually required.
+_F5_TOTAL_RE = re.compile(
+    r"^(.+?)\s*(?:f5|first\s+5\s+innings|first\s+five\s+innings|1st\s+5\s+innings)"
+    r"\s*(?:team\s*)?(?:total\s*)?(Over|Under)\s+([\d.]+)\s*$",
+    re.IGNORECASE,
 )
 
 # "Team A @ Team B - Over 9.5", "... - Over 8.5 Total Runs", or "Team A vs
@@ -284,13 +296,30 @@ def _parse_inning_run_total(description: str) -> Optional[dict]:
 
 
 def _parse_f5_pick(description: str) -> Optional[str]:
+    """The moneyline flavor of an F5 bet specifically - see
+    _parse_f5_total_pick for the team-total flavor, which is tried first in
+    _parse_description since it has its own more specific shape."""
     text = _clean_line(description)
     if not _F5_MARKER_RE.search(text):
         return None
     if "moneyline" not in text.lower() and not re.search(r"\bml\b", text, re.IGNORECASE):
-        return None  # F5 total/spread - not something we grade yet, don't guess
+        return None  # not the moneyline flavor - handled elsewhere or not graded at all
     text = _F5_MARKER_RE.sub("", text)
     return _parse_team_pick(text)
+
+
+def _parse_f5_total_pick(description: str, sport: str) -> Optional[dict]:
+    text = _clean_line(description)
+    m = _F5_TOTAL_RE.match(text)
+    if not m:
+        return None
+    team = m.group(1).strip()
+    if not team:
+        return None
+    return {
+        "kind": "f5_total", "sport": sport, "team": team,
+        "direction": m.group(2).lower(), "line": float(m.group(3)),
+    }
 
 
 def _parse_total_pick(sport: str, description: str) -> Optional[dict]:
@@ -326,6 +355,10 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
     # single player's stat.
     has_matchup = any(sep in description for sep in (" vs. ", " vs ", " v. ", " v "))
     if not has_matchup:
+        f5_total = _parse_f5_total_pick(description, sport)
+        if f5_total:
+            return f5_total
+
         f5_team = _parse_f5_pick(description)
         if f5_team:
             return {"kind": "f5_moneyline", "sport": sport, "team": f5_team}

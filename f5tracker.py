@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
-Manages background tasks for "F5" (First 5 Innings) moneyline picks - these
-settle once the 5th inning is fully complete, not when the whole game
-finishes, so they don't share tracker.py's wait-for-the-full-game design.
+Manages background tasks for "F5" (First 5 Innings) picks - moneyline (one
+side to be ahead through 5 innings) or team total (one side's own 1st-5th
+inning runs vs. a line) - both settle once the 5th inning is fully complete,
+not when the whole game finishes, so they don't share tracker.py's
+wait-for-the-full-game design.
 
 Backed by 365scores' per-game detail call (see scores365.innings_breakdown),
 which works across every league 365scores covers under baseball (MLB, KBO,
@@ -76,11 +78,15 @@ def unregister_message(message_id: int):
     _message_owners.pop(message_id, None)
 
 
-def _persist(channel_id: int, game_id, message_id: int, sport_id, owner_id: int, picked_team: str):
+def _persist(
+    channel_id: int, game_id, message_id: int, sport_id, owner_id: int, picked_team: str,
+    total_direction: Optional[str] = None, total_line: Optional[float] = None,
+):
     data = state.load_f5()
     data[track_key(channel_id, game_id)] = {
         "channel_id": channel_id, "game_id": game_id, "message_id": message_id,
         "sport_id": sport_id, "owner_id": owner_id, "picked_team": picked_team,
+        "total_direction": total_direction, "total_line": total_line,
     }
     state.save_f5(data)
 
@@ -104,25 +110,54 @@ def stop_tracking(channel_id: int, game_id) -> bool:
     return False
 
 
-async def build_embed(game: dict, sport_id: Optional[int], picked_team: str) -> tuple[discord.Embed, discord.File]:
+async def build_embed(
+    game: dict, sport_id: Optional[int], picked_team: str,
+    total_direction: Optional[str] = None, total_line: Optional[float] = None,
+) -> tuple[discord.Embed, discord.File]:
+    """total_direction/total_line (mutually exclusive with a plain F5
+    moneyline pick) grades picked_team's own 1st-5th inning run total
+    against a line instead of comparing it to the other side."""
     home_competitor = game.get("homeCompetitor") or {}
     away_competitor = game.get("awayCompetitor") or {}
     status = scores365.map_status_type(game.get("statusGroup"))
+    home_name = home_competitor.get("name", "?")
+    away_name = away_competitor.get("name", "?")
 
     breakdown = await asyncio.to_thread(scores365.innings_breakdown, game.get("id"), THROUGH_INNING)
     decided = breakdown is not None
-    result = scores365.grade_f5_moneyline(game, breakdown[0], breakdown[1], picked_team) if decided else None
+    if decided:
+        if total_direction and total_line is not None:
+            result = scores365.grade_f5_team_total(
+                game, breakdown[0], breakdown[1], picked_team, total_direction, total_line
+            )
+        else:
+            result = scores365.grade_f5_moneyline(game, breakdown[0], breakdown[1], picked_team)
+    else:
+        result = None
 
     embed_color = {"won": 0x2ECC71, "lost": 0xE74C3C, "push": 0x95A5A6}.get(result, 0x3498DB)
     embed = discord.Embed(color=embed_color)
     if result:
         embed.title = _RESULT_TITLES[result]
+    elif status == "inprogress" and total_direction == "over" and total_line is not None:
+        # Same early-win idea as tracker.py/proptracker.py's Over tagging -
+        # a team's innings-1-5 run total only climbs as innings complete, so
+        # once the partial total already clears the line, the pick can't
+        # become anything but a win even before all 5 innings are done.
+        partial = await asyncio.to_thread(
+            scores365.partial_f5_team_total, game.get("id"), picked_team, home_name, away_name
+        )
+        if partial is not None and partial > total_line:
+            embed.title = _RESULT_TITLES["won"]
 
     author_bits = [b for b in (scores365.sport_label(sport_id), game.get("competitionDisplayName")) if b]
     if author_bits:
         embed.set_author(name=" • ".join(author_bits))
 
-    description_lines = [f"{picked_team} F5 ML"]
+    if total_direction and total_line is not None:
+        description_lines = [f"{picked_team} F5 {total_direction.title()} {total_line:g}"]
+    else:
+        description_lines = [f"{picked_team} F5 ML"]
     if status == "notstarted":
         kickoff = scores365.start_epoch(game)
         if kickoff:
@@ -154,8 +189,6 @@ async def build_embed(game: dict, sport_id: Optional[int], picked_team: str) -> 
         home_cols = [scores365.fmt_score(live_scores[0])] if live_scores else ["-"]
         away_cols = [scores365.fmt_score(live_scores[1])] if live_scores else ["-"]
 
-    home_name = home_competitor.get("name", "?")
-    away_name = away_competitor.get("name", "?")
     home_logo_url = scores365.competitor_logo_url(home_competitor)
     away_logo_url = scores365.competitor_logo_url(away_competitor)
 
@@ -171,7 +204,8 @@ async def build_embed(game: dict, sport_id: Optional[int], picked_team: str) -> 
 
 
 async def _track_loop(
-    message: discord.Message, sport_id: int, game_id, channel_id: int, owner_id: int, picked_team: str
+    message: discord.Message, sport_id: int, game_id, channel_id: int, owner_id: int, picked_team: str,
+    total_direction: Optional[str] = None, total_line: Optional[float] = None,
 ):
     key = track_key(channel_id, game_id)
     deadline = time.monotonic() + config.MAX_TRACK_HOURS * 3600
@@ -215,7 +249,7 @@ async def _track_loop(
                 continue
             consecutive_misses = 0
 
-            embed, file = await build_embed(game, sport_id, picked_team)
+            embed, file = await build_embed(game, sport_id, picked_team, total_direction, total_line)
 
             if hibernated:
                 # The final wake right before kickoff - bump the card to the
@@ -235,7 +269,7 @@ async def _track_loop(
                     message = new_message
                     _message_owners.pop(old_message.id, None)
                     register_message(message.id, channel_id, game_id, owner_id)
-                    _persist(channel_id, game_id, message.id, sport_id, owner_id, picked_team)
+                    _persist(channel_id, game_id, message.id, sport_id, owner_id, picked_team, total_direction, total_line)
                     try:
                         await old_message.delete()
                     except discord.HTTPException as e:
@@ -257,7 +291,12 @@ async def _track_loop(
 
             breakdown = await asyncio.to_thread(scores365.innings_breakdown, game_id, THROUGH_INNING)
             if breakdown is not None:
-                result = scores365.grade_f5_moneyline(game, breakdown[0], breakdown[1], picked_team)
+                if total_direction and total_line is not None:
+                    result = scores365.grade_f5_team_total(
+                        game, breakdown[0], breakdown[1], picked_team, total_direction, total_line
+                    )
+                else:
+                    result = scores365.grade_f5_moneyline(game, breakdown[0], breakdown[1], picked_team)
                 reaction = _RESULT_REACTIONS.get(result)
                 if reaction:
                     try:
@@ -279,16 +318,19 @@ async def _track_loop(
 
 
 def start_tracking(
-    message: discord.Message, sport_id: int, game: dict, channel_id: int, owner_id: int, picked_team: str
+    message: discord.Message, sport_id: int, game: dict, channel_id: int, owner_id: int, picked_team: str,
+    total_direction: Optional[str] = None, total_line: Optional[float] = None,
 ):
     game_id = game["id"]
     key = track_key(channel_id, game_id)
     if key in _active:
         return
-    task = asyncio.create_task(_track_loop(message, sport_id, game_id, channel_id, owner_id, picked_team))
+    task = asyncio.create_task(
+        _track_loop(message, sport_id, game_id, channel_id, owner_id, picked_team, total_direction, total_line)
+    )
     _active[key] = task
     register_message(message.id, channel_id, game_id, owner_id)
-    _persist(channel_id, game_id, message.id, sport_id, owner_id, picked_team)
+    _persist(channel_id, game_id, message.id, sport_id, owner_id, picked_team, total_direction, total_line)
 
 
 async def resume_all(client: discord.Client):
@@ -314,5 +356,8 @@ async def resume_all(client: discord.Client):
             _forget(channel_id, game_id)
             continue
 
-        start_tracking(message, sport_id, game, channel_id, owner_id, entry["picked_team"])
+        start_tracking(
+            message, sport_id, game, channel_id, owner_id, entry["picked_team"],
+            entry.get("total_direction"), entry.get("total_line"),
+        )
         log.info("Resumed F5 tracking for game %s in channel %s", game_id, channel_id)
