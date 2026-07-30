@@ -65,6 +65,7 @@ STAT_CATALOG = {
         "Walks": ("BB", "AB"),
         "Strikeouts (Batting)": ("K", "AB"),
         "Strikeouts (Pitching)": ("K", "IP"),
+        "Walks (Pitching)": ("BB", "IP"),
         "Earned Runs": ("ER", "IP"),
         "Innings Pitched": ("IP", "IP"),
         "Total Bases": TOTAL_BASES_KEY,

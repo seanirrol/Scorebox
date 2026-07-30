@@ -51,7 +51,10 @@ _HEADER_SPORT_MAP = {
 }
 
 _LINE_RE = re.compile(r"^\s*(?:\d+[.)]\s*)?\[([^\]]+)\]\s*(.+)$")
-_PLAYER_STAT_RE = re.compile(r"^(.+?)\s+(Over|Under)\s+([\d.]+)\s+(.+?)\s*(?:\(|$)", re.IGNORECASE)
+# The optional "the" handles wording like "Roki Sasaki Over the 1.5 Walks
+# Allowed" (confirmed live - a real pick worded this way silently never
+# posted, since the number wasn't immediately after Over/Under).
+_PLAYER_STAT_RE = re.compile(r"^(.+?)\s+(Over|Under)\s+(?:the\s+)?([\d.]+)\s+(.+?)\s*(?:\(|$)", re.IGNORECASE)
 
 # "Team A vs Team B - YRFI - Yes Runs 1st Inning (...)" - settles after just
 # the 1st inning, not the whole game, so it's routed to inningtracker.py
@@ -164,6 +167,7 @@ _NAMED_TEAM_TOTAL_RE = re.compile(
 _AMBIGUOUS_STAT_DEFAULTS = {
     ("baseball", "strikeouts"): "Strikeouts (Pitching)",
     ("baseball", "earned runs allowed"): "Earned Runs",
+    ("baseball", "walks allowed"): "Walks (Pitching)",
 }
 
 # _SPORT_MAP collapses "nba"/"wnba" to the same "basketball" key since
