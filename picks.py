@@ -71,6 +71,22 @@ _INNING_RUN_TOTAL_RE = re.compile(
     re.IGNORECASE,
 )
 
+# "TeamName 1st Inning Moneyline" - a 3-way "1st inning result" pick backing
+# a specific team to lead after the 1st inning (see _parse_inning1_team_pick).
+# The Draw side of this same market needs a matchup instead of a single team
+# name, so it's handled separately below (_INNING1_DRAW_RE) - this is
+# genuinely a different market from YRFI/NRFI (any runs vs none) or F5
+# moneyline (which treats a tie as a push, not a separately-winnable Draw).
+_INNING1_RESULT_MARKER_RE = re.compile(r"\b1st\s+inning\b", re.IGNORECASE)
+
+# "Team A vs Team B - 1st Inning Draw" (or "Tie") - the Draw side of the same
+# 3-way "1st inning result" market. Either team name is enough to look the
+# game up - grading only cares whether the 1st inning runs end level.
+_INNING1_DRAW_RE = re.compile(
+    r"^(.+?)\s*(?:@|vs\.?|v\.?)\s*(.+?)\s*-\s*1st\s+inning\s+(?:draw|tie)\b",
+    re.IGNORECASE,
+)
+
 # "F5"/"First 5 Innings" moneyline OR team total - both settle after the 5th
 # inning, not the whole game, so they're routed to f5tracker.py rather than
 # /track's kind="track" (see _parse_f5_pick / _parse_f5_total_pick). A
@@ -295,6 +311,27 @@ def _parse_inning_run_total(description: str) -> Optional[dict]:
     return {"kind": "inning_runs", "sport": "baseball", "team": team, "pick_type": pick_type}
 
 
+def _parse_inning1_team_pick(description: str) -> Optional[str]:
+    text = _clean_line(description)
+    if not _INNING1_RESULT_MARKER_RE.search(text):
+        return None
+    if "moneyline" not in text.lower() and not re.search(r"\bml\b", text, re.IGNORECASE):
+        return None
+    text = _INNING1_RESULT_MARKER_RE.sub("", text)
+    return _parse_team_pick(text)
+
+
+def _parse_inning1_draw_pick(description: str) -> Optional[dict]:
+    text = _clean_line(description)
+    m = _INNING1_DRAW_RE.match(text)
+    if not m:
+        return None
+    team = m.group(1).strip()
+    if not team:
+        return None
+    return {"kind": "inning1_result", "sport": "baseball", "team": team, "pick": "DRAW"}
+
+
 def _parse_f5_pick(description: str) -> Optional[str]:
     """The moneyline flavor of an F5 bet specifically - see
     _parse_f5_total_pick for the team-total flavor, which is tried first in
@@ -342,6 +379,10 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
         if inning_total:
             return inning_total
 
+        inning1_draw = _parse_inning1_draw_pick(description)
+        if inning1_draw:
+            return inning1_draw
+
     total = _parse_total_pick(sport, description)
     if total:
         return total
@@ -362,6 +403,11 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
         f5_team = _parse_f5_pick(description)
         if f5_team:
             return {"kind": "f5_moneyline", "sport": sport, "team": f5_team}
+
+        if sport == "baseball":
+            inning1_team = _parse_inning1_team_pick(description)
+            if inning1_team:
+                return {"kind": "inning1_result", "sport": sport, "team": inning1_team, "pick": inning1_team}
 
         prop = _parse_player_prop(sport_key, sport, description)
         if prop:

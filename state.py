@@ -19,6 +19,7 @@ TRACKS_FILE = os.path.join(_DIR, "tracks_state.json")
 PROPS_FILE = os.path.join(_DIR, "props_state.json")
 INNINGS_FILE = os.path.join(_DIR, "innings_state.json")
 F5_FILE = os.path.join(_DIR, "f5_state.json")
+INNING1_FILE = os.path.join(_DIR, "inning1_state.json")
 
 
 def _load(path: str) -> dict[str, Any]:
@@ -66,3 +67,11 @@ def load_f5() -> dict[str, Any]:
 
 def save_f5(data: dict[str, Any]):
     _save(F5_FILE, data)
+
+
+def load_inning1() -> dict[str, Any]:
+    return _load(INNING1_FILE)
+
+
+def save_inning1(data: dict[str, Any]):
+    _save(INNING1_FILE, data)

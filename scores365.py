@@ -458,6 +458,26 @@ def partial_f5_team_total(game_id, team: str, home_name: str, away_name: str) ->
     return int(total) if counted_any else None
 
 
+def grade_inning1_result(game: dict, home_runs: int, away_runs: int, pick: str) -> Optional[str]:
+    """Grades a 3-way "1st inning result" pick - pick is either the literal
+    "DRAW" or a team name backed to lead after the 1st inning. Unlike
+    grade_f5_moneyline's push-on-tie, this is a genuine 3-way market: a tie
+    is Draw's own winning outcome, and a team pick loses outright (not a
+    push/void) if the inning ties. Returns None if pick is a team name that
+    doesn't match either side."""
+    if pick.upper() == "DRAW":
+        return "won" if home_runs == away_runs else "lost"
+    home = (game.get("homeCompetitor") or {}).get("name", "")
+    away = (game.get("awayCompetitor") or {}).get("name", "")
+    if names_match(home, pick):
+        picked_runs, other_runs = home_runs, away_runs
+    elif names_match(away, pick):
+        picked_runs, other_runs = away_runs, home_runs
+    else:
+        return None
+    return "won" if picked_runs > other_runs else "lost"
+
+
 def grade_total(game: dict, direction: str, line: float) -> Optional[str]:
     """Grades a game-total (Over/Under combined final score) pick. Returns
     "won"/"lost"/"push" (exact match), or None if there's no final score yet."""
