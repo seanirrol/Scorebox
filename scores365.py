@@ -238,9 +238,18 @@ def _meaningful_words(name: str) -> set[str]:
     # (e.g. "Xin-Yu" -> "xinyu", not "xin"/"yu" - confirmed live that
     # splitting broke matching a pick's "Xinyu" against 365scores' own
     # "Xin-Yu Wang" once the 2-letter "yu" piece got filtered out below).
+    #
+    # Only single-character tokens get filtered - confirmed live that
+    # filtering anything <=2 chars caused a real mismatch: "LG Twins"
+    # collapsed to just {"twins"} (since "lg" got dropped), which is then
+    # trivially a subset of "Minnesota Twins"'s {"minnesota", "twins"} -
+    # names_match() picked the wrong KBO team for a pick meant for the MLB
+    # Minnesota Twins. Two-letter team prefixes (LG, KT, SK, NC in KBO; LA,
+    # NY elsewhere) are exactly the kind of disambiguating qualifier this
+    # match needs to keep, not discard.
     collapsed = re.sub(r"[-']", "", (name or "").lower())
     words = set(re.sub(r"[^a-z0-9\s]", " ", collapsed).split())
-    filtered = {w for w in words if len(w) > 2}
+    filtered = {w for w in words if len(w) > 1}
     return filtered or words
 
 
