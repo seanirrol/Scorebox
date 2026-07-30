@@ -458,6 +458,27 @@ def partial_f5_team_total(game_id, team: str, home_name: str, away_name: str) ->
     return int(total) if counted_any else None
 
 
+def partial_f5_combined_total(game_id) -> Optional[int]:
+    """Sums both sides' 1st-5th inning runs combined, using whichever
+    innings have completed so far (see partial_f5_team_total for the
+    single-side equivalent) - lets a combined F5 Over pick get tagged a win
+    early, same idea as the other early-win tagging. Returns None if
+    nothing's completed yet."""
+    detail = _get_game_detail(game_id)
+    if not detail:
+        return None
+    innings = {s.get("name"): s for s in (detail.get("stages") or [])}
+    total = 0
+    counted_any = False
+    for n in range(1, 6):
+        stage = innings.get(_INNING_STAGE_NAMES.get(n))
+        if not stage or not stage.get("isEnded"):
+            break
+        total += (stage.get("homeCompetitorScore") or 0) + (stage.get("awayCompetitorScore") or 0)
+        counted_any = True
+    return int(total) if counted_any else None
+
+
 def grade_inning1_result(game: dict, home_runs: int, away_runs: int, pick: str) -> Optional[str]:
     """Grades a 3-way "1st inning result" pick - pick is either the literal
     "DRAW" or a team name backed to lead after the 1st inning. Unlike
@@ -485,6 +506,43 @@ def grade_total(game: dict, direction: str, line: float) -> Optional[str]:
     if not scores:
         return None
     total = scores[0] + scores[1]
+    if total == line:
+        return "push"
+    if direction == "over":
+        return "won" if total > line else "lost"
+    return "won" if total < line else "lost"
+
+
+def grade_team_total(game: dict, team: str, direction: str, line: float) -> Optional[str]:
+    """Grades a single team's own full-game score (not combined with the
+    other side - see grade_total for that) against a line. Returns
+    "won"/"lost"/"push" (exact match), or None if there's no final score yet
+    or team doesn't match either side."""
+    home = (game.get("homeCompetitor") or {}).get("name", "")
+    away = (game.get("awayCompetitor") or {}).get("name", "")
+    scores = main_scores(game)
+    if not scores:
+        return None
+    home_score, away_score = scores
+    if names_match(home, team):
+        value = home_score
+    elif names_match(away, team):
+        value = away_score
+    else:
+        return None
+    if value == line:
+        return "push"
+    if direction == "over":
+        return "won" if value > line else "lost"
+    return "won" if value < line else "lost"
+
+
+def grade_f5_combined_total(home_runs: int, away_runs: int, direction: str, line: float) -> Optional[str]:
+    """Grades an F5 (First 5 Innings) combined-total pick - both sides'
+    1st-5th inning runs summed together (see grade_f5_team_total for a
+    single side's own total instead). Returns "won"/"lost"/"push" (exact
+    match)."""
+    total = home_runs + away_runs
     if total == line:
         return "push"
     if direction == "over":

@@ -18,6 +18,7 @@ import re
 from typing import Optional
 
 import espn
+import scores365
 
 # Bracket category (lowercased, "Props" suffix stripped) -> our sport key.
 # Baseball has multiple league names in the wild (MLB, KBO, ...) that all map
@@ -109,6 +110,20 @@ _F5_TOTAL_RE = re.compile(
     re.IGNORECASE,
 )
 
+# "St. Louis Cardinals vs Chicago Cubs - F5 Total Over 4.5" - a COMBINED F5
+# total (both sides' 1st-5th inning runs summed), not one team's own total
+# (see _F5_TOTAL_RE above) - the matchup (two team names) is what
+# distinguishes it. Checked before the generic game-total parser below, since
+# confirmed live that without this, "F5 Total" got silently swallowed and
+# this graded against the WHOLE game's total instead of just the first 5
+# innings.
+_F5_COMBINED_TOTAL_RE = re.compile(
+    r"^(.+?)\s*(?:@|vs\.?|v\.?)\s*(.+?)\s*-\s*"
+    r"(?:f5|first\s+5\s+innings|first\s+five\s+innings|1st\s+5\s+innings)"
+    r"\s*(?:total\s*)?(Over|Under)\s+([\d.]+)",
+    re.IGNORECASE,
+)
+
 # "Team A @ Team B - Over 9.5", "... - Over 8.5 Total Runs", or "Team A vs
 # Team B Under 4" (no dash at all - confirmed live, a real soccer pick was
 # worded this way) - a game total, not a single player's stat
@@ -120,6 +135,20 @@ _F5_TOTAL_RE = re.compile(
 # source includes one.
 _TOTAL_LINE_RE = re.compile(
     r"^(.+?)\s*(?:@|vs\.?|v\.?)\s*(.+?)\s*(?:-\s*)?(Over|Under)\s+([\d.]+)(?:\s+Total\s+\w+)?\s*$",
+    re.IGNORECASE,
+)
+
+# "New York Yankees vs Chicago White Sox - New York Yankees Over 3.5 Team
+# Total Runs" - a single team's own FULL-GAME total (not F5-scoped - see
+# _F5_COMBINED_TOTAL_RE above for that), the named team repeated between the
+# matchup and the number is what distinguishes it from a combined total.
+# No `$` anchor - real picks sometimes have trailing text/malformed
+# parens after the number (confirmed live) that isn't worth choking on.
+# The named team is validated against one of the two matchup sides
+# (fuzzy-matched) rather than trusted blindly, so stray wording here
+# doesn't get mistaken for a team name.
+_NAMED_TEAM_TOTAL_RE = re.compile(
+    r"^(.+?)\s*(?:@|vs\.?|v\.?)\s*(.+?)\s*-\s*(.+?)\s+(Over|Under)\s+([\d.]+)\b",
     re.IGNORECASE,
 )
 
@@ -359,6 +388,20 @@ def _parse_f5_total_pick(description: str, sport: str) -> Optional[dict]:
     }
 
 
+def _parse_f5_combined_total_pick(description: str, sport: str) -> Optional[dict]:
+    text = _clean_line(description)
+    m = _F5_COMBINED_TOTAL_RE.match(text)
+    if not m:
+        return None
+    team = m.group(1).strip()  # either team - just used to look the game up
+    if not team:
+        return None
+    return {
+        "kind": "f5_combined_total", "sport": sport, "team": team,
+        "direction": m.group(3).lower(), "line": float(m.group(4)),
+    }
+
+
 def _parse_total_pick(sport: str, description: str) -> Optional[dict]:
     text = _clean_line(description)
     m = _TOTAL_LINE_RE.match(text)
@@ -373,6 +416,22 @@ def _parse_total_pick(sport: str, description: str) -> Optional[dict]:
     }
 
 
+def _parse_named_team_total_pick(sport: str, description: str) -> Optional[dict]:
+    text = _clean_line(description)
+    m = _NAMED_TEAM_TOTAL_RE.match(text)
+    if not m:
+        return None
+    team_a, team_b, named_team = m.group(1).strip(), m.group(2).strip(), m.group(3).strip()
+    if not team_a or not team_b or not named_team:
+        return None
+    if not (scores365.names_match(named_team, team_a) or scores365.names_match(named_team, team_b)):
+        return None  # doesn't look like either matchup side - don't guess
+    return {
+        "kind": "team_total", "sport": sport, "team": named_team,
+        "direction": m.group(4).lower(), "line": float(m.group(5)),
+    }
+
+
 def _parse_description(sport: str, sport_key: str, description: str, is_prop_category: bool) -> Optional[dict]:
     if sport == "baseball":
         inning_total = _parse_inning_run_total(description)
@@ -382,6 +441,14 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
         inning1_draw = _parse_inning1_draw_pick(description)
         if inning1_draw:
             return inning1_draw
+
+        f5_combined = _parse_f5_combined_total_pick(description, sport)
+        if f5_combined:
+            return f5_combined
+
+    named_total = _parse_named_team_total_pick(sport, description)
+    if named_total:
+        return named_total
 
     total = _parse_total_pick(sport, description)
     if total:

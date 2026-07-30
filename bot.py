@@ -127,6 +127,7 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
 async def _auto_track(
     channel: discord.abc.Messageable, sport_value: str, team: str,
     total_direction: Optional[str] = None, total_line: Optional[float] = None,
+    team_total: Optional[str] = None,
 ):
     """Mirrors /track's core logic for an auto-detected pick - posts via
     channel.send() since there's no interaction to reply to, and has no
@@ -134,7 +135,9 @@ async def _auto_track(
 
     total_direction/total_line (mutually exclusive with grading on team, both
     None otherwise) is for a game-total Over/Under pick instead of a
-    moneyline - team is still used to find the match either way."""
+    moneyline - team is still used to find the match either way. team_total
+    additionally set means it's one side's own total instead of the combined
+    score - team_total is the actual named side being graded."""
     try:
         result = await asyncio.to_thread(scores365.find_match_for_team, team, sport_value)
     except scores365.ScoresError as e:
@@ -148,24 +151,30 @@ async def _auto_track(
     if tracker.is_tracked(channel.id, game_id):
         return
 
-    picked_team = team if total_direction is None else None
-    embed, file = await tracker.build_embed(game, sport_id, picked_team, total_direction, total_line)
+    picked_team = team if total_direction is None and team_total is None else None
+    embed, file = await tracker.build_embed(game, sport_id, picked_team, total_direction, total_line, team_total)
     message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
     tracker.register_message(message.id, channel.id, game_id, None)
     await message.add_reaction(TRASH_EMOJI)
 
     if scores365.is_finished(game):
         return
-    tracker.start_tracking(message, sport_id, game, channel.id, None, picked_team, total_direction, total_line)
+    tracker.start_tracking(
+        message, sport_id, game, channel.id, None, picked_team, total_direction, total_line, team_total
+    )
     log.info("Auto-tracked pick '%s' -> game %s", team, game_id)
 
 
 async def _auto_f5(
     channel: discord.abc.Messageable, sport_value: str, team: str,
     total_direction: Optional[str] = None, total_line: Optional[float] = None,
+    combined: bool = False,
 ):
-    """F5 (First 5 Innings) picks - moneyline or team total - settle after
-    the 5th inning, not the whole game - see f5tracker.py."""
+    """F5 (First 5 Innings) picks - moneyline, team total, or combined
+    total - settle after the 5th inning, not the whole game - see
+    f5tracker.py. combined=True means total_direction/total_line grade both
+    sides' F5 runs summed together, not team's own - team is still used to
+    find the match either way."""
     try:
         result = await asyncio.to_thread(scores365.find_match_for_team, team, sport_value)
     except scores365.ScoresError as e:
@@ -179,14 +188,15 @@ async def _auto_f5(
     if f5tracker.is_tracked(channel.id, game_id):
         return
 
-    embed, file = await f5tracker.build_embed(game, sport_id, team, total_direction, total_line)
+    picked_team = None if combined else team
+    embed, file = await f5tracker.build_embed(game, sport_id, picked_team, total_direction, total_line)
     message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
     f5tracker.register_message(message.id, channel.id, game_id, None)
     await message.add_reaction(TRASH_EMOJI)
 
     if await asyncio.to_thread(scores365.innings_breakdown, game_id, f5tracker.THROUGH_INNING) is not None:
         return  # F5 was already decided by the time this pick was posted
-    f5tracker.start_tracking(message, sport_id, game, channel.id, None, team, total_direction, total_line)
+    f5tracker.start_tracking(message, sport_id, game, channel.id, None, picked_team, total_direction, total_line)
     log.info("Auto-tracked F5 pick '%s' -> game %s", team, game_id)
 
 
@@ -316,10 +326,18 @@ async def on_message(message: discord.Message):
                 await _auto_track(target_channel, pick["sport"], pick["team"])
             elif pick["kind"] == "total":
                 await _auto_track(target_channel, pick["sport"], pick["team"], pick["direction"], pick["line"])
+            elif pick["kind"] == "team_total":
+                await _auto_track(
+                    target_channel, pick["sport"], pick["team"], pick["direction"], pick["line"], pick["team"]
+                )
             elif pick["kind"] == "f5_moneyline":
                 await _auto_f5(target_channel, pick["sport"], pick["team"])
             elif pick["kind"] == "f5_total":
                 await _auto_f5(target_channel, pick["sport"], pick["team"], pick["direction"], pick["line"])
+            elif pick["kind"] == "f5_combined_total":
+                await _auto_f5(
+                    target_channel, pick["sport"], pick["team"], pick["direction"], pick["line"], combined=True
+                )
             elif pick["kind"] == "inning_runs":
                 await _auto_inning_runs(target_channel, pick["team"], pick["pick_type"])
             elif pick["kind"] == "inning1_result":
@@ -569,10 +587,13 @@ async def tracked(interaction: discord.Interaction):
             else:
                 label = "(couldn't fetch match info)"
 
-            # Distinguishes a plain /track (no pick) from a moneyline or
-            # total pick - without this, all three looked identical here.
+            # Distinguishes a plain /track (no pick) from a moneyline, team
+            # total, or combined total pick - without this, they all looked
+            # identical here.
             if entry.get("picked_team"):
                 pick_suffix = f" — {entry['picked_team']} ML"
+            elif entry.get("team_total") and entry.get("total_direction") and entry.get("total_line") is not None:
+                pick_suffix = f" — {entry['team_total']} {entry['total_direction'].title()} {entry['total_line']:g}"
             elif entry.get("total_direction") and entry.get("total_line") is not None:
                 pick_suffix = f" — {entry['total_direction'].title()} {entry['total_line']:g}"
             else:
@@ -595,8 +616,10 @@ async def tracked(interaction: discord.Interaction):
     if f5_details:
         lines = []
         for entry in f5_details:
-            if entry.get("total_direction") and entry.get("total_line") is not None:
+            if entry.get("picked_team") and entry.get("total_direction") and entry.get("total_line") is not None:
                 pick_label = f"{entry['picked_team']} F5 {entry['total_direction'].title()} {entry['total_line']:g}"
+            elif entry.get("total_direction") and entry.get("total_line") is not None:
+                pick_label = f"F5 {entry['total_direction'].title()} {entry['total_line']:g}"
             else:
                 pick_label = f"{entry['picked_team']} F5 ML"
             lines.append(f"- `{entry['game_id']}` — {pick_label}")

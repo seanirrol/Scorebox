@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
 Manages background tasks for "F5" (First 5 Innings) picks - moneyline (one
-side to be ahead through 5 innings) or team total (one side's own 1st-5th
-inning runs vs. a line) - both settle once the 5th inning is fully complete,
-not when the whole game finishes, so they don't share tracker.py's
-wait-for-the-full-game design.
+side to be ahead through 5 innings), team total (one side's own 1st-5th
+inning runs vs. a line), or combined total (both sides summed vs. a line,
+same as tracker.py's game total but scoped to just the first 5 innings) -
+all settle once the 5th inning is fully complete, not when the whole game
+finishes, so they don't share tracker.py's wait-for-the-full-game design.
 
 Backed by 365scores' per-game detail call (see scores365.innings_breakdown),
 which works across every league 365scores covers under baseball (MLB, KBO,
@@ -79,7 +80,7 @@ def unregister_message(message_id: int):
 
 
 def _persist(
-    channel_id: int, game_id, message_id: int, sport_id, owner_id: int, picked_team: str,
+    channel_id: int, game_id, message_id: int, sport_id, owner_id: int, picked_team: Optional[str] = None,
     total_direction: Optional[str] = None, total_line: Optional[float] = None,
 ):
     data = state.load_f5()
@@ -111,12 +112,14 @@ def stop_tracking(channel_id: int, game_id) -> bool:
 
 
 async def build_embed(
-    game: dict, sport_id: Optional[int], picked_team: str,
+    game: dict, sport_id: Optional[int], picked_team: Optional[str] = None,
     total_direction: Optional[str] = None, total_line: Optional[float] = None,
 ) -> tuple[discord.Embed, discord.File]:
-    """total_direction/total_line (mutually exclusive with a plain F5
-    moneyline pick) grades picked_team's own 1st-5th inning run total
-    against a line instead of comparing it to the other side."""
+    """Exactly one of three modes applies per pick: picked_team alone is an
+    F5 moneyline; picked_team + total_direction/total_line grades that
+    team's own 1st-5th inning total against a line; total_direction/
+    total_line with no picked_team grades the *combined* (both sides
+    summed) 1st-5th inning total against a line instead."""
     home_competitor = game.get("homeCompetitor") or {}
     away_competitor = game.get("awayCompetitor") or {}
     status = scores365.map_status_type(game.get("statusGroup"))
@@ -126,10 +129,12 @@ async def build_embed(
     breakdown = await asyncio.to_thread(scores365.innings_breakdown, game.get("id"), THROUGH_INNING)
     decided = breakdown is not None
     if decided:
-        if total_direction and total_line is not None:
+        if picked_team and total_direction and total_line is not None:
             result = scores365.grade_f5_team_total(
                 game, breakdown[0], breakdown[1], picked_team, total_direction, total_line
             )
+        elif total_direction and total_line is not None:
+            result = scores365.grade_f5_combined_total(breakdown[0], breakdown[1], total_direction, total_line)
         else:
             result = scores365.grade_f5_moneyline(game, breakdown[0], breakdown[1], picked_team)
     else:
@@ -141,12 +146,16 @@ async def build_embed(
         embed.title = _RESULT_TITLES[result]
     elif status == "inprogress" and total_direction == "over" and total_line is not None:
         # Same early-win idea as tracker.py/proptracker.py's Over tagging -
-        # a team's innings-1-5 run total only climbs as innings complete, so
-        # once the partial total already clears the line, the pick can't
-        # become anything but a win even before all 5 innings are done.
-        partial = await asyncio.to_thread(
-            scores365.partial_f5_team_total, game.get("id"), picked_team, home_name, away_name
-        )
+        # a team's (or the combined) innings-1-5 run total only climbs as
+        # innings complete, so once the partial total already clears the
+        # line, the pick can't become anything but a win even before all 5
+        # innings are done.
+        if picked_team:
+            partial = await asyncio.to_thread(
+                scores365.partial_f5_team_total, game.get("id"), picked_team, home_name, away_name
+            )
+        else:
+            partial = await asyncio.to_thread(scores365.partial_f5_combined_total, game.get("id"))
         if partial is not None and partial > total_line:
             embed.title = _RESULT_TITLES["won"]
 
@@ -154,8 +163,10 @@ async def build_embed(
     if author_bits:
         embed.set_author(name=" • ".join(author_bits))
 
-    if total_direction and total_line is not None:
+    if picked_team and total_direction and total_line is not None:
         description_lines = [f"{picked_team} F5 {total_direction.title()} {total_line:g}"]
+    elif total_direction and total_line is not None:
+        description_lines = [f"F5 {total_direction.title()} {total_line:g}"]
     else:
         description_lines = [f"{picked_team} F5 ML"]
     if status == "notstarted":
@@ -204,8 +215,8 @@ async def build_embed(
 
 
 async def _track_loop(
-    message: discord.Message, sport_id: int, game_id, channel_id: int, owner_id: int, picked_team: str,
-    total_direction: Optional[str] = None, total_line: Optional[float] = None,
+    message: discord.Message, sport_id: int, game_id, channel_id: int, owner_id: int,
+    picked_team: Optional[str] = None, total_direction: Optional[str] = None, total_line: Optional[float] = None,
 ):
     key = track_key(channel_id, game_id)
     deadline = time.monotonic() + config.MAX_TRACK_HOURS * 3600
@@ -291,10 +302,12 @@ async def _track_loop(
 
             breakdown = await asyncio.to_thread(scores365.innings_breakdown, game_id, THROUGH_INNING)
             if breakdown is not None:
-                if total_direction and total_line is not None:
+                if picked_team and total_direction and total_line is not None:
                     result = scores365.grade_f5_team_total(
                         game, breakdown[0], breakdown[1], picked_team, total_direction, total_line
                     )
+                elif total_direction and total_line is not None:
+                    result = scores365.grade_f5_combined_total(breakdown[0], breakdown[1], total_direction, total_line)
                 else:
                     result = scores365.grade_f5_moneyline(game, breakdown[0], breakdown[1], picked_team)
                 reaction = _RESULT_REACTIONS.get(result)
@@ -318,8 +331,8 @@ async def _track_loop(
 
 
 def start_tracking(
-    message: discord.Message, sport_id: int, game: dict, channel_id: int, owner_id: int, picked_team: str,
-    total_direction: Optional[str] = None, total_line: Optional[float] = None,
+    message: discord.Message, sport_id: int, game: dict, channel_id: int, owner_id: int,
+    picked_team: Optional[str] = None, total_direction: Optional[str] = None, total_line: Optional[float] = None,
 ):
     game_id = game["id"]
     key = track_key(channel_id, game_id)
