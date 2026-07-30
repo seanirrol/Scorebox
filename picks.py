@@ -438,6 +438,18 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
         if inning_total:
             return inning_total
 
+        # Literal "YRFI"/"NRFI" wording on a matchup line (e.g. "Team A vs
+        # Team B - NRFI - No Runs 1st Inning") - previously only recognized
+        # under a dedicated "[YRFI/NRFI]"-tagged section (see
+        # _is_yrfi_header), so the same wording under a plain "Baseball"
+        # header fell through, got mistaken for a team pick, then rejected
+        # by _is_simple_pick_name for containing a digit ("1st") - confirmed
+        # live, a real "New York Mets vs Miami Marlins - NRFI - No Runs 1st
+        # Inning" pick silently never posted.
+        yrfi_inline = _parse_yrfi_line(description)
+        if yrfi_inline:
+            return yrfi_inline
+
         inning1_draw = _parse_inning1_draw_pick(description)
         if inning1_draw:
             return inning1_draw
