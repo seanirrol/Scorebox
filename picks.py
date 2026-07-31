@@ -38,6 +38,7 @@ _SPORT_MAP = {
     "volleyball": "volleyball",
     "ufc": "mma",
     "mma": "mma",
+    "combat": "mma",
 }
 
 # Bare section headers can use the sport's full name ("Basketball") instead
@@ -493,6 +494,16 @@ def _parse_f5_handicap_pick(description: str, sport: str) -> Optional[dict]:
     }
 
 
+# "Dakota Ditcheva by KO/TKO KO/TKO Method of Victory" - method of victory
+# (KO/TKO, submission, decision) has no reliable field anywhere in ESPN's
+# public MMA data (see espn_ufc.py's module docstring), so it's deliberately
+# unsupported. Checked explicitly in the mma branch below so this wording
+# doesn't fall through to the moneyline fallback there, which would otherwise
+# treat the leftover "by KO/TKO ... Method of Victory" text itself as a
+# garbled fighter name and attempt (and fail) a bogus bout lookup.
+_METHOD_OF_VICTORY_RE = re.compile(r"\bmethod\s+of\s+victory\b|\bby\s+(?:ko/?tko|ko|tko|submission|decision)\b", re.IGNORECASE)
+
+
 def _parse_ufc_round_total_pick(description: str) -> Optional[dict]:
     text = _clean_line(description)
     m = _UFC_ROUND_TOTAL_RE.match(text)
@@ -614,10 +625,21 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
         prop = _parse_player_prop(sport_key, sport, description)
         if prop:
             return prop
-        if is_prop_category:
+        # mma is exempt: this source tags every combat pick "Combat Props"
+        # regardless of bet type (confirmed live - a plain fighter moneyline
+        # came tagged that way, not just stat props), and ESPN has no
+        # player-prop lookup for mma at all (see espn.SPORT_PATHS) so
+        # _parse_player_prop above always fails here - bailing out on
+        # is_prop_category would wrongly swallow every mma moneyline/round-
+        # total pick before reaching mma's own authoritative fallback below,
+        # which already guards against genuinely-unparseable wording
+        # (Method of Victory) rather than blindly guessing.
+        if is_prop_category and sport != "mma":
             return None  # explicitly tagged as a prop but couldn't be confidently parsed - don't guess it's a team pick
 
     if sport == "mma":
+        if _METHOD_OF_VICTORY_RE.search(description):
+            return None
         # UFC isn't a 365scores sport at all (see espn_ufc.py), so - unlike
         # every other sport here - a failed match must NOT fall through to
         # the generic track fallback below, which is backed by
