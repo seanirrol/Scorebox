@@ -1,14 +1,23 @@
 #!/usr/bin/env python3
 """
 Manages background tasks for tennis player prop picks (Aces, Double Faults,
-Winners, Unforced Errors, Break Points Won) - backed by Sofascore, since
-ESPN doesn't support tennis stats at all (see espn.py's module docstring).
-Sofascore models a singles player as a 1-person "team" entity, so there's no
-roster-team concept to resolve the way proptracker.py's other sports need -
-the card instead shows "vs <opponent>" the same way tracker.py shows a
-matchup.
+Break Points Won) - backed by 365scores' per-game stats endpoint (see
+scores365.tennis_player_stat). ESPN doesn't support tennis at all (see
+espn.py's module docstring); Sofascore was tried first but 403s from this
+bot's VPS specifically (confirmed live - works fine from other networks,
+even with the curl TLS-fingerprint workaround, but not from here), so
+tennis props moved to 365scores entirely instead. 365scores doesn't track
+Winners or Unforced Errors at all for tennis (confirmed live across 46 real
+finished matches in one day's slate, none had either stat) - not available
+here until another source is found for those two specifically.
 
-Mirrors proptracker.py's design otherwise: hibernation before start (a
+A tennis player is its own "competitor" in 365scores' data model (same as
+/track's moneyline, F5, and 1st-set tracking already use), so - unlike
+proptracker.py's other sports - there's no separate team-affiliation lookup
+needed: the picked player IS the team, found via
+scores365.find_match_for_team same as everywhere else.
+
+Mirrors settracker.py's design otherwise: hibernation before start (a
 notstarted match's stats can't change), 🗑️-reaction delete, restart-safe
 persistence, early-win tagging for Over picks, and a Won/Lost/Push result
 reaction once the match finishes.
@@ -28,7 +37,6 @@ import config
 import pendingdelete
 import scoreimage
 import scores365
-import sofascore
 import state
 import throttle
 
@@ -38,21 +46,21 @@ TRASH_EMOJI = "🗑️"
 
 _active: dict[str, asyncio.Task] = {}
 
-# message_id -> (channel_id, event_id, entity_id, stat_key, owner_id) - lets
-# the reaction-based delete handler in bot.py look up who can delete a message.
+# message_id -> (channel_id, game_id, competitor_id, stat_name, owner_id) -
+# lets the reaction-based delete handler in bot.py look up who can delete a
+# message.
 _message_owners: dict[int, tuple] = {}
 
-_STATUS_COLOR = {"notstarted": 0x3498DB, "inprogress": 0xE74C3C, "finished": 0x2ECC71}
 _RESULT_TITLES = {"won": "<:winmark:1532115635071488221> Pick Won", "lost": "<:lossmark:1532115600162422894> Pick Lost", "push": "➖ Push"}
 _RESULT_REACTIONS = {"won": "<:winmark:1532115635071488221>", "lost": "<:lossmark:1532115600162422894>"}
 
 
-def prop_key(channel_id: int, event_id, entity_id, stat_key: str) -> str:
-    return f"{channel_id}:{event_id}:{entity_id}:{stat_key}"
+def prop_key(channel_id: int, game_id, competitor_id, stat_name: str) -> str:
+    return f"{channel_id}:{game_id}:{competitor_id}:{stat_name}"
 
 
-def is_tracked(channel_id: int, event_id, entity_id, stat_key: str) -> bool:
-    return prop_key(channel_id, event_id, entity_id, stat_key) in _active
+def is_tracked(channel_id: int, game_id, competitor_id, stat_name: str) -> bool:
+    return prop_key(channel_id, game_id, competitor_id, stat_name) in _active
 
 
 def list_tracked_details(channel_id: int) -> list[dict]:
@@ -60,13 +68,13 @@ def list_tracked_details(channel_id: int) -> list[dict]:
     active_keys = {k for k in _active if k.startswith(prefix)}
     return [
         entry for entry in state.load_tennis_props().values()
-        if prop_key(entry["channel_id"], entry["event_id"], entry["entity_id"], entry["stat_key"]) in active_keys
+        if prop_key(entry["channel_id"], entry["game_id"], entry["competitor_id"], entry["stat_name"]) in active_keys
     ]
 
 
-def register_message(message_id: int, channel_id: int, event_id, entity_id, stat_key: str, owner_id: int):
+def register_message(message_id: int, channel_id: int, game_id, competitor_id, stat_name: str, owner_id: int):
     """Lets bot.py's 🗑️-reaction handler know who's allowed to delete this message."""
-    _message_owners[message_id] = (channel_id, event_id, entity_id, stat_key, owner_id)
+    _message_owners[message_id] = (channel_id, game_id, competitor_id, stat_name, owner_id)
 
 
 def get_message_owner(message_id: int) -> Optional[tuple]:
@@ -78,31 +86,31 @@ def unregister_message(message_id: int):
 
 
 def _persist(
-    channel_id: int, event_id, entity_id, stat_key: str, message_id: int,
-    stat_label: str, player_name: str, photo_url: Optional[str], owner_id: int,
+    channel_id: int, game_id, competitor_id, stat_name: str, message_id: int, sport_id,
+    stat_label: str, player_name: str, owner_id: int,
     direction: Optional[str] = None, line: Optional[float] = None,
 ):
     data = state.load_tennis_props()
-    data[prop_key(channel_id, event_id, entity_id, stat_key)] = {
-        "channel_id": channel_id, "event_id": event_id, "entity_id": entity_id, "stat_key": stat_key,
-        "message_id": message_id, "stat_label": stat_label, "player_name": player_name,
-        "photo_url": photo_url, "owner_id": owner_id, "direction": direction, "line": line,
+    data[prop_key(channel_id, game_id, competitor_id, stat_name)] = {
+        "channel_id": channel_id, "game_id": game_id, "competitor_id": competitor_id, "stat_name": stat_name,
+        "message_id": message_id, "sport_id": sport_id, "stat_label": stat_label, "player_name": player_name,
+        "owner_id": owner_id, "direction": direction, "line": line,
     }
     state.save_tennis_props(data)
 
 
-def _forget(channel_id: int, event_id, entity_id, stat_key: str):
+def _forget(channel_id: int, game_id, competitor_id, stat_name: str):
     data = state.load_tennis_props()
-    data.pop(prop_key(channel_id, event_id, entity_id, stat_key), None)
+    data.pop(prop_key(channel_id, game_id, competitor_id, stat_name), None)
     state.save_tennis_props(data)
 
 
-def stop_tracking(channel_id: int, event_id, entity_id, stat_key: str) -> bool:
-    key = prop_key(channel_id, event_id, entity_id, stat_key)
+def stop_tracking(channel_id: int, game_id, competitor_id, stat_name: str) -> bool:
+    key = prop_key(channel_id, game_id, competitor_id, stat_name)
     task = _active.pop(key, None)
-    _forget(channel_id, event_id, entity_id, stat_key)
-    for message_id, (c_id, e_id, ent_id, s_key, _owner) in list(_message_owners.items()):
-        if c_id == channel_id and e_id == event_id and ent_id == entity_id and s_key == stat_key:
+    _forget(channel_id, game_id, competitor_id, stat_name)
+    for message_id, (c_id, g_id, comp_id, s_name, _owner) in list(_message_owners.items()):
+        if c_id == channel_id and g_id == game_id and comp_id == competitor_id and s_name == stat_name:
             _message_owners.pop(message_id, None)
     if task:
         task.cancel()
@@ -115,64 +123,69 @@ def _fmt_value(v) -> str:
 
 
 async def build_embed(
-    player_name: str, entity_id, photo_url: Optional[str], stat_label: str, current_value, event: dict,
+    game: dict, sport_id: Optional[int], competitor_id, player_name: str, stat_label: str, stat_name: str,
     direction: Optional[str] = None, line: Optional[float] = None,
 ) -> tuple[discord.Embed, discord.File]:
-    status_type = (event.get("status") or {}).get("type")
-    render_status = status_type if status_type in ("notstarted", "inprogress", "finished") else "notstarted"
+    home_competitor = game.get("homeCompetitor") or {}
+    away_competitor = game.get("awayCompetitor") or {}
+    status = scores365.map_status_type(game.get("statusGroup"))
+    opponent = away_competitor.get("name", "?") if home_competitor.get("id") == competitor_id else home_competitor.get("name", "?")
 
-    home_name = (event.get("homeTeam") or {}).get("name", "?")
-    away_name = (event.get("awayTeam") or {}).get("name", "?")
-    opponent = away_name if home_name == player_name else home_name
-
-    tournament_info = event.get("tournament") or {}
-    tournament = (tournament_info.get("uniqueTournament") or {}).get("name") or tournament_info.get("name") or "Tennis"
+    current_value = None
+    if status != "notstarted":
+        current_value = await asyncio.to_thread(scores365.tennis_player_stat, game.get("id"), competitor_id, stat_name)
 
     description_lines = [f"{player_name} vs {opponent}"]
     if direction is not None and line is not None:
         description_lines.append(f"{player_name} {direction.title()} {line:g} {stat_label}")
-    if status_type == "notstarted":
-        start_ts = event.get("startTimestamp")
-        if start_ts:
-            description_lines.append(f"<t:{int(start_ts)}:f>")
+    if status == "notstarted":
+        kickoff = scores365.start_epoch(game)
+        if kickoff:
+            description_lines.append(f"<t:{int(kickoff)}:f>")
     description = "\n".join(description_lines)
 
-    period_text = "" if status_type == "notstarted" else sofascore.match_status_text(event, "tennis")
+    photo_url = scores365.competitor_logo_url(home_competitor if home_competitor.get("id") == competitor_id else away_competitor)
+    period_text = "" if status == "notstarted" else scores365.status_line(game, sport_id)
     image_bytes = await asyncio.to_thread(
         scoreimage.render_player_card,
-        f"vs {opponent}", photo_url, player_name, stat_label, _fmt_value(current_value), render_status, period_text,
+        f"vs {opponent}", photo_url, player_name, stat_label, _fmt_value(current_value), status, period_text,
     )
     file = discord.File(io.BytesIO(image_bytes), filename="score.png")
 
-    embed = discord.Embed(color=_STATUS_COLOR.get(render_status, 0x95A5A6))
-    if status_type == "finished" and direction is not None and line is not None:
-        result = sofascore.grade_over_under(current_value, direction, line)
+    embed_color = {"won": 0x2ECC71, "lost": 0xE74C3C, "push": 0x95A5A6}
+    embed = discord.Embed(color=0x3498DB)
+    if status == "finished" and direction is not None and line is not None:
+        result = scores365.grade_over_under(current_value, direction, line)
         if result:
             embed.title = _RESULT_TITLES[result]
-    elif status_type == "inprogress" and direction == "over" and line is not None:
-        # Same early-win idea as proptracker.py/tracker.py's Over tagging - a
+            embed.color = embed_color[result]
+    elif status == "inprogress" and direction == "over" and line is not None:
+        # Same early-win idea as tracker.py/proptracker.py's Over tagging - a
         # counting stat only ever climbs during a match, so once the line is
         # already cleared it can't un-clear. Unders and exact ties excluded
         # for the same reason as elsewhere.
         try:
             if current_value is not None and float(current_value) > line:
                 embed.title = _RESULT_TITLES["won"]
+                embed.color = embed_color["won"]
         except (TypeError, ValueError):
             pass
-    embed.set_author(name=f"Tennis • {tournament}")
+    author_bits = [b for b in (scores365.sport_label(sport_id), game.get("competitionDisplayName")) if b]
+    if author_bits:
+        embed.set_author(name=" • ".join(author_bits))
     embed.description = description
     embed.set_image(url="attachment://score.png")
-    embed.set_footer(text="Scorebox • data via Sofascore")
+    embed.set_footer(text="Scorebox • data via 365scores")
     embed.timestamp = discord.utils.utcnow()
     return embed, file
 
 
 async def _track_loop(
-    message: discord.Message, channel_id: int, event_id, entity_id, stat_key: str, stat_label: str,
-    player_name: str, photo_url: Optional[str], owner_id: int,
+    message: discord.Message, sport_id: int, game_id, channel_id: int, competitor_id, stat_name: str,
+    stat_label: str, player_name: str, owner_id: int,
     direction: Optional[str] = None, line: Optional[float] = None,
 ):
-    key = prop_key(channel_id, event_id, entity_id, stat_key)
+    key = prop_key(channel_id, game_id, competitor_id, stat_name)
     deadline = time.monotonic() + config.MAX_TRACK_HOURS * 3600
 
     consecutive_misses = 0
@@ -182,41 +195,40 @@ async def _track_loop(
         while time.monotonic() < deadline:
             await asyncio.sleep(config.UPDATE_INTERVAL_SECONDS)
 
-            event = await asyncio.to_thread(sofascore.get_event, event_id)
+            game = await asyncio.to_thread(scores365.get_live_update, sport_id, game_id)
 
             # A notstarted match's stats can't change before it starts, so
             # hibernate instead of polling every cycle - same pattern as
-            # tracker.py/proptracker.py.
+            # tracker.py/settracker.py.
             hibernated = False
-            while event and (event.get("status") or {}).get("type") == "notstarted":
-                start_ts = event.get("startTimestamp")
-                if not start_ts:
+            while game and scores365.map_status_type(game.get("statusGroup")) == "notstarted":
+                kickoff = scores365.start_epoch(game)
+                if not kickoff:
                     break
-                seconds_until_start = start_ts - time.time()
+                seconds_until_start = kickoff - time.time()
                 if seconds_until_start <= 90:
                     break
-                wake_at = min(start_ts - 60, scores365.next_eastern_midnight_epoch(time.time()))
+                wake_at = min(kickoff - 60, scores365.next_eastern_midnight_epoch(time.time()))
                 hibernate_for = wake_at - time.time()
                 deadline += hibernate_for
                 hibernated = True
-                log.info("Tennis prop event %s not starting soon; hibernating %.0fs", event_id, hibernate_for)
+                log.info("Tennis prop game %s not starting soon; hibernating %.0fs", game_id, hibernate_for)
                 await asyncio.sleep(hibernate_for)
-                event = await asyncio.to_thread(sofascore.get_event, event_id)
+                game = await asyncio.to_thread(scores365.get_live_update, sport_id, game_id)
 
-            if not event:
+            if not game:
                 consecutive_misses += 1
                 log.warning(
-                    "Tennis prop event %s not found on Sofascore (miss %d/%d)",
-                    event_id, consecutive_misses, MAX_CONSECUTIVE_MISSES,
+                    "Tennis prop game %s not found in 365scores' current list (miss %d/%d)",
+                    game_id, consecutive_misses, MAX_CONSECUTIVE_MISSES,
                 )
                 if consecutive_misses >= MAX_CONSECUTIVE_MISSES:
-                    botlog.event(f"⚠️ Auto-stopped tracking (tennis prop): **{player_name}** — event `{event_id}` not found {MAX_CONSECUTIVE_MISSES}x in a row, in <#{channel_id}>")
+                    botlog.event(f"⚠️ Auto-stopped tracking (tennis prop): **{player_name}** — game `{game_id}` not found {MAX_CONSECUTIVE_MISSES}x in a row, in <#{channel_id}>")
                     break
                 continue
             consecutive_misses = 0
 
-            current_value, _is_home = await asyncio.to_thread(sofascore.get_stat_value, event, entity_id, True, stat_key)
-            embed, file = await build_embed(player_name, entity_id, photo_url, stat_label, current_value, event, direction, line)
+            embed, file = await build_embed(game, sport_id, competitor_id, player_name, stat_label, stat_name, direction, line)
 
             if hibernated:
                 # The final wake right before start - bump the card to the
@@ -234,8 +246,8 @@ async def _track_loop(
                     old_message = message
                     message = new_message
                     _message_owners.pop(old_message.id, None)
-                    register_message(message.id, channel_id, event_id, entity_id, stat_key, owner_id)
-                    _persist(channel_id, event_id, entity_id, stat_key, message.id, stat_label, player_name, photo_url, owner_id, direction, line)
+                    register_message(message.id, channel_id, game_id, competitor_id, stat_name, owner_id)
+                    _persist(channel_id, game_id, competitor_id, stat_name, message.id, sport_id, stat_label, player_name, owner_id, direction, line)
                     try:
                         await old_message.delete()
                     except discord.HTTPException as e:
@@ -256,9 +268,10 @@ async def _track_loop(
                     break
                 continue
 
-            if sofascore.is_finished(event):
+            if scores365.is_finished(game):
                 if direction is not None and line is not None:
-                    reaction = _RESULT_REACTIONS.get(sofascore.grade_over_under(current_value, direction, line))
+                    current_value = await asyncio.to_thread(scores365.tennis_player_stat, game_id, competitor_id, stat_name)
+                    reaction = _RESULT_REACTIONS.get(scores365.grade_over_under(current_value, direction, line))
                     if reaction:
                         try:
                             await message.add_reaction(reaction)
@@ -271,49 +284,57 @@ async def _track_loop(
     finally:
         _active.pop(key, None)
         _message_owners.pop(message.id, None)
-        _forget(channel_id, event_id, entity_id, stat_key)
+        _forget(channel_id, game_id, competitor_id, stat_name)
 
 
 def start_tracking(
-    message: discord.Message, channel_id: int, event_id, entity_id, stat_key: str, stat_label: str,
-    player_name: str, photo_url: Optional[str], owner_id: int,
+    message: discord.Message, sport_id: int, game_id, channel_id: int, competitor_id, stat_name: str,
+    stat_label: str, player_name: str, owner_id: int,
     direction: Optional[str] = None, line: Optional[float] = None,
 ):
-    key = prop_key(channel_id, event_id, entity_id, stat_key)
+    key = prop_key(channel_id, game_id, competitor_id, stat_name)
     if key in _active:
         return
     task = asyncio.create_task(
-        _track_loop(message, channel_id, event_id, entity_id, stat_key, stat_label, player_name, photo_url, owner_id, direction, line)
+        _track_loop(message, sport_id, game_id, channel_id, competitor_id, stat_name, stat_label, player_name, owner_id, direction, line)
     )
     _active[key] = task
-    register_message(message.id, channel_id, event_id, entity_id, stat_key, owner_id)
-    _persist(channel_id, event_id, entity_id, stat_key, message.id, stat_label, player_name, photo_url, owner_id, direction, line)
+    register_message(message.id, channel_id, game_id, competitor_id, stat_name, owner_id)
+    _persist(channel_id, game_id, competitor_id, stat_name, message.id, sport_id, stat_label, player_name, owner_id, direction, line)
 
 
 async def resume_all(client: discord.Client):
     """
     Called once from on_ready. Reads whatever was still active when the bot
     last stopped and either picks the tracking loop back up on the same
-    message, or - if the message/channel/event is gone - cleans up instead.
+    message, or - if the message/channel/game is gone - cleans up instead.
     """
     for entry in list(state.load_tennis_props().values()):
-        channel_id, event_id, entity_id, stat_key = (
-            entry["channel_id"], entry["event_id"], entry["entity_id"], entry["stat_key"]
-        )
+        try:
+            channel_id, game_id, competitor_id, stat_name, sport_id = (
+                entry["channel_id"], entry["game_id"], entry["competitor_id"], entry["stat_name"], entry["sport_id"]
+            )
+        except KeyError:
+            # Belongs to the pre-migration Sofascore-backed schema
+            # (event_id/entity_id/stat_key instead of
+            # game_id/competitor_id/stat_name) - can't be resumed, just drop
+            # it rather than crashing the rest of startup.
+            log.warning("Dropping tennis prop entry from an old state schema: %r", entry)
+            continue
         try:
             channel = await client.fetch_channel(channel_id)
             message = await channel.fetch_message(entry["message_id"])
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-            _forget(channel_id, event_id, entity_id, stat_key)
+            _forget(channel_id, game_id, competitor_id, stat_name)
             continue
 
-        event = await asyncio.to_thread(sofascore.get_event, event_id)
-        if not event:
-            _forget(channel_id, event_id, entity_id, stat_key)
+        game = await asyncio.to_thread(scores365.get_live_update, sport_id, game_id)
+        if not game:
+            _forget(channel_id, game_id, competitor_id, stat_name)
             continue
 
         start_tracking(
-            message, channel_id, event_id, entity_id, stat_key, entry["stat_label"], entry["player_name"],
-            entry.get("photo_url"), entry.get("owner_id"), entry.get("direction"), entry.get("line"),
+            message, sport_id, game_id, channel_id, competitor_id, stat_name, entry["stat_label"],
+            entry["player_name"], entry.get("owner_id"), entry.get("direction"), entry.get("line"),
         )
         log.info("Resumed tennis prop tracking for %s in channel %s", entry["player_name"], channel_id)

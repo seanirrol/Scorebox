@@ -19,7 +19,6 @@ from typing import Optional
 
 import espn
 import scores365
-import sofascore
 
 # Bracket category (lowercased, "Props" suffix stripped) -> our sport key.
 # Baseball has multiple league names in the wild (MLB, KBO, ...) that all map
@@ -236,12 +235,12 @@ def _match_stat_label(sport: str, raw_stat: str) -> Optional[str]:
     return None
 
 
-def _match_sofascore_stat_label(raw_stat: str) -> Optional[str]:
+def _match_tennis_stat_label(raw_stat: str) -> Optional[str]:
     """Tennis-only equivalent of _match_stat_label - ESPN doesn't support
     tennis at all (see espn.py's module docstring), so tennis props are
-    backed by sofascore.STAT_CATALOG instead."""
+    backed by scores365.TENNIS_STAT_CATALOG instead."""
     raw = raw_stat.strip().lower()
-    catalog = sofascore.STAT_CATALOG.get("tennis", {})
+    catalog = scores365.TENNIS_STAT_CATALOG
     for label in catalog:
         if label.lower() == raw:
             return label
@@ -258,7 +257,7 @@ def _parse_tennis_player_prop(description: str) -> Optional[dict]:
     player = re.sub(r"[\s-]+$", "", pm.group(1)).strip()
     direction = pm.group(2).lower()
     line = float(pm.group(3))
-    stat_label = _match_sofascore_stat_label(pm.group(4).strip())
+    stat_label = _match_tennis_stat_label(pm.group(4).strip())
     if not player or not stat_label:
         return None
     return {"kind": "tennis_playerprops", "player": player, "stat": stat_label, "direction": direction, "line": line}

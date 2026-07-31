@@ -31,7 +31,6 @@ import picks
 import proptracker
 import scores365
 import settracker
-import sofascore
 import tennispropstracker
 import throttle
 import tracker
@@ -136,8 +135,8 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
         channel_id, game_id, _ = info
         settracker.stop_tracking(channel_id, game_id)
     else:
-        channel_id, event_id, entity_id, stat_key, _ = info
-        tennispropstracker.stop_tracking(channel_id, event_id, entity_id, stat_key)
+        channel_id, game_id, competitor_id, stat_name, _ = info
+        tennispropstracker.stop_tracking(channel_id, game_id, competitor_id, stat_name)
 
     reactor = f"<@{payload.user_id}>"
     botlog.event(f"🗑️ Untracked (🗑️ reaction, {kind}): message `{payload.message_id}` in <#{payload.channel_id}> — by {reactor}")
@@ -292,47 +291,47 @@ async def _auto_tennis_playerprops(
     channel: discord.abc.Messageable, player: str, stat: str,
     direction: Optional[str] = None, line: Optional[float] = None,
 ):
-    """Tennis-only equivalent of _auto_playerprops, backed by Sofascore
+    """Tennis-only equivalent of _auto_playerprops, backed by 365scores
     instead of ESPN (which doesn't support tennis at all) - see
-    tennispropstracker.py."""
-    stat_key = sofascore.STAT_CATALOG.get("tennis", {}).get(stat)
-    if not stat_key:
+    tennispropstracker.py. A tennis player is its own "competitor" in
+    365scores' data, found via find_match_for_team same as every other
+    365scores-backed tennis tracker (F5/1st-set/moneyline)."""
+    stat_name = scores365.TENNIS_STAT_CATALOG.get(stat)
+    if not stat_name:
         botlog.event(f"❌ Not tracked (tennis prop): **{player}** {stat} — unknown stat")
         return
     try:
-        entity = await asyncio.to_thread(sofascore.find_player, player, "tennis")
-    except sofascore.SofascoreError as e:
-        log.info("Auto-tennis-playerprops: couldn't reach Sofascore for '%s': %s", player, e)
-        botlog.event(f"❌ Not tracked (tennis prop): **{player}** {stat} — couldn't reach Sofascore: {e}")
+        result = await asyncio.to_thread(scores365.find_match_for_team, player, "tennis")
+    except scores365.ScoresError as e:
+        log.info("Auto-tennis-playerprops: couldn't reach 365scores for '%s': %s", player, e)
+        botlog.event(f"❌ Not tracked (tennis prop): **{player}** {stat} — couldn't reach 365scores: {e}")
         return
-    if not entity:
-        log.info("Auto-tennis-playerprops: no player found for '%s'", player)
-        botlog.event(f"❌ Not tracked (tennis prop): **{player}** {stat} — player not found on Sofascore")
+    if not result:
+        log.info("Auto-tennis-playerprops: no match found for '%s'", player)
+        botlog.event(f"❌ Not tracked (tennis prop): **{player}** {stat} — no match found")
         return
-
-    event = await asyncio.to_thread(sofascore.find_current_event, entity["id"], entity["is_tennis"])
-    if not event:
-        botlog.event(f"❌ Not tracked (tennis prop): **{player}** {stat} — no current/recent match found on Sofascore")
-        return
-    event_id = event["id"]
-    if tennispropstracker.is_tracked(channel.id, event_id, entity["id"], stat_key):
+    game, sport_id = result
+    game_id = game["id"]
+    home_competitor = game.get("homeCompetitor") or {}
+    away_competitor = game.get("awayCompetitor") or {}
+    if scores365.names_match(home_competitor.get("name", ""), player):
+        competitor_id, resolved_name = home_competitor["id"], home_competitor.get("name", player)
+    else:
+        competitor_id, resolved_name = away_competitor["id"], away_competitor.get("name", player)
+    if tennispropstracker.is_tracked(channel.id, game_id, competitor_id, stat_name):
         botlog.event(f"⏭️ Skipped (tennis prop): **{player}** {stat} — already being tracked in <#{channel.id}>")
         return
 
-    current_value, _is_home = await asyncio.to_thread(sofascore.get_stat_value, event, entity["id"], True, stat_key)
-    photo_url = sofascore.player_photo_url(entity["id"])
-    embed, file = await tennispropstracker.build_embed(
-        entity["name"], entity["id"], photo_url, stat, current_value, event, direction, line,
-    )
+    embed, file = await tennispropstracker.build_embed(game, sport_id, competitor_id, resolved_name, stat, stat_name, direction, line)
     message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
-    tennispropstracker.register_message(message.id, channel.id, event_id, entity["id"], stat_key, None)
+    tennispropstracker.register_message(message.id, channel.id, game_id, competitor_id, stat_name, None)
     await message.add_reaction(TRASH_EMOJI)
 
-    if sofascore.is_finished(event):
+    if scores365.is_finished(game):
         botlog.event(f"⏭️ Not tracked (tennis prop): **{player}** {stat} — match already finished, posted final value only")
         return
     tennispropstracker.start_tracking(
-        message, channel.id, event_id, entity["id"], stat_key, stat, entity["name"], photo_url, None, direction, line,
+        message, sport_id, game_id, channel.id, competitor_id, stat_name, stat, resolved_name, None, direction, line,
     )
     log.info("Auto-tracked tennis player prop pick: %s - %s", player, stat)
     botlog.event(f"✅ Tracked (tennis prop): **{player}** {stat} in <#{channel.id}>")
@@ -594,52 +593,51 @@ async def track(interaction: discord.Interaction, sport: app_commands.Choice[str
 async def stat_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
     sport = getattr(interaction.namespace, "sport", None)
     sport_key = sport.value if hasattr(sport, "value") else sport
-    catalog = sofascore.STAT_CATALOG if sport_key == "tennis" else espn.STAT_CATALOG
-    labels = list(catalog.get(sport_key, {}).keys())
+    labels = list(scores365.TENNIS_STAT_CATALOG.keys()) if sport_key == "tennis" else list(espn.STAT_CATALOG.get(sport_key, {}).keys())
     matches = [label for label in labels if current.lower() in label.lower()]
     return [app_commands.Choice(name=label, value=label) for label in matches[:25]]
 
 
 async def _playerprops_tennis(interaction: discord.Interaction, player: str, stat: str):
     """Tennis-only equivalent of /playerprops' ESPN-backed body, using
-    Sofascore instead (see tennispropstracker.py)."""
-    stat_key = sofascore.STAT_CATALOG.get("tennis", {}).get(stat)
-    if not stat_key:
+    365scores instead (see tennispropstracker.py)."""
+    stat_name = scores365.TENNIS_STAT_CATALOG.get(stat)
+    if not stat_name:
         await interaction.followup.send(
             f"Unknown stat '{stat}' for Tennis - pick one from the autocomplete list.", ephemeral=True
         )
         return
 
     try:
-        entity = await asyncio.to_thread(sofascore.find_player, player, "tennis")
-    except sofascore.SofascoreError as e:
-        await interaction.followup.send(f"Couldn't reach Sofascore: {e}", ephemeral=True)
+        result = await asyncio.to_thread(scores365.find_match_for_team, player, "tennis")
+    except scores365.ScoresError as e:
+        await interaction.followup.send(f"Couldn't reach 365scores: {e}", ephemeral=True)
         return
-    if not entity:
-        await interaction.followup.send(f"Couldn't find a Tennis player named **{player}**.", ephemeral=True)
+    if not result:
+        await interaction.followup.send(f"No live or scheduled-today match found for **{player}**.", ephemeral=True)
         return
+    game, sport_id = result
+    game_id = game["id"]
+    home_competitor = game.get("homeCompetitor") or {}
+    away_competitor = game.get("awayCompetitor") or {}
+    if scores365.names_match(home_competitor.get("name", ""), player):
+        competitor_id, resolved_name = home_competitor["id"], home_competitor.get("name", player)
+    else:
+        competitor_id, resolved_name = away_competitor["id"], away_competitor.get("name", player)
 
-    event = await asyncio.to_thread(sofascore.find_current_event, entity["id"], entity["is_tennis"])
-    if not event:
-        await interaction.followup.send(f"No live or recent match found for **{entity['name']}**.", ephemeral=True)
-        return
-    event_id = event["id"]
-
-    current_value, _is_home = await asyncio.to_thread(sofascore.get_stat_value, event, entity["id"], True, stat_key)
-    photo_url = sofascore.player_photo_url(entity["id"])
-    embed, file = await tennispropstracker.build_embed(entity["name"], entity["id"], photo_url, stat, current_value, event)
+    embed, file = await tennispropstracker.build_embed(game, sport_id, competitor_id, resolved_name, stat, stat_name)
     message = await interaction.followup.send(embed=embed, file=file, wait=True)
 
     # interaction followup messages are bound to a webhook token that expires
     # after ~15 minutes; re-fetch as a plain channel message so edits keep
     # working for the entire tracking duration.
     message = await interaction.channel.fetch_message(message.id)
-    tennispropstracker.register_message(message.id, interaction.channel_id, event_id, entity["id"], stat_key, interaction.user.id)
+    tennispropstracker.register_message(message.id, interaction.channel_id, game_id, competitor_id, stat_name, interaction.user.id)
     await message.add_reaction(TRASH_EMOJI)
 
-    if not sofascore.is_finished(event):
+    if not scores365.is_finished(game):
         tennispropstracker.start_tracking(
-            message, interaction.channel_id, event_id, entity["id"], stat_key, stat, entity["name"], photo_url,
+            message, sport_id, game_id, interaction.channel_id, competitor_id, stat_name, stat, resolved_name,
             interaction.user.id,
         )
     botlog.event(f"✅ Tracked (manual, tennis prop): **{player}** {stat} in <#{interaction.channel_id}>, by **{interaction.user}**")
@@ -752,11 +750,11 @@ def _untrack_one(channel_id: int, game_id: str, player: Optional[str]) -> list[s
             stopped.append(entry["pick_type"])
 
     for entry in tennispropstracker.list_tracked_details(channel_id):
-        if str(entry["event_id"]) != str(game_id):
+        if str(entry["game_id"]) != str(game_id):
             continue
         if player and player.lower() not in entry["player_name"].lower():
             continue
-        if tennispropstracker.stop_tracking(channel_id, entry["event_id"], entry["entity_id"], entry["stat_key"]):
+        if tennispropstracker.stop_tracking(channel_id, entry["game_id"], entry["competitor_id"], entry["stat_name"]):
             stopped.append(f"{entry['player_name']} ({entry['stat_label']})")
 
     return stopped
@@ -887,10 +885,10 @@ async def _gather_tracked_items(channel_id: int) -> list[dict]:
 
     for entry in tennispropstracker.list_tracked_details(channel_id):
         items.append({
-            "kind": "tennis_prop", "label": f"{entry['player_name']} ({entry['stat_label']})", "id_label": entry["event_id"],
+            "kind": "tennis_prop", "label": f"{entry['player_name']} ({entry['stat_label']})", "id_label": entry["game_id"],
             "message_id": entry["message_id"],
-            "stop": lambda cid=channel_id, eid=entry["event_id"], enid=entry["entity_id"], sk=entry["stat_key"]:
-                tennispropstracker.stop_tracking(cid, eid, enid, sk),
+            "stop": lambda cid=channel_id, gid=entry["game_id"], comp=entry["competitor_id"], sn=entry["stat_name"]:
+                tennispropstracker.stop_tracking(cid, gid, comp, sn),
         })
 
     return items

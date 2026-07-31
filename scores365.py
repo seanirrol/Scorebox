@@ -211,6 +211,58 @@ def grade_tennis_set(game: dict, home_games: int, away_games: int, picked_team: 
     return "won" if picked_games > other_games else "lost"
 
 
+# Our display label -> 365scores' own stat name (confirmed live against the
+# /web/game/stats/ endpoint). "Winners"/"Unforced Errors" aren't tracked by
+# 365scores at all for tennis - confirmed live across 46 real finished
+# matches in one day's slate, none had either stat present - so they're
+# deliberately left out here (see tennispropstracker.py's docstring).
+TENNIS_STAT_CATALOG = {
+    "Aces": "Aces",
+    "Double Faults": "Double Faults",
+    "Break Points Won": "Break Points Won",
+}
+
+
+def _parse_tennis_stat_value(raw: Optional[str]) -> Optional[float]:
+    """365scores tennis stats come as either a plain integer ("3") or an
+    "X/Y (Z%)" opportunities-converted fraction (e.g. "2/6 (33%)", used for
+    stats like Break Points Won) - only the leading X is the actual count a
+    prop line would grade against."""
+    if raw is None:
+        return None
+    m = re.match(r"^(\d+)", raw.strip())
+    return float(m.group(1)) if m else None
+
+
+def tennis_player_stat(game_id, competitor_id, stat_name: str) -> Optional[float]:
+    """One competitor's live/final value for a named stat, from this game's
+    own stats breakdown. A not-yet-started match carries no "statistics" key
+    at all (confirmed live) - returns None cleanly rather than erroring."""
+    try:
+        data = _get(f"{BASE_URL}/game/stats/", games=game_id)
+    except ScoresError:
+        return None
+    for item in data.get("statistics", []):
+        if item.get("competitorId") == competitor_id and item.get("name") == stat_name:
+            return _parse_tennis_stat_value(item.get("value"))
+    return None
+
+
+def grade_over_under(value, direction: str, line: float) -> Optional[str]:
+    """Grades an over/under prop against a finished event's final stat value.
+    Returns "won"/"lost"/"push" (exactly on the line), or None if value isn't
+    a usable number."""
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if numeric == line:
+        return "push"
+    if direction == "over":
+        return "won" if numeric > line else "lost"
+    return "won" if numeric < line else "lost"
+
+
 def current_set_score(game: dict, sport_id: Optional[int]) -> Optional[tuple[int, int]]:
     """Current in-progress set/game score - tennis and volleyball only."""
     if map_status_type(game.get("statusGroup")) != "inprogress":
