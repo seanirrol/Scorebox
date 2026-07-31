@@ -19,6 +19,7 @@ from typing import Optional
 
 import espn
 import scores365
+import sofascore
 
 # Bracket category (lowercased, "Props" suffix stripped) -> our sport key.
 # Baseball has multiple league names in the wild (MLB, KBO, ...) that all map
@@ -82,6 +83,16 @@ _INNING_RUN_TOTAL_RE = re.compile(
 # genuinely a different market from YRFI/NRFI (any runs vs none) or F5
 # moneyline (which treats a tie as a push, not a separately-winnable Draw).
 _INNING1_RESULT_MARKER_RE = re.compile(r"\b1st\s+inning\b", re.IGNORECASE)
+
+# "Naomi Osaka to win 1st Set" / "Naomi Osaka 1st Set ML" / "Naomi Osaka 1st
+# Set winner" / "Naomi Osaka ML 1st Set" - a tennis set-winner pick (settles
+# once Set 1 finishes, not the whole match - see settracker.py). Two-way, no
+# Draw side to worry about (unlike the 1st-inning-result market above), so a
+# single marker regex covers every phrasing.
+_SET1_MARKER_RE = re.compile(
+    r"\bto\s+win\s+1st\s+set\b|\b1st\s+set\s+(?:ml|moneyline|winner)\b|\bml\s+1st\s+set\b",
+    re.IGNORECASE,
+)
 
 # "Team A vs Team B - 1st Inning Draw" (or "Tie") - the Draw side of the same
 # 3-way "1st inning result" market. Either team name is enough to look the
@@ -225,6 +236,34 @@ def _match_stat_label(sport: str, raw_stat: str) -> Optional[str]:
     return None
 
 
+def _match_sofascore_stat_label(raw_stat: str) -> Optional[str]:
+    """Tennis-only equivalent of _match_stat_label - ESPN doesn't support
+    tennis at all (see espn.py's module docstring), so tennis props are
+    backed by sofascore.STAT_CATALOG instead."""
+    raw = raw_stat.strip().lower()
+    catalog = sofascore.STAT_CATALOG.get("tennis", {})
+    for label in catalog:
+        if label.lower() == raw:
+            return label
+    for label in catalog:
+        if raw in label.lower():
+            return label
+    return None
+
+
+def _parse_tennis_player_prop(description: str) -> Optional[dict]:
+    pm = _PLAYER_STAT_RE.match(description)
+    if not pm:
+        return None
+    player = re.sub(r"[\s-]+$", "", pm.group(1)).strip()
+    direction = pm.group(2).lower()
+    line = float(pm.group(3))
+    stat_label = _match_sofascore_stat_label(pm.group(4).strip())
+    if not player or not stat_label:
+        return None
+    return {"kind": "tennis_playerprops", "player": player, "stat": stat_label, "direction": direction, "line": line}
+
+
 # Partial-game qualifiers (settle on a sub-period, not the final score) -
 # tracking the full game via /track would show a live/final score that
 # doesn't reflect whether one of these actually won or lost, so they're
@@ -365,6 +404,14 @@ def _parse_inning1_team_pick(description: str) -> Optional[str]:
     if "moneyline" not in text.lower() and not re.search(r"\bml\b", text, re.IGNORECASE):
         return None
     text = _INNING1_RESULT_MARKER_RE.sub("", text)
+    return _parse_team_pick(text)
+
+
+def _parse_set1_pick(description: str) -> Optional[str]:
+    text = _clean_line(description)
+    if not _SET1_MARKER_RE.search(text):
+        return None
+    text = _SET1_MARKER_RE.sub("", text)
     return _parse_team_pick(text)
 
 
@@ -524,6 +571,15 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
             inning1_team = _parse_inning1_team_pick(description)
             if inning1_team:
                 return {"kind": "inning1_result", "sport": sport, "team": inning1_team, "pick": inning1_team}
+
+        if sport == "tennis":
+            set1_team = _parse_set1_pick(description)
+            if set1_team:
+                return {"kind": "set1_moneyline", "sport": sport, "team": set1_team}
+
+            tennis_prop = _parse_tennis_player_prop(description)
+            if tennis_prop:
+                return tennis_prop
 
         prop = _parse_player_prop(sport_key, sport, description)
         if prop:

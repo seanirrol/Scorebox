@@ -227,6 +227,21 @@ def is_finished(event: dict) -> bool:
     return event.get("status", {}).get("type") == "finished"
 
 
+def grade_over_under(value, direction: str, line: float) -> Optional[str]:
+    """Grades an over/under prop against a finished event's final stat value.
+    Returns "won"/"lost"/"push" (exactly on the line), or None if value isn't
+    a usable number (e.g. the player never appeared in the match stats)."""
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if numeric == line:
+        return "push"
+    if direction == "over":
+        return "won" if numeric > line else "lost"
+    return "won" if numeric < line else "lost"
+
+
 # Sofascore's own status.description already gives the correct sport-specific
 # label (confirmed live: "3rd quarter" for basketball, "1st half" for soccer),
 # so this only adds a clock on top for the 3 sports it was asked for rather

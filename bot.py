@@ -28,6 +28,9 @@ import inningtracker
 import picks
 import proptracker
 import scores365
+import settracker
+import sofascore
+import tennispropstracker
 import throttle
 import tracker
 
@@ -62,6 +65,8 @@ async def on_ready():
     await inningtracker.resume_all(client)
     await f5tracker.resume_all(client)
     await inning1tracker.resume_all(client)
+    await settracker.resume_all(client)
+    await tennispropstracker.resume_all(client)
 
 
 @client.event
@@ -83,6 +88,12 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     if not info:
         info = inning1tracker.get_message_owner(payload.message_id)
         kind = "inning1"
+    if not info:
+        info = settracker.get_message_owner(payload.message_id)
+        kind = "set1"
+    if not info:
+        info = tennispropstracker.get_message_owner(payload.message_id)
+        kind = "tennis_prop"
     if not info:
         return
 
@@ -114,9 +125,15 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     elif kind == "f5":
         channel_id, game_id, _ = info
         f5tracker.stop_tracking(channel_id, game_id)
-    else:
+    elif kind == "inning1":
         channel_id, game_id, _ = info
         inning1tracker.stop_tracking(channel_id, game_id)
+    elif kind == "set1":
+        channel_id, game_id, _ = info
+        settracker.stop_tracking(channel_id, game_id)
+    else:
+        channel_id, event_id, entity_id, stat_key, _ = info
+        tennispropstracker.stop_tracking(channel_id, event_id, entity_id, stat_key)
 
     try:
         await message.delete()
@@ -246,6 +263,49 @@ async def _auto_playerprops(
     log.info("Auto-tracked player prop pick: %s - %s", player, stat)
 
 
+async def _auto_tennis_playerprops(
+    channel: discord.abc.Messageable, player: str, stat: str,
+    direction: Optional[str] = None, line: Optional[float] = None,
+):
+    """Tennis-only equivalent of _auto_playerprops, backed by Sofascore
+    instead of ESPN (which doesn't support tennis at all) - see
+    tennispropstracker.py."""
+    stat_key = sofascore.STAT_CATALOG.get("tennis", {}).get(stat)
+    if not stat_key:
+        return
+    try:
+        entity = await asyncio.to_thread(sofascore.find_player, player, "tennis")
+    except sofascore.SofascoreError as e:
+        log.info("Auto-tennis-playerprops: couldn't reach Sofascore for '%s': %s", player, e)
+        return
+    if not entity:
+        log.info("Auto-tennis-playerprops: no player found for '%s'", player)
+        return
+
+    event = await asyncio.to_thread(sofascore.find_current_event, entity["id"], entity["is_tennis"])
+    if not event:
+        return
+    event_id = event["id"]
+    if tennispropstracker.is_tracked(channel.id, event_id, entity["id"], stat_key):
+        return
+
+    current_value, _is_home = await asyncio.to_thread(sofascore.get_stat_value, event, entity["id"], True, stat_key)
+    photo_url = sofascore.player_photo_url(entity["id"])
+    embed, file = await tennispropstracker.build_embed(
+        entity["name"], entity["id"], photo_url, stat, current_value, event, direction, line,
+    )
+    message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
+    tennispropstracker.register_message(message.id, channel.id, event_id, entity["id"], stat_key, None)
+    await message.add_reaction(TRASH_EMOJI)
+
+    if sofascore.is_finished(event):
+        return
+    tennispropstracker.start_tracking(
+        message, channel.id, event_id, entity["id"], stat_key, stat, entity["name"], photo_url, None, direction, line,
+    )
+    log.info("Auto-tracked tennis player prop pick: %s - %s", player, stat)
+
+
 async def _auto_inning_runs(channel: discord.abc.Messageable, team: str, pick_type: str):
     """YRFI/NRFI picks settle after just the 1st inning, not the whole game
     - see inningtracker.py. Always baseball, so no sport param needed."""
@@ -306,6 +366,34 @@ async def _auto_inning1_result(channel: discord.abc.Messageable, team: str, pick
     log.info("Auto-tracked 1st-inning-result pick '%s' (%s) -> game %s", team, pick, game_id)
 
 
+async def _auto_set1(channel: discord.abc.Messageable, team: str):
+    """Tennis 1st-Set moneyline picks settle after Set 1, not the whole
+    match - see settracker.py. Backed by 365scores (like f5tracker.py), not
+    ESPN - always tennis."""
+    try:
+        result = await asyncio.to_thread(scores365.find_match_for_team, team, "tennis")
+    except scores365.ScoresError as e:
+        log.info("Auto-1st-set: couldn't reach 365scores for '%s': %s", team, e)
+        return
+    if not result:
+        log.info("Auto-1st-set: no match found for '%s'", team)
+        return
+    game, sport_id = result
+    game_id = game["id"]
+    if settracker.is_tracked(channel.id, game_id):
+        return
+
+    embed, file = await settracker.build_embed(game, sport_id, team)
+    message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
+    settracker.register_message(message.id, channel.id, game_id, None)
+    await message.add_reaction(TRASH_EMOJI)
+
+    if scores365.tennis_first_set_result(game) is not None:
+        return  # already decided by the time this pick was posted
+    settracker.start_tracking(message, sport_id, game, channel.id, None, team)
+    log.info("Auto-tracked 1st-set pick '%s' -> game %s", team, game_id)
+
+
 @client.event
 async def on_message(message: discord.Message):
     target_channel_id = config.PICKS_CHANNEL_MAP.get(message.channel.id)
@@ -346,6 +434,12 @@ async def on_message(message: discord.Message):
                 await _auto_inning_runs(target_channel, pick["team"], pick["pick_type"])
             elif pick["kind"] == "inning1_result":
                 await _auto_inning1_result(target_channel, pick["team"], pick["pick"])
+            elif pick["kind"] == "set1_moneyline":
+                await _auto_set1(target_channel, pick["team"])
+            elif pick["kind"] == "tennis_playerprops":
+                await _auto_tennis_playerprops(
+                    target_channel, pick["player"], pick["stat"], pick.get("direction"), pick.get("line")
+                )
             else:
                 await _auto_playerprops(
                     target_channel, pick["sport"], pick["player"], pick["stat"],
@@ -433,9 +527,54 @@ async def track(interaction: discord.Interaction, sport: app_commands.Choice[str
 async def stat_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
     sport = getattr(interaction.namespace, "sport", None)
     sport_key = sport.value if hasattr(sport, "value") else sport
-    labels = list(espn.STAT_CATALOG.get(sport_key, {}).keys())
+    catalog = sofascore.STAT_CATALOG if sport_key == "tennis" else espn.STAT_CATALOG
+    labels = list(catalog.get(sport_key, {}).keys())
     matches = [label for label in labels if current.lower() in label.lower()]
     return [app_commands.Choice(name=label, value=label) for label in matches[:25]]
+
+
+async def _playerprops_tennis(interaction: discord.Interaction, player: str, stat: str):
+    """Tennis-only equivalent of /playerprops' ESPN-backed body, using
+    Sofascore instead (see tennispropstracker.py)."""
+    stat_key = sofascore.STAT_CATALOG.get("tennis", {}).get(stat)
+    if not stat_key:
+        await interaction.followup.send(
+            f"Unknown stat '{stat}' for Tennis - pick one from the autocomplete list.", ephemeral=True
+        )
+        return
+
+    try:
+        entity = await asyncio.to_thread(sofascore.find_player, player, "tennis")
+    except sofascore.SofascoreError as e:
+        await interaction.followup.send(f"Couldn't reach Sofascore: {e}", ephemeral=True)
+        return
+    if not entity:
+        await interaction.followup.send(f"Couldn't find a Tennis player named **{player}**.", ephemeral=True)
+        return
+
+    event = await asyncio.to_thread(sofascore.find_current_event, entity["id"], entity["is_tennis"])
+    if not event:
+        await interaction.followup.send(f"No live or recent match found for **{entity['name']}**.", ephemeral=True)
+        return
+    event_id = event["id"]
+
+    current_value, _is_home = await asyncio.to_thread(sofascore.get_stat_value, event, entity["id"], True, stat_key)
+    photo_url = sofascore.player_photo_url(entity["id"])
+    embed, file = await tennispropstracker.build_embed(entity["name"], entity["id"], photo_url, stat, current_value, event)
+    message = await interaction.followup.send(embed=embed, file=file, wait=True)
+
+    # interaction followup messages are bound to a webhook token that expires
+    # after ~15 minutes; re-fetch as a plain channel message so edits keep
+    # working for the entire tracking duration.
+    message = await interaction.channel.fetch_message(message.id)
+    tennispropstracker.register_message(message.id, interaction.channel_id, event_id, entity["id"], stat_key, interaction.user.id)
+    await message.add_reaction(TRASH_EMOJI)
+
+    if not sofascore.is_finished(event):
+        tennispropstracker.start_tracking(
+            message, interaction.channel_id, event_id, entity["id"], stat_key, stat, entity["name"], photo_url,
+            interaction.user.id,
+        )
 
 
 @tree.command(name="playerprops", description="Track a player's live stat, e.g. Points, Earned Runs, Aces")
@@ -452,9 +591,13 @@ async def playerprops(interaction: discord.Interaction, sport: app_commands.Choi
         return
     await interaction.response.defer()
 
+    if sport.value == "tennis":
+        await _playerprops_tennis(interaction, player, stat)
+        return
+
     if sport.value not in espn.SPORT_PATHS:
         await interaction.followup.send(
-            f"{sport.name} isn't supported for /playerprops yet - only Baseball, Basketball, Hockey, and NFL for now.",
+            f"{sport.name} isn't supported for /playerprops yet - only Baseball, Basketball, Hockey, NFL, and Tennis for now.",
             ephemeral=True,
         )
         return
@@ -507,8 +650,9 @@ async def playerprops(interaction: discord.Interaction, sport: app_commands.Choi
 
 
 def _untrack_one(channel_id: int, game_id: str, player: Optional[str]) -> list[str]:
-    """Stops every tracker (match/total/F5/prop/1st-inning) matching this one
-    game_id in this channel. Returns what was actually stopped, if anything."""
+    """Stops every tracker (match/total/F5/prop/1st-inning/1st-set) matching
+    this one game_id in this channel. Returns what was actually stopped, if
+    anything."""
     stopped = []
     if tracker.stop_tracking(channel_id, game_id):
         stopped.append("moneyline/total pick")
@@ -518,6 +662,9 @@ def _untrack_one(channel_id: int, game_id: str, player: Optional[str]) -> list[s
 
     if inning1tracker.stop_tracking(channel_id, game_id):
         stopped.append("1st inning result pick")
+
+    if settracker.stop_tracking(channel_id, game_id):
+        stopped.append("1st set pick")
 
     for entry in proptracker.list_tracked_details(channel_id):
         if str(entry["event_id"]) != str(game_id):
@@ -533,6 +680,14 @@ def _untrack_one(channel_id: int, game_id: str, player: Optional[str]) -> list[s
             continue
         if inningtracker.stop_tracking(channel_id, entry["event_id"], entry["pick_type"]):
             stopped.append(entry["pick_type"])
+
+    for entry in tennispropstracker.list_tracked_details(channel_id):
+        if str(entry["event_id"]) != str(game_id):
+            continue
+        if player and player.lower() not in entry["player_name"].lower():
+            continue
+        if tennispropstracker.stop_tracking(channel_id, entry["event_id"], entry["entity_id"], entry["stat_key"]):
+            stopped.append(f"{entry['player_name']} ({entry['stat_label']})")
 
     return stopped
 
@@ -651,6 +806,21 @@ async def _gather_tracked_items(channel_id: int) -> list[dict]:
             "stop": lambda cid=channel_id, gid=entry["game_id"]: inning1tracker.stop_tracking(cid, gid),
         })
 
+    for entry in settracker.list_tracked_details(channel_id):
+        items.append({
+            "kind": "set1", "label": f"{entry['team']} 1st Set ML", "id_label": entry["game_id"],
+            "message_id": entry["message_id"],
+            "stop": lambda cid=channel_id, gid=entry["game_id"]: settracker.stop_tracking(cid, gid),
+        })
+
+    for entry in tennispropstracker.list_tracked_details(channel_id):
+        items.append({
+            "kind": "tennis_prop", "label": f"{entry['player_name']} ({entry['stat_label']})", "id_label": entry["event_id"],
+            "message_id": entry["message_id"],
+            "stop": lambda cid=channel_id, eid=entry["event_id"], enid=entry["entity_id"], sk=entry["stat_key"]:
+                tennispropstracker.stop_tracking(cid, eid, enid, sk),
+        })
+
     return items
 
 
@@ -686,6 +856,8 @@ _SECTION_TITLES = {
     "inning": "Tracked 1st-inning picks",
     "f5": "Tracked F5 (1st 5 innings) picks",
     "inning1": "Tracked 1st inning result picks",
+    "set1": "Tracked 1st set picks",
+    "tennis_prop": "Tracked tennis player props",
 }
 
 

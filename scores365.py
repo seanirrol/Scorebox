@@ -180,6 +180,37 @@ def tennis_current_set_score(game: dict) -> Optional[tuple[int, int]]:
     return (home, away) if home is not None and away is not None else None
 
 
+def tennis_first_set_result(game: dict) -> Optional[tuple[int, int]]:
+    """(home_games, away_games) for Set 1 once it's fully complete
+    (isEnded=True), or None if it hasn't finished yet - same `stages` array
+    as tennis_current_set_score, already sitting on the bulk list's own game
+    object, no separate detail call needed (unlike innings_breakdown's
+    baseball equivalent)."""
+    stages = {s.get("name"): s for s in (game.get("stages") or [])}
+    stage = stages.get("Set 1")
+    if not stage or not stage.get("isEnded"):
+        return None
+    home = _norm_score(stage.get("homeCompetitorScore"))
+    away = _norm_score(stage.get("awayCompetitorScore"))
+    return (int(home), int(away)) if home is not None and away is not None else None
+
+
+def grade_tennis_set(game: dict, home_games: int, away_games: int, picked_team: str) -> Optional[str]:
+    """Grades a tennis set-winner pick (e.g. "1st Set Moneyline"). A
+    completed tennis set is always decided one way or the other (by games or
+    a tiebreak) - no tie/push case exists here, unlike full-match moneyline
+    grading elsewhere in this module."""
+    home = (game.get("homeCompetitor") or {}).get("name", "")
+    away = (game.get("awayCompetitor") or {}).get("name", "")
+    if names_match(home, picked_team):
+        picked_games, other_games = home_games, away_games
+    elif names_match(away, picked_team):
+        picked_games, other_games = away_games, home_games
+    else:
+        return None
+    return "won" if picked_games > other_games else "lost"
+
+
 def current_set_score(game: dict, sport_id: Optional[int]) -> Optional[tuple[int, int]]:
     """Current in-progress set/game score - tennis and volleyball only."""
     if map_status_type(game.get("statusGroup")) != "inprogress":

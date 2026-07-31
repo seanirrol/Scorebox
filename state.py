@@ -20,6 +20,8 @@ PROPS_FILE = os.path.join(_DIR, "props_state.json")
 INNINGS_FILE = os.path.join(_DIR, "innings_state.json")
 F5_FILE = os.path.join(_DIR, "f5_state.json")
 INNING1_FILE = os.path.join(_DIR, "inning1_state.json")
+SET1_FILE = os.path.join(_DIR, "set1_state.json")
+TENNIS_PROPS_FILE = os.path.join(_DIR, "tennis_props_state.json")
 
 
 def _load(path: str) -> dict[str, Any]:
@@ -75,3 +77,19 @@ def load_inning1() -> dict[str, Any]:
 
 def save_inning1(data: dict[str, Any]):
     _save(INNING1_FILE, data)
+
+
+def load_set1() -> dict[str, Any]:
+    return _load(SET1_FILE)
+
+
+def save_set1(data: dict[str, Any]):
+    _save(SET1_FILE, data)
+
+
+def load_tennis_props() -> dict[str, Any]:
+    return _load(TENNIS_PROPS_FILE)
+
+
+def save_tennis_props(data: dict[str, Any]):
+    _save(TENNIS_PROPS_FILE, data)
