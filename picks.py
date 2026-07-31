@@ -36,6 +36,8 @@ _SPORT_MAP = {
     "tennis": "tennis",
     "rugby": "rugby",
     "volleyball": "volleyball",
+    "ufc": "mma",
+    "mma": "mma",
 }
 
 # Bare section headers can use the sport's full name ("Basketball") instead
@@ -148,6 +150,16 @@ _F5_HANDICAP_RE = re.compile(
     r"^(.+?)\s*(?:@|vs\.?|v\.?)\s*(.+?)\s*-\s*"
     r"(?:f5|first\s+5\s+innings|first\s+five\s+innings|1st\s+5\s+innings)"
     r"\s+(.+?)\s+([+-]\d+(?:\.\d+)?)\b",
+    re.IGNORECASE,
+)
+
+# "Daniel Rodriguez vs Uros Medic - Under 2.5 Rounds" - a UFC round total
+# (see grade_ufc_round_total). Requires "Rounds" explicitly since it would
+# otherwise match the same shape as a generic combined game total
+# (_TOTAL_LINE_RE) - checked before that generic parser for the same reason
+# F5's combined total is checked before it for baseball.
+_UFC_ROUND_TOTAL_RE = re.compile(
+    r"^(.+?)\s*(?:@|vs\.?|v\.?)\s*(.+?)\s*-\s*(?:total\s*)?(Over|Under)\s+([\d.]+)\s*rounds?\b",
     re.IGNORECASE,
 )
 
@@ -481,6 +493,20 @@ def _parse_f5_handicap_pick(description: str, sport: str) -> Optional[dict]:
     }
 
 
+def _parse_ufc_round_total_pick(description: str) -> Optional[dict]:
+    text = _clean_line(description)
+    m = _UFC_ROUND_TOTAL_RE.match(text)
+    if not m:
+        return None
+    team = m.group(1).strip()  # either fighter - just used to look the bout up
+    if not team:
+        return None
+    return {
+        "kind": "ufc_round_total", "team": team,
+        "direction": m.group(3).lower(), "line": float(m.group(4)),
+    }
+
+
 def _parse_total_pick(sport: str, description: str) -> Optional[dict]:
     text = _clean_line(description)
     m = _TOTAL_LINE_RE.match(text)
@@ -541,6 +567,11 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
         if f5_handicap:
             return f5_handicap
 
+    if sport == "mma":
+        ufc_round_total = _parse_ufc_round_total_pick(description)
+        if ufc_round_total:
+            return ufc_round_total
+
     named_total = _parse_named_team_total_pick(sport, description)
     if named_total:
         return named_total
@@ -585,6 +616,19 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
             return prop
         if is_prop_category:
             return None  # explicitly tagged as a prop but couldn't be confidently parsed - don't guess it's a team pick
+
+    if sport == "mma":
+        # UFC isn't a 365scores sport at all (see espn_ufc.py), so - unlike
+        # every other sport here - a failed match must NOT fall through to
+        # the generic track fallback below, which is backed by
+        # scores365.find_match_for_team and would just search every real
+        # 365scores sport pointlessly for a fighter's name. Checked outside
+        # the has_matchup block above (not just inside it) since a UFC
+        # moneyline pick can itself be worded with a " vs " matchup (e.g.
+        # "Fighter A vs Fighter B - Fighter A ML"), which would otherwise
+        # skip straight past that block to the generic fallback below.
+        ufc_team = _parse_team_pick(description)
+        return {"kind": "ufc_moneyline", "team": ufc_team} if ufc_team else None
 
     team = _parse_team_pick(description)
     if not team:

@@ -23,6 +23,7 @@ INNING1_FILE = os.path.join(_DIR, "inning1_state.json")
 SET1_FILE = os.path.join(_DIR, "set1_state.json")
 TENNIS_PROPS_FILE = os.path.join(_DIR, "tennis_props_state.json")
 PENDING_DELETE_FILE = os.path.join(_DIR, "pending_delete_state.json")
+UFC_FILE = os.path.join(_DIR, "ufc_state.json")
 
 
 def _load(path: str) -> dict[str, Any]:
@@ -102,3 +103,11 @@ def load_pending_deletes() -> dict[str, Any]:
 
 def save_pending_deletes(data: dict[str, Any]):
     _save(PENDING_DELETE_FILE, data)
+
+
+def load_ufc() -> dict[str, Any]:
+    return _load(UFC_FILE)
+
+
+def save_ufc(data: dict[str, Any]):
+    _save(UFC_FILE, data)

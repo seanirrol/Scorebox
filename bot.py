@@ -23,6 +23,7 @@ from discord import app_commands
 import botlog
 import config
 import espn
+import espn_ufc
 import f5tracker
 import inning1tracker
 import inningtracker
@@ -34,6 +35,7 @@ import settracker
 import tennispropstracker
 import throttle
 import tracker
+import ufctracker
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("scorebox.bot")
@@ -69,6 +71,7 @@ async def on_ready():
     await inning1tracker.resume_all(client)
     await settracker.resume_all(client)
     await tennispropstracker.resume_all(client)
+    await ufctracker.resume_all(client)
     await pendingdelete.resume_all(client)
 
 
@@ -97,6 +100,9 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     if not info:
         info = tennispropstracker.get_message_owner(payload.message_id)
         kind = "tennis_prop"
+    if not info:
+        info = ufctracker.get_message_owner(payload.message_id)
+        kind = "ufc"
     if not info:
         return
 
@@ -134,9 +140,12 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     elif kind == "set1":
         channel_id, game_id, _ = info
         settracker.stop_tracking(channel_id, game_id)
-    else:
+    elif kind == "tennis_prop":
         channel_id, game_id, competitor_id, stat_name, _ = info
         tennispropstracker.stop_tracking(channel_id, game_id, competitor_id, stat_name)
+    else:
+        channel_id, competition_id, _ = info
+        ufctracker.stop_tracking(channel_id, competition_id)
 
     reactor = str(payload.member) if payload.member else f"user `{payload.user_id}`"
     botlog.event(f"🗑️ Untracked (🗑️ reaction, {kind}): message `{payload.message_id}` in <#{payload.channel_id}> — by **{reactor}**")
@@ -442,6 +451,50 @@ async def _auto_set1(channel: discord.abc.Messageable, team: str):
     botlog.event(f"✅ Tracked (1st set): **{team}** — game `{game_id}` in <#{channel.id}>")
 
 
+async def _auto_ufc(
+    channel: discord.abc.Messageable, fighter: str,
+    total_direction: Optional[str] = None, total_line: Optional[float] = None,
+):
+    """UFC picks - fight moneyline or round total - settle once the bout
+    itself finishes, not tied to any wider game clock. Backed by
+    espn_ufc.py (365scores has no MMA coverage at all). fighter is only
+    used to look the bout up; round-total picks aren't graded on either
+    fighter specifically (see ufctracker.py's combined-total-style mode)."""
+    label = "UFC round total" if total_direction else "UFC"
+    try:
+        result = await asyncio.to_thread(espn_ufc.find_ufc_fight, fighter)
+    except espn_ufc.EspnUfcError as e:
+        log.info("Auto-UFC: couldn't reach ESPN for '%s': %s", fighter, e)
+        botlog.event(f"❌ Not tracked ({label}): **{fighter}** — couldn't reach ESPN: {e}")
+        return
+    if not result:
+        log.info("Auto-UFC: no bout found for '%s'", fighter)
+        botlog.event(f"❌ Not tracked ({label}): **{fighter}** — no bout found")
+        return
+    event, competition, fighter_competitor = result
+    competition_id = competition["id"]
+    if ufctracker.is_tracked(channel.id, competition_id):
+        botlog.event(f"⏭️ Skipped ({label}): **{fighter}** — bout `{competition_id}` already being tracked in <#{channel.id}>")
+        return
+
+    fighter_id = None if total_direction else fighter_competitor["id"]
+    fighter_name = None if total_direction else fighter_competitor["athlete"]["displayName"]
+    embed, file = await ufctracker.build_embed(competition, event["name"], fighter_id, fighter_name, total_direction, total_line)
+    message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
+    ufctracker.register_message(message.id, channel.id, competition_id, None)
+    await message.add_reaction(TRASH_EMOJI)
+
+    if espn_ufc.is_finished(competition):
+        botlog.event(f"⏭️ Not tracked ({label}): **{fighter}** — bout `{competition_id}` already finished, posted final result only")
+        return
+    ufctracker.start_tracking(
+        message, channel.id, event["id"], competition_id, competition["date"], None, event["name"],
+        fighter_id, fighter_name, total_direction, total_line,
+    )
+    log.info("Auto-tracked UFC pick '%s' -> bout %s", fighter, competition_id)
+    botlog.event(f"✅ Tracked ({label}): **{fighter}** — bout `{competition_id}` in <#{channel.id}>")
+
+
 @client.event
 async def on_message(message: discord.Message):
     target_channel_id = config.PICKS_CHANNEL_MAP.get(message.channel.id)
@@ -494,6 +547,10 @@ async def on_message(message: discord.Message):
                 await _auto_tennis_playerprops(
                     target_channel, pick["player"], pick["stat"], pick.get("direction"), pick.get("line")
                 )
+            elif pick["kind"] == "ufc_moneyline":
+                await _auto_ufc(target_channel, pick["team"])
+            elif pick["kind"] == "ufc_round_total":
+                await _auto_ufc(target_channel, pick["team"], pick["direction"], pick["line"])
             else:
                 await _auto_playerprops(
                     target_channel, pick["sport"], pick["player"], pick["stat"],
@@ -734,6 +791,9 @@ def _untrack_one(channel_id: int, game_id: str, player: Optional[str]) -> list[s
     if settracker.stop_tracking(channel_id, game_id):
         stopped.append("1st set pick")
 
+    if ufctracker.stop_tracking(channel_id, game_id):
+        stopped.append("UFC pick")
+
     for entry in proptracker.list_tracked_details(channel_id):
         if str(entry["event_id"]) != str(game_id):
             continue
@@ -891,6 +951,19 @@ async def _gather_tracked_items(channel_id: int) -> list[dict]:
                 tennispropstracker.stop_tracking(cid, gid, comp, sn),
         })
 
+    for entry in ufctracker.list_tracked_details(channel_id):
+        if entry.get("fighter_name"):
+            pick_label = f"{entry['fighter_name']} ML"
+        elif entry.get("total_direction") and entry.get("total_line") is not None:
+            pick_label = f"Fight {entry['total_direction'].title()} {entry['total_line']:g} Rounds"
+        else:
+            pick_label = "UFC pick"
+        items.append({
+            "kind": "ufc", "label": pick_label, "id_label": entry["competition_id"],
+            "message_id": entry["message_id"],
+            "stop": lambda cid=channel_id, compid=entry["competition_id"]: ufctracker.stop_tracking(cid, compid),
+        })
+
     return items
 
 
@@ -930,6 +1003,7 @@ _SECTION_TITLES = {
     "inning1": "Tracked 1st inning result picks",
     "set1": "Tracked 1st set picks",
     "tennis_prop": "Tracked tennis player props",
+    "ufc": "Tracked UFC picks",
 }
 
 
