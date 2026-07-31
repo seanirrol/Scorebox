@@ -43,8 +43,11 @@ _active: dict[str, asyncio.Task] = {}
 # delete handler in bot.py look up who's allowed to delete a given message.
 _message_owners: dict[int, tuple] = {}
 
-_RESULT_TITLES = {"won": "<:winmark:1532115635071488221> Pick Won", "lost": "<:lossmark:1532115600162422894> Pick Lost"}
-_RESULT_REACTIONS = {"won": "<:winmark:1532115635071488221>", "lost": "<:lossmark:1532115600162422894>"}
+_RESULT_TITLES = {
+    "won": "<:winmark:1532115635071488221> Pick Won", "lost": "<:lossmark:1532115600162422894> Pick Lost",
+    "void": "🚫 Voided (No Action)",
+}
+_RESULT_REACTIONS = {"won": "<:winmark:1532115635071488221>", "lost": "<:lossmark:1532115600162422894>", "void": "🚫"}
 
 
 def track_key(channel_id: int, game_id) -> str:
@@ -174,7 +177,36 @@ async def _track_loop(message: discord.Message, sport_id: int, game_id, channel_
 
     consecutive_misses = 0
     consecutive_edit_failures = 0
+
+    async def _repost_final(embed: discord.Embed, file: discord.File):
+        """Bumps the card to the bottom of the channel for a graded/voided
+        result - same repost mechanics as the pre-kickoff bump below. Falls
+        back to editing in place if the repost send itself fails."""
+        nonlocal message
+        try:
+            new_message = await throttle.run(channel_id, lambda: message.channel.send(embed=embed, file=file))
+        except discord.HTTPException as e:
+            log.warning("Failed to repost final 1st-set tracking message: %s", e)
+            try:
+                await throttle.run(channel_id, lambda: message.edit(embed=embed, attachments=[file]))
+            except discord.HTTPException as e2:
+                log.warning("Failed to edit 1st-set tracking message as a fallback: %s", e2)
+            return
+        try:
+            await new_message.add_reaction(TRASH_EMOJI)
+        except discord.HTTPException as e:
+            log.warning("Failed to react to reposted final 1st-set tracking message: %s", e)
+        old_message = message
+        message = new_message
+        _message_owners.pop(old_message.id, None)
+        register_message(message.id, channel_id, game_id, owner_id)
+        try:
+            await old_message.delete()
+        except discord.HTTPException as e:
+            log.warning("Failed to delete old 1st-set tracking message after final repost: %s", e)
+
     await asyncio.sleep(random.uniform(0, config.UPDATE_INTERVAL_SECONDS))
+    game = None
     try:
         while time.monotonic() < deadline:
             await asyncio.sleep(config.UPDATE_INTERVAL_SECONDS)
@@ -243,31 +275,7 @@ async def _track_loop(message: discord.Message, sport_id: int, game_id, channel_
             if breakdown is not None:
                 result = scores365.grade_tennis_set(game, breakdown[0], breakdown[1], team)
 
-                # Bump the graded result to the bottom of the channel instead
-                # of editing in place - same reasoning as the pre-kickoff bump
-                # above: a live match can run long enough that the original
-                # card is buried under chat by the time Set 1 wraps.
-                try:
-                    new_message = await throttle.run(channel_id, lambda: message.channel.send(embed=embed, file=file))
-                except discord.HTTPException as e:
-                    log.warning("Failed to repost final 1st-set tracking message: %s", e)
-                    try:
-                        await throttle.run(channel_id, lambda: message.edit(embed=embed, attachments=[file]))
-                    except discord.HTTPException as e2:
-                        log.warning("Failed to edit 1st-set tracking message as a fallback: %s", e2)
-                else:
-                    try:
-                        await new_message.add_reaction(TRASH_EMOJI)
-                    except discord.HTTPException as e:
-                        log.warning("Failed to react to reposted final 1st-set tracking message: %s", e)
-                    old_message = message
-                    message = new_message
-                    _message_owners.pop(old_message.id, None)
-                    register_message(message.id, channel_id, game_id, owner_id)
-                    try:
-                        await old_message.delete()
-                    except discord.HTTPException as e:
-                        log.warning("Failed to delete old 1st-set tracking message after final repost: %s", e)
+                await _repost_final(embed, file)
 
                 reaction = _RESULT_REACTIONS.get(result)
                 if reaction:
@@ -291,6 +299,23 @@ async def _track_loop(message: discord.Message, sport_id: int, game_id, channel_
                     botlog.event(f"⚠️ Auto-stopped tracking (1st set): game `{game_id}` message edit failed {MAX_CONSECUTIVE_MISSES}x in a row, in <#{channel_id}>")
                     break
                 continue
+        else:
+            # MAX_TRACK_HOURS ran out without Set 1 ever settling. If the
+            # match was left mid-interruption (rain delay, darkness, etc.)
+            # rather than genuinely still in progress, that's stalled, not
+            # just slow - tag it Voided/No Action instead of silently
+            # leaving the card stuck with no result and no cleanup.
+            if game and scores365.is_interrupted(game):
+                embed, file = await build_embed(game, sport_id, team)
+                embed.title = _RESULT_TITLES["void"]
+                embed.color = 0x95A5A6
+                await _repost_final(embed, file)
+                try:
+                    await message.add_reaction(_RESULT_REACTIONS["void"])
+                except discord.HTTPException as e:
+                    log.warning("Failed to add void reaction: %s", e)
+                pendingdelete.start(channel_id, message, embed.description or "")
+                botlog.event(f"➖ Voided (1st set, interrupted, never resumed): game `{game_id}` in <#{channel_id}>")
     except asyncio.CancelledError:
         raise
     finally:

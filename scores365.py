@@ -322,6 +322,14 @@ def is_finished(game: dict) -> bool:
     return map_status_type(game.get("statusGroup"), game.get("statusText")) == "finished"
 
 
+def is_interrupted(game: dict) -> bool:
+    """A paused/suspended match (see map_status_type) - used by trackers to
+    tag a pick Voided/No Action if it's still sitting interrupted once
+    MAX_TRACK_HOURS runs out, rather than leaving the card stuck showing
+    "Interrupted" forever with no result and no cleanup."""
+    return (game.get("statusText") or "").strip().lower() in _IRREGULAR_TERMINAL_STATUS_TEXTS
+
+
 # --- fuzzy team-name matching ----------------------------------------------
 
 def _normalize(name: str) -> str:
