@@ -239,6 +239,45 @@ async def _track_loop(message: discord.Message, sport_id: int, game_id, channel_
                         log.warning("Failed to delete old 1st-set tracking message after repost: %s", e)
                 continue
 
+            breakdown = scores365.tennis_first_set_result(game)
+            if breakdown is not None:
+                result = scores365.grade_tennis_set(game, breakdown[0], breakdown[1], team)
+
+                # Bump the graded result to the bottom of the channel instead
+                # of editing in place - same reasoning as the pre-kickoff bump
+                # above: a live match can run long enough that the original
+                # card is buried under chat by the time Set 1 wraps.
+                try:
+                    new_message = await throttle.run(channel_id, lambda: message.channel.send(embed=embed, file=file))
+                except discord.HTTPException as e:
+                    log.warning("Failed to repost final 1st-set tracking message: %s", e)
+                    try:
+                        await throttle.run(channel_id, lambda: message.edit(embed=embed, attachments=[file]))
+                    except discord.HTTPException as e2:
+                        log.warning("Failed to edit 1st-set tracking message as a fallback: %s", e2)
+                else:
+                    try:
+                        await new_message.add_reaction(TRASH_EMOJI)
+                    except discord.HTTPException as e:
+                        log.warning("Failed to react to reposted final 1st-set tracking message: %s", e)
+                    old_message = message
+                    message = new_message
+                    _message_owners.pop(old_message.id, None)
+                    register_message(message.id, channel_id, game_id, owner_id)
+                    try:
+                        await old_message.delete()
+                    except discord.HTTPException as e:
+                        log.warning("Failed to delete old 1st-set tracking message after final repost: %s", e)
+
+                reaction = _RESULT_REACTIONS.get(result)
+                if reaction:
+                    try:
+                        await message.add_reaction(reaction)
+                    except discord.HTTPException as e:
+                        log.warning("Failed to add result reaction: %s", e)
+                pendingdelete.start(channel_id, message, embed.description or "")
+                break
+
             try:
                 await throttle.run(channel_id, lambda: message.edit(embed=embed, attachments=[file]))
                 consecutive_edit_failures = 0
@@ -252,18 +291,6 @@ async def _track_loop(message: discord.Message, sport_id: int, game_id, channel_
                     botlog.event(f"⚠️ Auto-stopped tracking (1st set): game `{game_id}` message edit failed {MAX_CONSECUTIVE_MISSES}x in a row, in <#{channel_id}>")
                     break
                 continue
-
-            breakdown = scores365.tennis_first_set_result(game)
-            if breakdown is not None:
-                result = scores365.grade_tennis_set(game, breakdown[0], breakdown[1], team)
-                reaction = _RESULT_REACTIONS.get(result)
-                if reaction:
-                    try:
-                        await message.add_reaction(reaction)
-                    except discord.HTTPException as e:
-                        log.warning("Failed to add result reaction: %s", e)
-                pendingdelete.start(channel_id, message, embed.description or "")
-                break
     except asyncio.CancelledError:
         raise
     finally:

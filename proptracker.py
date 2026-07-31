@@ -373,21 +373,33 @@ async def _track_loop(
                         log.warning("Failed to delete old prop tracking message after repost: %s", e)
                 continue
 
-            try:
-                await throttle.run(channel_id, lambda: message.edit(embed=embed, attachments=[file]))
-                consecutive_edit_failures = 0
-            except discord.HTTPException as e:
-                consecutive_edit_failures += 1
-                log.warning(
-                    "Failed to edit prop tracking message (failure %d/%d): %s",
-                    consecutive_edit_failures, MAX_CONSECUTIVE_MISSES, e,
-                )
-                if consecutive_edit_failures >= MAX_CONSECUTIVE_MISSES:
-                    botlog.event(f"⚠️ Auto-stopped tracking (prop): **{player_name}** — message edit failed {MAX_CONSECUTIVE_MISSES}x in a row, in <#{channel_id}>")
-                    break
-                continue
-
             if espn.is_finished(event) or espn.is_postponed(event):
+                # Bump the graded result to the bottom of the channel instead
+                # of editing in place - same reasoning as the pre-kickoff bump
+                # above: a live event can run long enough that the original
+                # card is buried under chat by the time it's graded.
+                try:
+                    new_message = await throttle.run(channel_id, lambda: message.channel.send(embed=embed, file=file))
+                except discord.HTTPException as e:
+                    log.warning("Failed to repost final prop tracking message: %s", e)
+                    try:
+                        await throttle.run(channel_id, lambda: message.edit(embed=embed, attachments=[file]))
+                    except discord.HTTPException as e2:
+                        log.warning("Failed to edit prop tracking message as a fallback: %s", e2)
+                else:
+                    try:
+                        await new_message.add_reaction(TRASH_EMOJI)
+                    except discord.HTTPException as e:
+                        log.warning("Failed to react to reposted final prop tracking message: %s", e)
+                    old_message = message
+                    message = new_message
+                    _message_owners.pop(old_message.id, None)
+                    register_message(message.id, channel_id, event_id, entity_id, stat_key, owner_id)
+                    try:
+                        await old_message.delete()
+                    except discord.HTTPException as e:
+                        log.warning("Failed to delete old prop tracking message after final repost: %s", e)
+
                 if espn.is_finished(event) and direction is not None and line is not None:
                     reaction = _RESULT_REACTIONS.get(espn.grade_over_under(current_value, direction, line))
                     if reaction:
@@ -401,6 +413,20 @@ async def _track_loop(
                 # out and leaving the stale card behind forever.
                 pendingdelete.start(channel_id, message, embed.description or "")
                 break
+
+            try:
+                await throttle.run(channel_id, lambda: message.edit(embed=embed, attachments=[file]))
+                consecutive_edit_failures = 0
+            except discord.HTTPException as e:
+                consecutive_edit_failures += 1
+                log.warning(
+                    "Failed to edit prop tracking message (failure %d/%d): %s",
+                    consecutive_edit_failures, MAX_CONSECUTIVE_MISSES, e,
+                )
+                if consecutive_edit_failures >= MAX_CONSECUTIVE_MISSES:
+                    botlog.event(f"⚠️ Auto-stopped tracking (prop): **{player_name}** — message edit failed {MAX_CONSECUTIVE_MISSES}x in a row, in <#{channel_id}>")
+                    break
+                continue
     except asyncio.CancelledError:
         raise
     finally:

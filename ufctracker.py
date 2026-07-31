@@ -262,6 +262,50 @@ async def _track_loop(
                         log.warning("Failed to delete old UFC tracking message after repost: %s", e)
                 continue
 
+            if espn_ufc.is_finished(competition):
+                if fighter_id is not None:
+                    fighter_a = next((c for c in competition.get("competitors", []) if str(c.get("id")) == str(fighter_id)), None)
+                    result = espn_ufc.grade_ufc_moneyline(competition, fighter_a) if fighter_a else None
+                elif total_direction and total_line is not None:
+                    result = espn_ufc.grade_ufc_round_total(competition, total_direction, total_line)
+                else:
+                    result = None
+
+                # Bump the graded result to the bottom of the channel instead
+                # of editing in place - same reasoning as the pre-fight bump
+                # above: a live card can run long enough that the original
+                # card is buried under chat by the time the bout is graded.
+                try:
+                    new_message = await throttle.run(channel_id, lambda: message.channel.send(embed=embed, file=file))
+                except discord.HTTPException as e:
+                    log.warning("Failed to repost final UFC tracking message: %s", e)
+                    try:
+                        await throttle.run(channel_id, lambda: message.edit(embed=embed, attachments=[file]))
+                    except discord.HTTPException as e2:
+                        log.warning("Failed to edit UFC tracking message as a fallback: %s", e2)
+                else:
+                    try:
+                        await new_message.add_reaction(TRASH_EMOJI)
+                    except discord.HTTPException as e:
+                        log.warning("Failed to react to reposted final UFC tracking message: %s", e)
+                    old_message = message
+                    message = new_message
+                    _message_owners.pop(old_message.id, None)
+                    register_message(message.id, channel_id, competition_id, owner_id)
+                    try:
+                        await old_message.delete()
+                    except discord.HTTPException as e:
+                        log.warning("Failed to delete old UFC tracking message after final repost: %s", e)
+
+                reaction = _RESULT_REACTIONS.get(result)
+                if reaction:
+                    try:
+                        await message.add_reaction(reaction)
+                    except discord.HTTPException as e:
+                        log.warning("Failed to add result reaction: %s", e)
+                pendingdelete.start(channel_id, message, embed.description or "")
+                break
+
             try:
                 await throttle.run(channel_id, lambda: message.edit(embed=embed, attachments=[file]))
                 consecutive_edit_failures = 0
@@ -275,23 +319,6 @@ async def _track_loop(
                     botlog.event(f"⚠️ Auto-stopped tracking (UFC): bout `{competition_id}` message edit failed {MAX_CONSECUTIVE_MISSES}x in a row, in <#{channel_id}>")
                     break
                 continue
-
-            if espn_ufc.is_finished(competition):
-                if fighter_id is not None:
-                    fighter_a = next((c for c in competition.get("competitors", []) if str(c.get("id")) == str(fighter_id)), None)
-                    result = espn_ufc.grade_ufc_moneyline(competition, fighter_a) if fighter_a else None
-                elif total_direction and total_line is not None:
-                    result = espn_ufc.grade_ufc_round_total(competition, total_direction, total_line)
-                else:
-                    result = None
-                reaction = _RESULT_REACTIONS.get(result)
-                if reaction:
-                    try:
-                        await message.add_reaction(reaction)
-                    except discord.HTTPException as e:
-                        log.warning("Failed to add result reaction: %s", e)
-                pendingdelete.start(channel_id, message, embed.description or "")
-                break
     except asyncio.CancelledError:
         raise
     finally:

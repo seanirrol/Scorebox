@@ -301,6 +301,54 @@ async def _track_loop(
                         log.warning("Failed to delete old F5 tracking message after repost: %s", e)
                 continue
 
+            breakdown = await asyncio.to_thread(scores365.innings_breakdown, game_id, THROUGH_INNING)
+            if breakdown is not None:
+                if picked_team and handicap_line is not None:
+                    result = scores365.grade_f5_handicap(game, breakdown[0], breakdown[1], picked_team, handicap_line)
+                elif picked_team and total_direction and total_line is not None:
+                    result = scores365.grade_f5_team_total(
+                        game, breakdown[0], breakdown[1], picked_team, total_direction, total_line
+                    )
+                elif total_direction and total_line is not None:
+                    result = scores365.grade_f5_combined_total(breakdown[0], breakdown[1], total_direction, total_line)
+                else:
+                    result = scores365.grade_f5_moneyline(game, breakdown[0], breakdown[1], picked_team)
+
+                # Bump the graded result to the bottom of the channel instead
+                # of editing in place - same reasoning as the pre-kickoff bump
+                # above: a live game can run long enough that the original
+                # card is buried under chat by the time F5 is graded.
+                try:
+                    new_message = await throttle.run(channel_id, lambda: message.channel.send(embed=embed, file=file))
+                except discord.HTTPException as e:
+                    log.warning("Failed to repost final F5 tracking message: %s", e)
+                    try:
+                        await throttle.run(channel_id, lambda: message.edit(embed=embed, attachments=[file]))
+                    except discord.HTTPException as e2:
+                        log.warning("Failed to edit F5 tracking message as a fallback: %s", e2)
+                else:
+                    try:
+                        await new_message.add_reaction(TRASH_EMOJI)
+                    except discord.HTTPException as e:
+                        log.warning("Failed to react to reposted final F5 tracking message: %s", e)
+                    old_message = message
+                    message = new_message
+                    _message_owners.pop(old_message.id, None)
+                    register_message(message.id, channel_id, game_id, owner_id)
+                    try:
+                        await old_message.delete()
+                    except discord.HTTPException as e:
+                        log.warning("Failed to delete old F5 tracking message after final repost: %s", e)
+
+                reaction = _RESULT_REACTIONS.get(result)
+                if reaction:
+                    try:
+                        await message.add_reaction(reaction)
+                    except discord.HTTPException as e:
+                        log.warning("Failed to add result reaction: %s", e)
+                pendingdelete.start(channel_id, message, embed.description or "")
+                break
+
             try:
                 await throttle.run(channel_id, lambda: message.edit(embed=embed, attachments=[file]))
                 consecutive_edit_failures = 0
@@ -314,27 +362,6 @@ async def _track_loop(
                     botlog.event(f"⚠️ Auto-stopped tracking (F5): game `{game_id}` message edit failed {MAX_CONSECUTIVE_MISSES}x in a row, in <#{channel_id}>")
                     break
                 continue
-
-            breakdown = await asyncio.to_thread(scores365.innings_breakdown, game_id, THROUGH_INNING)
-            if breakdown is not None:
-                if picked_team and handicap_line is not None:
-                    result = scores365.grade_f5_handicap(game, breakdown[0], breakdown[1], picked_team, handicap_line)
-                elif picked_team and total_direction and total_line is not None:
-                    result = scores365.grade_f5_team_total(
-                        game, breakdown[0], breakdown[1], picked_team, total_direction, total_line
-                    )
-                elif total_direction and total_line is not None:
-                    result = scores365.grade_f5_combined_total(breakdown[0], breakdown[1], total_direction, total_line)
-                else:
-                    result = scores365.grade_f5_moneyline(game, breakdown[0], breakdown[1], picked_team)
-                reaction = _RESULT_REACTIONS.get(result)
-                if reaction:
-                    try:
-                        await message.add_reaction(reaction)
-                    except discord.HTTPException as e:
-                        log.warning("Failed to add result reaction: %s", e)
-                pendingdelete.start(channel_id, message, embed.description or "")
-                break
     except asyncio.CancelledError:
         raise
     finally:

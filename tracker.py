@@ -330,6 +330,44 @@ async def _track_loop(
                         log.warning("Failed to delete old tracking message after repost: %s", e)
                 continue
 
+            if scores365.is_finished(game):
+                # Bump the graded result to the bottom of the channel instead
+                # of editing in place - a live match can run long enough that
+                # the original card is buried under chat by the time it's
+                # graded, and that's exactly the moment visibility matters
+                # most. Same repost mechanics as the pre-kickoff bump above.
+                try:
+                    new_message = await throttle.run(channel_id, lambda: message.channel.send(embed=embed, file=file))
+                except discord.HTTPException as e:
+                    log.warning("Failed to repost final tracking message: %s", e)
+                    try:
+                        await throttle.run(channel_id, lambda: message.edit(embed=embed, attachments=[file]))
+                    except discord.HTTPException as e2:
+                        log.warning("Failed to edit tracking message as a fallback: %s", e2)
+                else:
+                    try:
+                        await new_message.add_reaction(TRASH_EMOJI)
+                    except discord.HTTPException as e:
+                        log.warning("Failed to react to reposted final tracking message: %s", e)
+                    old_message = message
+                    message = new_message
+                    _message_owners.pop(old_message.id, None)
+                    register_message(message.id, channel_id, game_id, owner_id)
+                    try:
+                        await old_message.delete()
+                    except discord.HTTPException as e:
+                        log.warning("Failed to delete old tracking message after final repost: %s", e)
+
+                if picked_team or (total_direction and total_line is not None):
+                    reaction = _RESULT_REACTIONS.get(_grade(game, picked_team, team_total, total_direction, total_line))
+                    if reaction:
+                        try:
+                            await message.add_reaction(reaction)
+                        except discord.HTTPException as e:
+                            log.warning("Failed to add result reaction: %s", e)
+                pendingdelete.start(channel_id, message, embed.description or "")
+                break
+
             try:
                 await throttle.run(channel_id, lambda: message.edit(embed=embed, attachments=[file]))
                 consecutive_edit_failures = 0
@@ -343,17 +381,6 @@ async def _track_loop(
                     botlog.event(f"⚠️ Auto-stopped tracking (message edit failed {MAX_CONSECUTIVE_MISSES}x in a row) for game `{game_id}` in <#{channel_id}>")
                     break
                 continue
-
-            if scores365.is_finished(game):
-                if picked_team or (total_direction and total_line is not None):
-                    reaction = _RESULT_REACTIONS.get(_grade(game, picked_team, team_total, total_direction, total_line))
-                    if reaction:
-                        try:
-                            await message.add_reaction(reaction)
-                        except discord.HTTPException as e:
-                            log.warning("Failed to add result reaction: %s", e)
-                pendingdelete.start(channel_id, message, embed.description or "")
-                break
     except asyncio.CancelledError:
         raise
     finally:
