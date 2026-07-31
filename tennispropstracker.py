@@ -23,7 +23,9 @@ from typing import Optional
 
 import discord
 
+import botlog
 import config
+import pendingdelete
 import scoreimage
 import scores365
 import sofascore
@@ -31,8 +33,6 @@ import state
 import throttle
 
 log = logging.getLogger("scorebox.tennispropstracker")
-
-POST_MATCH_DELETE_SECONDS = 24 * 3600
 MAX_CONSECUTIVE_MISSES = 3
 TRASH_EMOJI = "🗑️"
 
@@ -210,6 +210,7 @@ async def _track_loop(
                     event_id, consecutive_misses, MAX_CONSECUTIVE_MISSES,
                 )
                 if consecutive_misses >= MAX_CONSECUTIVE_MISSES:
+                    botlog.event(f"⚠️ Auto-stopped tracking (tennis prop): **{player_name}** — event `{event_id}` not found {MAX_CONSECUTIVE_MISSES}x in a row, in <#{channel_id}>")
                     break
                 continue
             consecutive_misses = 0
@@ -251,6 +252,7 @@ async def _track_loop(
                     consecutive_edit_failures, MAX_CONSECUTIVE_MISSES, e,
                 )
                 if consecutive_edit_failures >= MAX_CONSECUTIVE_MISSES:
+                    botlog.event(f"⚠️ Auto-stopped tracking (tennis prop): **{player_name}** — message edit failed {MAX_CONSECUTIVE_MISSES}x in a row, in <#{channel_id}>")
                     break
                 continue
 
@@ -262,11 +264,7 @@ async def _track_loop(
                             await message.add_reaction(reaction)
                         except discord.HTTPException as e:
                             log.warning("Failed to add result reaction: %s", e)
-                await asyncio.sleep(POST_MATCH_DELETE_SECONDS)
-                try:
-                    await message.delete()
-                except discord.HTTPException as e:
-                    log.warning("Failed to delete finished tennis prop tracking message: %s", e)
+                pendingdelete.start(channel_id, message)
                 break
     except asyncio.CancelledError:
         raise

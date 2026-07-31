@@ -20,11 +20,13 @@ from typing import Optional
 import discord
 from discord import app_commands
 
+import botlog
 import config
 import espn
 import f5tracker
 import inning1tracker
 import inningtracker
+import pendingdelete
 import picks
 import proptracker
 import scores365
@@ -41,6 +43,7 @@ intents = discord.Intents.default()
 intents.message_content = True  # needed to read pick messages in config.PICKS_CHANNEL_MAP
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
+botlog.init(client)
 
 SPORT_CHOICES = [
     app_commands.Choice(name="Soccer", value="soccer"),
@@ -67,6 +70,7 @@ async def on_ready():
     await inning1tracker.resume_all(client)
     await settracker.resume_all(client)
     await tennispropstracker.resume_all(client)
+    await pendingdelete.resume_all(client)
 
 
 @client.event
@@ -135,6 +139,9 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
         channel_id, event_id, entity_id, stat_key, _ = info
         tennispropstracker.stop_tracking(channel_id, event_id, entity_id, stat_key)
 
+    reactor = f"<@{payload.user_id}>"
+    botlog.event(f"🗑️ Untracked (🗑️ reaction, {kind}): message `{payload.message_id}` in <#{payload.channel_id}> — by {reactor}")
+
     try:
         await message.delete()
     except discord.HTTPException as e:
@@ -159,13 +166,16 @@ async def _auto_track(
         result = await asyncio.to_thread(scores365.find_match_for_team, team, sport_value)
     except scores365.ScoresError as e:
         log.info("Auto-track: couldn't reach 365scores for '%s': %s", team, e)
+        botlog.event(f"❌ Not tracked: **{team}** ({sport_value}) — couldn't reach 365scores: {e}")
         return
     if not result:
         log.info("Auto-track: no match found for '%s' (%s)", team, sport_value)
+        botlog.event(f"❌ Not tracked: **{team}** ({sport_value}) — no match found")
         return
     game, sport_id = result
     game_id = game["id"]
     if tracker.is_tracked(channel.id, game_id):
+        botlog.event(f"⏭️ Skipped: **{team}** — game `{game_id}` already being tracked in <#{channel.id}>")
         return
 
     picked_team = team if total_direction is None and team_total is None else None
@@ -175,11 +185,13 @@ async def _auto_track(
     await message.add_reaction(TRASH_EMOJI)
 
     if scores365.is_finished(game):
+        botlog.event(f"⏭️ Not tracked: **{team}** — game `{game_id}` already finished, posted final score only")
         return
     tracker.start_tracking(
         message, sport_id, game, channel.id, None, picked_team, total_direction, total_line, team_total
     )
     log.info("Auto-tracked pick '%s' -> game %s", team, game_id)
+    botlog.event(f"✅ Tracked: **{team}** ({sport_value}) — game `{game_id}` in <#{channel.id}>")
 
 
 async def _auto_f5(
@@ -196,13 +208,16 @@ async def _auto_f5(
         result = await asyncio.to_thread(scores365.find_match_for_team, team, sport_value)
     except scores365.ScoresError as e:
         log.info("Auto-F5: couldn't reach 365scores for '%s': %s", team, e)
+        botlog.event(f"❌ Not tracked (F5): **{team}** ({sport_value}) — couldn't reach 365scores: {e}")
         return
     if not result:
         log.info("Auto-F5: no match found for '%s' (%s)", team, sport_value)
+        botlog.event(f"❌ Not tracked (F5): **{team}** ({sport_value}) — no match found")
         return
     game, sport_id = result
     game_id = game["id"]
     if f5tracker.is_tracked(channel.id, game_id):
+        botlog.event(f"⏭️ Skipped (F5): **{team}** — game `{game_id}` already being tracked in <#{channel.id}>")
         return
 
     picked_team = None if combined else team
@@ -212,11 +227,13 @@ async def _auto_f5(
     await message.add_reaction(TRASH_EMOJI)
 
     if await asyncio.to_thread(scores365.innings_breakdown, game_id, f5tracker.THROUGH_INNING) is not None:
+        botlog.event(f"⏭️ Not tracked (F5): **{team}** — game `{game_id}` F5 already decided, posted final score only")
         return  # F5 was already decided by the time this pick was posted
     f5tracker.start_tracking(
         message, sport_id, game, channel.id, None, picked_team, total_direction, total_line, handicap_line
     )
     log.info("Auto-tracked F5 pick '%s' -> game %s", team, game_id)
+    botlog.event(f"✅ Tracked (F5): **{team}** ({sport_value}) — game `{game_id}` in <#{channel.id}>")
 
 
 async def _auto_playerprops(
@@ -226,23 +243,29 @@ async def _auto_playerprops(
     """Mirrors /playerprops' core logic for an auto-detected pick."""
     stat_key = espn.STAT_CATALOG.get(sport_value, {}).get(stat)
     if not stat_key:
+        botlog.event(f"❌ Not tracked (prop): **{player}** {stat} ({sport_value}) — unknown stat for this sport")
         return
     try:
         entity = await asyncio.to_thread(espn.find_player, player, sport_value)
     except espn.EspnError as e:
         log.info("Auto-playerprops: couldn't reach ESPN for '%s': %s", player, e)
+        botlog.event(f"❌ Not tracked (prop): **{player}** {stat} — couldn't reach ESPN: {e}")
         return
     if not entity:
         log.info("Auto-playerprops: no player found for '%s' (%s)", player, sport_value)
+        botlog.event(f"❌ Not tracked (prop): **{player}** {stat} ({sport_value}) — player not found on ESPN")
         return
 
     event_id = await asyncio.to_thread(espn.find_current_event_id, sport_value, entity["team_id"])
     if not event_id:
+        botlog.event(f"❌ Not tracked (prop): **{player}** {stat} — no current/upcoming match found on ESPN")
         return
     event = await asyncio.to_thread(espn.get_event, sport_value, event_id)
     if not event:
+        botlog.event(f"❌ Not tracked (prop): **{player}** {stat} — couldn't fetch match data from ESPN")
         return
     if proptracker.is_tracked(channel.id, event_id, entity["id"], stat_key):
+        botlog.event(f"⏭️ Skipped (prop): **{player}** {stat} — already being tracked in <#{channel.id}>")
         return
 
     current_value, is_home, team = await asyncio.to_thread(espn.get_stat_value, event, entity["id"], stat_key)
@@ -255,12 +278,14 @@ async def _auto_playerprops(
     await message.add_reaction(TRASH_EMOJI)
 
     if espn.is_finished(event):
+        botlog.event(f"⏭️ Not tracked (prop): **{player}** {stat} — match already finished, posted final value only")
         return
     proptracker.start_tracking(
         message, channel.id, event_id, entity["id"], entity["team_id"], entity["photo_url"],
         sport_value, stat_key, stat, entity["name"], None, direction, line, entity["team_name"],
     )
     log.info("Auto-tracked player prop pick: %s - %s", player, stat)
+    botlog.event(f"✅ Tracked (prop): **{player}** {stat} ({sport_value}) in <#{channel.id}>")
 
 
 async def _auto_tennis_playerprops(
@@ -272,21 +297,26 @@ async def _auto_tennis_playerprops(
     tennispropstracker.py."""
     stat_key = sofascore.STAT_CATALOG.get("tennis", {}).get(stat)
     if not stat_key:
+        botlog.event(f"❌ Not tracked (tennis prop): **{player}** {stat} — unknown stat")
         return
     try:
         entity = await asyncio.to_thread(sofascore.find_player, player, "tennis")
     except sofascore.SofascoreError as e:
         log.info("Auto-tennis-playerprops: couldn't reach Sofascore for '%s': %s", player, e)
+        botlog.event(f"❌ Not tracked (tennis prop): **{player}** {stat} — couldn't reach Sofascore: {e}")
         return
     if not entity:
         log.info("Auto-tennis-playerprops: no player found for '%s'", player)
+        botlog.event(f"❌ Not tracked (tennis prop): **{player}** {stat} — player not found on Sofascore")
         return
 
     event = await asyncio.to_thread(sofascore.find_current_event, entity["id"], entity["is_tennis"])
     if not event:
+        botlog.event(f"❌ Not tracked (tennis prop): **{player}** {stat} — no current/recent match found on Sofascore")
         return
     event_id = event["id"]
     if tennispropstracker.is_tracked(channel.id, event_id, entity["id"], stat_key):
+        botlog.event(f"⏭️ Skipped (tennis prop): **{player}** {stat} — already being tracked in <#{channel.id}>")
         return
 
     current_value, _is_home = await asyncio.to_thread(sofascore.get_stat_value, event, entity["id"], True, stat_key)
@@ -299,11 +329,13 @@ async def _auto_tennis_playerprops(
     await message.add_reaction(TRASH_EMOJI)
 
     if sofascore.is_finished(event):
+        botlog.event(f"⏭️ Not tracked (tennis prop): **{player}** {stat} — match already finished, posted final value only")
         return
     tennispropstracker.start_tracking(
         message, channel.id, event_id, entity["id"], stat_key, stat, entity["name"], photo_url, None, direction, line,
     )
     log.info("Auto-tracked tennis player prop pick: %s - %s", player, stat)
+    botlog.event(f"✅ Tracked (tennis prop): **{player}** {stat} in <#{channel.id}>")
 
 
 async def _auto_inning_runs(channel: discord.abc.Messageable, team: str, pick_type: str):
@@ -313,18 +345,23 @@ async def _auto_inning_runs(channel: discord.abc.Messageable, team: str, pick_ty
         entity = await asyncio.to_thread(espn.find_team, team, "baseball")
     except espn.EspnError as e:
         log.info("Auto-inning-runs: couldn't reach ESPN for '%s': %s", team, e)
+        botlog.event(f"❌ Not tracked ({pick_type}): **{team}** — couldn't reach ESPN: {e}")
         return
     if not entity:
         log.info("Auto-inning-runs: no team found for '%s'", team)
+        botlog.event(f"❌ Not tracked ({pick_type}): **{team}** — team not found on ESPN")
         return
 
     event_id = await asyncio.to_thread(espn.find_current_event_id, "baseball", entity["id"])
     if not event_id:
+        botlog.event(f"❌ Not tracked ({pick_type}): **{team}** — no current/upcoming match found on ESPN")
         return
     event = await asyncio.to_thread(espn.get_event, "baseball", event_id)
     if not event:
+        botlog.event(f"❌ Not tracked ({pick_type}): **{team}** — couldn't fetch match data from ESPN")
         return
     if inningtracker.is_tracked(channel.id, event_id, pick_type):
+        botlog.event(f"⏭️ Skipped ({pick_type}): **{team}** — already being tracked in <#{channel.id}>")
         return
 
     embed, file = await inningtracker.build_embed(event, pick_type)
@@ -333,9 +370,11 @@ async def _auto_inning_runs(channel: discord.abc.Messageable, team: str, pick_ty
     await message.add_reaction(TRASH_EMOJI)
 
     if espn.get_first_inning_breakdown(event) is not None:
+        botlog.event(f"⏭️ Not tracked ({pick_type}): **{team}** — 1st inning already decided, posted final result only")
         return  # 1st inning was already decided by the time this pick was posted
     inningtracker.start_tracking(message, channel.id, event_id, pick_type, entity["id"], None)
     log.info("Auto-tracked inning-runs pick '%s' (%s) -> event %s", team, pick_type, event_id)
+    botlog.event(f"✅ Tracked ({pick_type}): **{team}** — event `{event_id}` in <#{channel.id}>")
 
 
 async def _auto_inning1_result(channel: discord.abc.Messageable, team: str, pick: str):
@@ -346,13 +385,16 @@ async def _auto_inning1_result(channel: discord.abc.Messageable, team: str, pick
         result = await asyncio.to_thread(scores365.find_match_for_team, team, "baseball")
     except scores365.ScoresError as e:
         log.info("Auto-1st-inning-result: couldn't reach 365scores for '%s': %s", team, e)
+        botlog.event(f"❌ Not tracked (1st inning result): **{team}** — couldn't reach 365scores: {e}")
         return
     if not result:
         log.info("Auto-1st-inning-result: no match found for '%s'", team)
+        botlog.event(f"❌ Not tracked (1st inning result): **{team}** — no match found")
         return
     game, sport_id = result
     game_id = game["id"]
     if inning1tracker.is_tracked(channel.id, game_id):
+        botlog.event(f"⏭️ Skipped (1st inning result): **{team}** — game `{game_id}` already being tracked in <#{channel.id}>")
         return
 
     embed, file = await inning1tracker.build_embed(game, sport_id, team, pick)
@@ -361,9 +403,11 @@ async def _auto_inning1_result(channel: discord.abc.Messageable, team: str, pick
     await message.add_reaction(TRASH_EMOJI)
 
     if await asyncio.to_thread(scores365.innings_breakdown, game_id, inning1tracker.THROUGH_INNING) is not None:
+        botlog.event(f"⏭️ Not tracked (1st inning result): **{team}** — game `{game_id}` already decided, posted final result only")
         return  # already decided by the time this pick was posted
     inning1tracker.start_tracking(message, sport_id, game, channel.id, None, team, pick)
     log.info("Auto-tracked 1st-inning-result pick '%s' (%s) -> game %s", team, pick, game_id)
+    botlog.event(f"✅ Tracked (1st inning result): **{team}** ({pick}) — game `{game_id}` in <#{channel.id}>")
 
 
 async def _auto_set1(channel: discord.abc.Messageable, team: str):
@@ -374,13 +418,16 @@ async def _auto_set1(channel: discord.abc.Messageable, team: str):
         result = await asyncio.to_thread(scores365.find_match_for_team, team, "tennis")
     except scores365.ScoresError as e:
         log.info("Auto-1st-set: couldn't reach 365scores for '%s': %s", team, e)
+        botlog.event(f"❌ Not tracked (1st set): **{team}** — couldn't reach 365scores: {e}")
         return
     if not result:
         log.info("Auto-1st-set: no match found for '%s'", team)
+        botlog.event(f"❌ Not tracked (1st set): **{team}** — no match found")
         return
     game, sport_id = result
     game_id = game["id"]
     if settracker.is_tracked(channel.id, game_id):
+        botlog.event(f"⏭️ Skipped (1st set): **{team}** — game `{game_id}` already being tracked in <#{channel.id}>")
         return
 
     embed, file = await settracker.build_embed(game, sport_id, team)
@@ -389,9 +436,11 @@ async def _auto_set1(channel: discord.abc.Messageable, team: str):
     await message.add_reaction(TRASH_EMOJI)
 
     if scores365.tennis_first_set_result(game) is not None:
+        botlog.event(f"⏭️ Not tracked (1st set): **{team}** — game `{game_id}` Set 1 already decided, posted final result only")
         return  # already decided by the time this pick was posted
     settracker.start_tracking(message, sport_id, game, channel.id, None, team)
     log.info("Auto-tracked 1st-set pick '%s' -> game %s", team, game_id)
+    botlog.event(f"✅ Tracked (1st set): **{team}** — game `{game_id}` in <#{channel.id}>")
 
 
 @client.event
@@ -403,11 +452,17 @@ async def on_message(message: discord.Message):
     log.info("Picks channel message received: %r", message.content)
     parsed = picks.parse_picks_message(message.content)
     log.info("Parsed %d pick(s) from that message", len(parsed))
+    line_count = len([ln for ln in message.content.splitlines() if ln.strip()])
+    botlog.event(
+        f"📥 Picks message from **{message.author}** in <#{message.channel.id}>: "
+        f"parsed {len(parsed)}/{line_count} line(s)"
+    )
 
     try:
         target_channel = client.get_channel(target_channel_id) or await client.fetch_channel(target_channel_id)
     except discord.HTTPException as e:
         log.warning("Auto-track: couldn't reach scores channel %s: %s", target_channel_id, e)
+        botlog.event(f"❌ Couldn't reach target scores channel `{target_channel_id}`: {e}")
         return
 
     for pick in parsed:
@@ -447,6 +502,7 @@ async def on_message(message: discord.Message):
                 )
         except Exception as e:
             log.warning("Failed to auto-track pick %s: %s", pick, e)
+            botlog.event(f"❌ Not tracked: pick `{pick}` — unexpected error: {e}")
 
 
 def _channel_allowed(interaction: discord.Interaction) -> bool:
@@ -456,6 +512,14 @@ def _channel_allowed(interaction: discord.Interaction) -> bool:
 async def _reject_wrong_channel(interaction: discord.Interaction):
     channels = ", ".join(f"<#{cid}>" for cid in config.ALLOWED_CHANNEL_IDS)
     await interaction.response.send_message(f"This bot only works in {channels}.", ephemeral=True)
+
+
+def _log_command(interaction: discord.Interaction, **params):
+    detail = ", ".join(f"{k}={v}" for k, v in params.items() if v is not None)
+    botlog.event(
+        f"⌨️ **{interaction.user}** used `/{interaction.command.name}` in <#{interaction.channel_id}>"
+        + (f" — {detail}" if detail else "")
+    )
 
 
 async def _find_match_or_reply(interaction: discord.Interaction, team: str, sport: Optional[str], ephemeral: bool = False):
@@ -483,6 +547,7 @@ async def score(interaction: discord.Interaction, sport: app_commands.Choice[str
     if not _channel_allowed(interaction):
         await _reject_wrong_channel(interaction)
         return
+    _log_command(interaction, sport=sport.name, team=team)
     result = await _find_match_or_reply(interaction, team, sport.value, ephemeral=True)
     if not result:
         return
@@ -498,6 +563,7 @@ async def track(interaction: discord.Interaction, sport: app_commands.Choice[str
     if not _channel_allowed(interaction):
         await _reject_wrong_channel(interaction)
         return
+    _log_command(interaction, sport=sport.name, team=team)
     result = await _find_match_or_reply(interaction, team, sport.value)
     if not result:
         return
@@ -522,6 +588,7 @@ async def track(interaction: discord.Interaction, sport: app_commands.Choice[str
         return  # Nothing to track, match is already over.
 
     tracker.start_tracking(message, sport_id, game, interaction.channel_id, interaction.user.id, team)
+    botlog.event(f"✅ Tracked (manual): **{team}** ({sport.name}) — game `{game_id}` in <#{interaction.channel_id}>, by **{interaction.user}**")
 
 
 async def stat_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
@@ -575,6 +642,7 @@ async def _playerprops_tennis(interaction: discord.Interaction, player: str, sta
             message, interaction.channel_id, event_id, entity["id"], stat_key, stat, entity["name"], photo_url,
             interaction.user.id,
         )
+    botlog.event(f"✅ Tracked (manual, tennis prop): **{player}** {stat} in <#{interaction.channel_id}>, by **{interaction.user}**")
 
 
 @tree.command(name="playerprops", description="Track a player's live stat, e.g. Points, Earned Runs, Aces")
@@ -589,6 +657,7 @@ async def playerprops(interaction: discord.Interaction, sport: app_commands.Choi
     if not _channel_allowed(interaction):
         await _reject_wrong_channel(interaction)
         return
+    _log_command(interaction, sport=sport.name, player=player, stat=stat)
     await interaction.response.defer()
 
     if sport.value == "tennis":
@@ -647,6 +716,7 @@ async def playerprops(interaction: discord.Interaction, sport: app_commands.Choi
             sport.value, stat_key, stat, entity["name"], interaction.user.id,
             known_team_name=entity["team_name"],
         )
+    botlog.event(f"✅ Tracked (manual, prop): **{player}** {stat} ({sport.name}) in <#{interaction.channel_id}>, by **{interaction.user}**")
 
 
 def _untrack_one(channel_id: int, game_id: str, player: Optional[str]) -> list[str]:
@@ -723,6 +793,8 @@ class _UntrackSelect(discord.ui.Select):
             item = self._by_value[value]
             stopped = item["stop"]()
             lines.append(f"{'🗑️' if stopped else '⚠️'} {item['label']} — {'untracked' if stopped else 'already gone'}")
+            if stopped:
+                botlog.event(f"🗑️ Untracked (manual, /tracked dropdown): {item['label']} — by **{interaction.user}**")
         await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
 
@@ -833,6 +905,7 @@ async def untrack(interaction: discord.Interaction, game_id: str, player: Option
     if not _channel_allowed(interaction):
         await _reject_wrong_channel(interaction)
         return
+    _log_command(interaction, game_id=game_id, player=player)
 
     game_ids = [gid for gid in re.split(r"[,\s]+", game_id.strip()) if gid]
     if not game_ids:
@@ -844,6 +917,7 @@ async def untrack(interaction: discord.Interaction, game_id: str, player: Option
         stopped = _untrack_one(interaction.channel_id, gid, player)
         if stopped:
             lines.append(f"`{gid}` — stopped: {', '.join(stopped)}")
+            botlog.event(f"🗑️ Untracked (manual /untrack): `{gid}` — {', '.join(stopped)} — by **{interaction.user}**")
         else:
             lines.append(f"`{gid}` — nothing found")
 
@@ -866,6 +940,7 @@ async def tracked(interaction: discord.Interaction):
     if not _channel_allowed(interaction):
         await _reject_wrong_channel(interaction)
         return
+    _log_command(interaction)
     await interaction.response.defer(ephemeral=True)
     items = await _gather_tracked_items(interaction.channel_id)
     if not items:

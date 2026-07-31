@@ -3,6 +3,5 @@ __pycache__/
 *.pyc
 .venv/
 venv/
-tracks_state.json
-props_state.json
+*_state.json
 *password*.txt
