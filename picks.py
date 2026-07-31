@@ -243,7 +243,14 @@ def _match_stat_label(sport: str, raw_stat: str) -> Optional[str]:
             return label
     for label in catalog:
         base = label.lower().split(" (")[0]
-        if base == raw or raw in label.lower():
+        # Checked both directions - "raw in label" catches raw wording that's
+        # a shorthand for a longer catalog label (e.g. "TB" in "Total Bases"),
+        # "base in raw" catches the opposite: a prefixed/suffixed variant of
+        # a plain catalog label (e.g. "Total Points" for catalog's "Points" -
+        # confirmed live, a real "Allisha Gray Over 19.5 Total points" pick
+        # silently fell through to being parsed as a team name instead, since
+        # only the first direction was ever checked).
+        if base == raw or raw in label.lower() or base in raw:
             return label
     return None
 
@@ -258,7 +265,7 @@ def _match_tennis_stat_label(raw_stat: str) -> Optional[str]:
         if label.lower() == raw:
             return label
     for label in catalog:
-        if raw in label.lower():
+        if raw in label.lower() or label.lower() in raw:
             return label
     return None
 
