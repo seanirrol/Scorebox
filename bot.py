@@ -958,6 +958,46 @@ async def tracked(interaction: discord.Interaction):
     await interaction.followup.send("\n\n".join(sections), view=view, ephemeral=True)
 
 
+class _PendingDeleteSelect(discord.ui.Select):
+    """One dropdown covering up to 25 queued cards - see PendingDeleteView
+    for how more than 25 are split across multiple dropdowns."""
+
+    def __init__(self, indexed_entries: list[tuple[int, dict]]):
+        options = [
+            discord.SelectOption(
+                label=(entry.get("label") or "(no description)").replace("\n", " • ")[:100],
+                value=str(i),
+                description=f"deletes <t:{int(entry['delete_at'])}:R>"[:100],
+            )
+            for i, entry in indexed_entries
+        ]
+        super().__init__(placeholder="Select card(s) to delete now...", min_values=1, max_values=len(options), options=options)
+        self._by_value = {str(i): entry for i, entry in indexed_entries}
+
+    async def callback(self, interaction: discord.Interaction):
+        lines = []
+        for value in self.values:
+            entry = self._by_value[value]
+            label = (entry.get("label") or "(no description)").replace("\n", " • ")
+            ok = await pendingdelete.delete_now(interaction.client, entry)
+            lines.append(f"{'🗑️' if ok else '⚠️'} {label} — {'deleted' if ok else 'already gone'}")
+            if ok:
+                botlog.event(f"🗑️ Deleted now (manual, /pending): {label} in <#{entry['channel_id']}> — by **{interaction.user}**")
+        await interaction.response.send_message("\n".join(lines), ephemeral=True)
+
+
+class PendingDeleteView(discord.ui.View):
+    """Lets /pending's listing delete a card immediately instead of waiting
+    out its timer. Chunks into multiple dropdowns (a View allows up to 5
+    components) if there are more than 25 queued cards."""
+
+    def __init__(self, entries: list[dict]):
+        super().__init__(timeout=300)
+        indexed = list(enumerate(entries))
+        for start in range(0, min(len(indexed), 125), 25):
+            self.add_item(_PendingDeleteSelect(indexed[start:start + 25]))
+
+
 @tree.command(name="pending", description="List cards waiting out their post-result delete timer (only usable in the logs channel)")
 async def pending(interaction: discord.Interaction):
     if interaction.channel_id != botlog.LOG_CHANNEL_ID:
@@ -977,7 +1017,8 @@ async def pending(interaction: discord.Interaction):
         f"— <#{entry['channel_id']}> — deletes <t:{int(entry['delete_at'])}:R>"
         for entry in entries
     ]
-    await interaction.followup.send("\n".join(lines), ephemeral=True)
+    view = PendingDeleteView(entries)
+    await interaction.followup.send("\n".join(lines), view=view, ephemeral=True)
 
 
 def main():

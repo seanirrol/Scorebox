@@ -80,3 +80,20 @@ async def resume_all(client: discord.Client):
     for entry in list(state.load_pending_deletes().values()):
         asyncio.create_task(_delete(entry["channel_id"], entry["message_id"], entry["delete_at"], None, client))
         log.info("Resumed pending delete for message %s in channel %s", entry["message_id"], entry["channel_id"])
+
+
+async def delete_now(client: discord.Client, entry: dict) -> bool:
+    """Deletes a queued card immediately instead of waiting out its timer -
+    backs /pending's delete-now dropdown. The original scheduled _delete()
+    task (still sleeping in the background) finds the entry already gone
+    when it eventually wakes and just no-ops safely (message.delete() on an
+    already-deleted message raises NotFound, which it already catches)."""
+    _forget(entry["message_id"])
+    try:
+        channel = client.get_channel(entry["channel_id"]) or await client.fetch_channel(entry["channel_id"])
+        message = await channel.fetch_message(entry["message_id"])
+        await throttle.run(entry["channel_id"], message.delete)
+        return True
+    except (discord.NotFound, discord.Forbidden, discord.HTTPException) as e:
+        log.warning("Failed to delete pending message %s on demand: %s", entry["message_id"], e)
+        return False
