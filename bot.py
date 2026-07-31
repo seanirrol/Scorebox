@@ -138,8 +138,8 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
         channel_id, game_id, competitor_id, stat_name, _ = info
         tennispropstracker.stop_tracking(channel_id, game_id, competitor_id, stat_name)
 
-    reactor = f"<@{payload.user_id}>"
-    botlog.event(f"🗑️ Untracked (🗑️ reaction, {kind}): message `{payload.message_id}` in <#{payload.channel_id}> — by {reactor}")
+    reactor = str(payload.member) if payload.member else f"user `{payload.user_id}`"
+    botlog.event(f"🗑️ Untracked (🗑️ reaction, {kind}): message `{payload.message_id}` in <#{payload.channel_id}> — by **{reactor}**")
 
     try:
         await message.delete()
