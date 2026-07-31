@@ -117,7 +117,7 @@ async def build_embed(game: dict, sport_id: Optional[int], team: str, pick: str)
     to lead after the 1st inning."""
     home_competitor = game.get("homeCompetitor") or {}
     away_competitor = game.get("awayCompetitor") or {}
-    status = scores365.map_status_type(game.get("statusGroup"))
+    status = scores365.map_status_type(game.get("statusGroup"), game.get("statusText"))
 
     breakdown = await asyncio.to_thread(scores365.innings_breakdown, game.get("id"), THROUGH_INNING)
     decided = breakdown is not None

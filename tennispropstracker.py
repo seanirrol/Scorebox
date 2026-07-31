@@ -128,7 +128,7 @@ async def build_embed(
 ) -> tuple[discord.Embed, discord.File]:
     home_competitor = game.get("homeCompetitor") or {}
     away_competitor = game.get("awayCompetitor") or {}
-    status = scores365.map_status_type(game.get("statusGroup"))
+    status = scores365.map_status_type(game.get("statusGroup"), game.get("statusText"))
     opponent = away_competitor.get("name", "?") if home_competitor.get("id") == competitor_id else home_competitor.get("name", "?")
 
     current_value = None

@@ -298,16 +298,28 @@ def tennis_point_label(v) -> str:
     return _TENNIS_POINT_LABELS.get(int(v), fmt_score(v))
 
 
-def map_status_type(status_group) -> str:
+_IRREGULAR_TERMINAL_STATUS_TEXTS = {"interrupted"}
+
+
+def map_status_type(status_group, status_text: Optional[str] = None) -> str:
     if status_group == 2:
         return "notstarted"
     if status_group == 3:
+        return "inprogress"
+    if (status_text or "").strip().lower() in _IRREGULAR_TERMINAL_STATUS_TEXTS:
+        # A paused/suspended match (rain delay, darkness, etc.) isn't
+        # actually over - confirmed live 365scores puts it under the same
+        # statusGroup (4, normally a real final result) as a genuinely
+        # finished match. Treated as still in-progress so grading and the
+        # "Final" pill don't fire against a snapshot score from before play
+        # stopped - a real "Peyton Stearns ML" pick got wrongly tagged Pick
+        # Lost this way while the match was still just interrupted, not over.
         return "inprogress"
     return "finished"
 
 
 def is_finished(game: dict) -> bool:
-    return map_status_type(game.get("statusGroup")) == "finished"
+    return map_status_type(game.get("statusGroup"), game.get("statusText")) == "finished"
 
 
 # --- fuzzy team-name matching ----------------------------------------------

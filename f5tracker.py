@@ -127,7 +127,7 @@ async def build_embed(
     total against a line instead."""
     home_competitor = game.get("homeCompetitor") or {}
     away_competitor = game.get("awayCompetitor") or {}
-    status = scores365.map_status_type(game.get("statusGroup"))
+    status = scores365.map_status_type(game.get("statusGroup"), game.get("statusText"))
     home_name = home_competitor.get("name", "?")
     away_name = away_competitor.get("name", "?")
 

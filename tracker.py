@@ -77,7 +77,7 @@ async def build_embed(
     """
     home_competitor = game.get("homeCompetitor") or {}
     away_competitor = game.get("awayCompetitor") or {}
-    status = scores365.map_status_type(game.get("statusGroup"))
+    status = scores365.map_status_type(game.get("statusGroup"), game.get("statusText"))
 
     embed = discord.Embed(color=_STATUS_COLOR.get(status, 0x95A5A6))
     if status == "finished":

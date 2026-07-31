@@ -108,7 +108,7 @@ def stop_tracking(channel_id: int, game_id) -> bool:
 async def build_embed(game: dict, sport_id: Optional[int], team: str) -> tuple[discord.Embed, discord.File]:
     home_competitor = game.get("homeCompetitor") or {}
     away_competitor = game.get("awayCompetitor") or {}
-    status = scores365.map_status_type(game.get("statusGroup"))
+    status = scores365.map_status_type(game.get("statusGroup"), game.get("statusText"))
 
     breakdown = scores365.tennis_first_set_result(game)
     decided = breakdown is not None
