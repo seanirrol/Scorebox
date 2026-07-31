@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
 """
-ESPN's free UFC scoreboard API - a separate module from espn.py because its
-data shape doesn't match anything else there: a UFC "event" (e.g. a Fight
-Night) is a whole card of individual bouts ("competitions"), each with two
-"athlete" competitors and no team/roster concept at all. Confirmed live:
-espn.py's usual per-event /summary endpoint 404s for MMA event AND
-competition ids - there's no working per-bout detail call - so this reads
-everything straight off the scoreboard's own flat (non-header-wrapped)
-shape instead, including for live-refresh polling.
+ESPN's free MMA scoreboard API - a separate module from espn.py because its
+data shape doesn't match anything else there: an "event" (e.g. a UFC Fight
+Night or a PFL card) is a whole card of individual bouts ("competitions"),
+each with two "athlete" competitors and no team/roster concept at all.
+Confirmed live: espn.py's usual per-event /summary endpoint 404s for MMA
+event AND competition ids - there's no working per-bout detail call - so
+this reads everything straight off the scoreboard's own flat
+(non-header-wrapped) shape instead, including for live-refresh polling.
+
+Covers every MMA promotion ESPN actually has a scoreboard for - confirmed
+live: UFC, PFL, and Bellator (still its own separate feed despite PFL
+having absorbed the Bellator brand) all return real events; ONE
+Championship, Invicta, and Rizin were tried and don't exist on ESPN's site
+at all (400s, not listed in ESPN's own MMA site navigation either).
 
 Only moneyline (fight winner) and round totals are supported here - method
 of victory (KO/TKO, submission, decision) has no clean field anywhere in
@@ -23,14 +29,16 @@ import requests
 
 import scores365
 
-SCOREBOARD_URL = "https://site.api.espn.com/apis/site/v2/sports/mma/ufc/scoreboard"
+# Every MMA league ESPN's site API actually covers (see module docstring).
+LEAGUE_SLUGS = ["ufc", "pfl", "bellator"]
+LEAGUE_LABELS = {"ufc": "UFC", "pfl": "PFL", "bellator": "Bellator"}
 REQUEST_TIMEOUT = 6
 
-# UFC cards are weekly/biweekly, not daily - the default no-date-range
-# scoreboard call only ever returns the single nearest card (confirmed
-# live), unlike daily sports where "today" is always populated. Searching
-# a wide window instead catches an event whether it's already started,
-# imminent, or was just fought.
+# UFC/PFL/Bellator cards are weekly/biweekly at best, not daily - the
+# default no-date-range scoreboard call only ever returns the single
+# nearest card per league (confirmed live), unlike daily sports where
+# "today" is always populated. Searching a wide window instead catches an
+# event whether it's already started, imminent, or was just fought.
 _SEARCH_DAYS_BACK = 3
 _SEARCH_DAYS_AHEAD = 21
 
@@ -39,13 +47,16 @@ class EspnUfcError(Exception):
     pass
 
 
-def _get(**params) -> dict:
+def _get(league_slug: str, **params) -> dict:
     try:
-        resp = requests.get(SCOREBOARD_URL, params=params, timeout=REQUEST_TIMEOUT)
+        resp = requests.get(
+            f"https://site.api.espn.com/apis/site/v2/sports/mma/{league_slug}/scoreboard",
+            params=params, timeout=REQUEST_TIMEOUT,
+        )
         resp.raise_for_status()
         return resp.json()
     except requests.RequestException as e:
-        raise EspnUfcError(f"ESPN UFC request failed: {e}") from e
+        raise EspnUfcError(f"ESPN MMA request failed ({league_slug}): {e}") from e
 
 
 def fighter_photo_url(fighter_id) -> str:
@@ -54,49 +65,65 @@ def fighter_photo_url(fighter_id) -> str:
     return f"https://a.espncdn.com/i/headshots/mma/players/full/{fighter_id}.png"
 
 
-def find_ufc_fight(fighter_name: str) -> Optional[tuple[dict, dict, dict]]:
-    """Searches ESPN's UFC scoreboard for a bout involving this fighter,
-    across a multi-week window (see module docstring). Prefers an
+def find_ufc_fight(fighter_name: str) -> Optional[tuple[dict, dict, dict, str]]:
+    """Searches every MMA league ESPN covers for a bout involving this
+    fighter, across a multi-week window (see module docstring). Prefers an
     in-progress bout, then the soonest upcoming, then the most recently
-    finished - same preference order as scores365.find_match_for_team.
-    Returns (event, competition, fighter_competitor) or None."""
+    finished - same preference order as scores365.find_match_for_team, now
+    also spanning leagues (a fighter is normally only ever signed to one).
+    Returns (event, competition, fighter_competitor, league_slug) or None."""
     today = datetime.date.today()
     start = (today - datetime.timedelta(days=_SEARCH_DAYS_BACK)).strftime("%Y%m%d")
     end = (today + datetime.timedelta(days=_SEARCH_DAYS_AHEAD)).strftime("%Y%m%d")
-    data = _get(dates=f"{start}-{end}")
 
     best = None
     best_rank = None
     best_ts = None
     now = time.time()
-    for event in data.get("events", []):
-        for comp in event.get("competitions", []):
-            fighter = next(
-                (c for c in comp.get("competitors", [])
-                 if scores365.names_match((c.get("athlete") or {}).get("displayName", ""), fighter_name)),
-                None,
-            )
-            if not fighter:
-                continue
-            state = comp.get("status", {}).get("type", {}).get("state")
-            rank = {"in": 0, "pre": 1, "post": 2}.get(state, 3)
-            comp_ts = start_epoch(comp)
-            if best is None or rank < best_rank or (rank == best_rank and abs(comp_ts - now) < abs(best_ts - now)):
-                best, best_rank, best_ts = (event, comp, fighter), rank, comp_ts
+    last_error = None
+    any_success = False
+    for league_slug in LEAGUE_SLUGS:
+        try:
+            data = _get(league_slug, dates=f"{start}-{end}")
+            any_success = True
+        except EspnUfcError as e:
+            # Only skip this one league (e.g. a transient blip on ESPN's
+            # PFL endpoint specifically) - if every league fails, that's a
+            # real "can't reach ESPN" condition the caller needs to know
+            # about, not silently reported as "fighter not found".
+            last_error = e
+            continue
+        for event in data.get("events", []):
+            for comp in event.get("competitions", []):
+                fighter = next(
+                    (c for c in comp.get("competitors", [])
+                     if scores365.names_match((c.get("athlete") or {}).get("displayName", ""), fighter_name)),
+                    None,
+                )
+                if not fighter:
+                    continue
+                state = comp.get("status", {}).get("type", {}).get("state")
+                rank = {"in": 0, "pre": 1, "post": 2}.get(state, 3)
+                comp_ts = start_epoch(comp)
+                if best is None or rank < best_rank or (rank == best_rank and abs(comp_ts - now) < abs(best_ts - now)):
+                    best, best_rank, best_ts = (event, comp, fighter, league_slug), rank, comp_ts
+    if not any_success and last_error:
+        raise last_error
     return best
 
 
-def refresh_ufc_fight(event_id, competition_id, fighter_id, competition_date: str) -> Optional[tuple[dict, dict]]:
+def refresh_ufc_fight(league_slug: str, event_id, competition_id, fighter_id, competition_date: str) -> Optional[tuple[dict, dict]]:
     """Re-fetches a specific already-found bout's current status/result for
-    live polling. Queries just that single day's scoreboard (cheap) rather
-    than find_ufc_fight's wide window, since the bout's date is already
-    known. Returns (competition, fighter_competitor) or None if it's no
-    longer listed (e.g. card canceled)."""
+    live polling. Queries just that single day's scoreboard for the one
+    known league (cheap) rather than find_ufc_fight's wide multi-league
+    window, since both are already known. Returns (competition,
+    fighter_competitor) or None if it's no longer listed (e.g. card
+    canceled)."""
     try:
         date_str = datetime.datetime.fromisoformat(competition_date.replace("Z", "+00:00")).strftime("%Y%m%d")
     except ValueError:
         return None
-    data = _get(dates=date_str)
+    data = _get(league_slug, dates=date_str)
     for event in data.get("events", []):
         if str(event.get("id")) != str(event_id):
             continue

@@ -80,13 +80,13 @@ def unregister_message(message_id: int):
 
 
 def _persist(
-    channel_id: int, event_id, competition_id, competition_date: str, message_id: int, owner_id: int,
+    channel_id: int, league_slug: str, event_id, competition_id, competition_date: str, message_id: int, owner_id: int,
     event_name: str, fighter_id=None, fighter_name: Optional[str] = None,
     total_direction: Optional[str] = None, total_line: Optional[float] = None,
 ):
     data = state.load_ufc()
     data[track_key(channel_id, competition_id)] = {
-        "channel_id": channel_id, "event_id": event_id, "competition_id": competition_id,
+        "channel_id": channel_id, "league_slug": league_slug, "event_id": event_id, "competition_id": competition_id,
         "competition_date": competition_date, "message_id": message_id, "owner_id": owner_id,
         "event_name": event_name, "fighter_id": fighter_id, "fighter_name": fighter_name,
         "total_direction": total_direction, "total_line": total_line,
@@ -114,7 +114,7 @@ def stop_tracking(channel_id: int, competition_id) -> bool:
 
 
 async def build_embed(
-    competition: dict, event_name: str, fighter_id=None, fighter_name: Optional[str] = None,
+    competition: dict, league_slug: str, event_name: str, fighter_id=None, fighter_name: Optional[str] = None,
     total_direction: Optional[str] = None, total_line: Optional[float] = None,
 ) -> tuple[discord.Embed, discord.File]:
     """Exactly one of two modes applies per pick: fighter_id/fighter_name is
@@ -142,7 +142,8 @@ async def build_embed(
     embed = discord.Embed(color=embed_color)
     if result:
         embed.title = _RESULT_TITLES[result]
-    embed.set_author(name=f"UFC • {event_name}")
+    league_label = espn_ufc.LEAGUE_LABELS.get(league_slug, league_slug.upper())
+    embed.set_author(name=f"{league_label} • {event_name}")
 
     if fighter_id is not None:
         description_lines = [f"{fighter_name} ML"]
@@ -180,7 +181,7 @@ async def build_embed(
 
 
 async def _track_loop(
-    message: discord.Message, channel_id: int, event_id, competition_id, competition_date: str, owner_id: int,
+    message: discord.Message, channel_id: int, league_slug: str, event_id, competition_id, competition_date: str, owner_id: int,
     event_name: str, fighter_id=None, fighter_name: Optional[str] = None,
     total_direction: Optional[str] = None, total_line: Optional[float] = None,
 ):
@@ -195,7 +196,7 @@ async def _track_loop(
             await asyncio.sleep(config.UPDATE_INTERVAL_SECONDS)
 
             refreshed = await asyncio.to_thread(
-                espn_ufc.refresh_ufc_fight, event_id, competition_id, fighter_id, competition_date
+                espn_ufc.refresh_ufc_fight, league_slug, event_id, competition_id, fighter_id, competition_date
             )
 
             # A notstarted bout's result can't change before it starts, so
@@ -216,7 +217,7 @@ async def _track_loop(
                 log.info("UFC bout %s not starting soon; hibernating %.0fs", competition_id, hibernate_for)
                 await asyncio.sleep(hibernate_for)
                 refreshed = await asyncio.to_thread(
-                    espn_ufc.refresh_ufc_fight, event_id, competition_id, fighter_id, competition_date
+                    espn_ufc.refresh_ufc_fight, league_slug, event_id, competition_id, fighter_id, competition_date
                 )
 
             if not refreshed:
@@ -232,7 +233,7 @@ async def _track_loop(
             consecutive_misses = 0
             competition, _fighter = refreshed
 
-            embed, file = await build_embed(competition, event_name, fighter_id, fighter_name, total_direction, total_line)
+            embed, file = await build_embed(competition, league_slug, event_name, fighter_id, fighter_name, total_direction, total_line)
 
             if hibernated:
                 # The final wake right before start - bump the card to the
@@ -252,7 +253,7 @@ async def _track_loop(
                     _message_owners.pop(old_message.id, None)
                     register_message(message.id, channel_id, competition_id, owner_id)
                     _persist(
-                        channel_id, event_id, competition_id, competition_date, message.id, owner_id,
+                        channel_id, league_slug, event_id, competition_id, competition_date, message.id, owner_id,
                         event_name, fighter_id, fighter_name, total_direction, total_line,
                     )
                     try:
@@ -300,7 +301,7 @@ async def _track_loop(
 
 
 def start_tracking(
-    message: discord.Message, channel_id: int, event_id, competition_id, competition_date: str, owner_id: int,
+    message: discord.Message, channel_id: int, league_slug: str, event_id, competition_id, competition_date: str, owner_id: int,
     event_name: str, fighter_id=None, fighter_name: Optional[str] = None,
     total_direction: Optional[str] = None, total_line: Optional[float] = None,
 ):
@@ -309,14 +310,14 @@ def start_tracking(
         return
     task = asyncio.create_task(
         _track_loop(
-            message, channel_id, event_id, competition_id, competition_date, owner_id, event_name,
+            message, channel_id, league_slug, event_id, competition_id, competition_date, owner_id, event_name,
             fighter_id, fighter_name, total_direction, total_line,
         )
     )
     _active[key] = task
     register_message(message.id, channel_id, competition_id, owner_id)
     _persist(
-        channel_id, event_id, competition_id, competition_date, message.id, owner_id,
+        channel_id, league_slug, event_id, competition_id, competition_date, message.id, owner_id,
         event_name, fighter_id, fighter_name, total_direction, total_line,
     )
 
@@ -329,6 +330,7 @@ async def resume_all(client: discord.Client):
     """
     for entry in list(state.load_ufc().values()):
         channel_id, competition_id = entry["channel_id"], entry["competition_id"]
+        league_slug = entry.get("league_slug", "ufc")
         try:
             channel = await client.fetch_channel(channel_id)
             message = await channel.fetch_message(entry["message_id"])
@@ -337,7 +339,7 @@ async def resume_all(client: discord.Client):
             continue
 
         refreshed = await asyncio.to_thread(
-            espn_ufc.refresh_ufc_fight, entry["event_id"], competition_id, entry.get("fighter_id"), entry["competition_date"]
+            espn_ufc.refresh_ufc_fight, league_slug, entry["event_id"], competition_id, entry.get("fighter_id"), entry["competition_date"]
         )
         if not refreshed:
             _forget(channel_id, competition_id)
@@ -345,7 +347,7 @@ async def resume_all(client: discord.Client):
         event_name = entry.get("event_name") or f"Event {entry['event_id']}"
 
         start_tracking(
-            message, channel_id, entry["event_id"], competition_id, entry["competition_date"], entry.get("owner_id"),
+            message, channel_id, league_slug, entry["event_id"], competition_id, entry["competition_date"], entry.get("owner_id"),
             event_name, entry.get("fighter_id"), entry.get("fighter_name"), entry.get("total_direction"), entry.get("total_line"),
         )
         log.info("Resumed UFC tracking for bout %s in channel %s", competition_id, channel_id)

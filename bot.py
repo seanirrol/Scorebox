@@ -471,7 +471,7 @@ async def _auto_ufc(
         log.info("Auto-UFC: no bout found for '%s'", fighter)
         botlog.event(f"❌ Not tracked ({label}): **{fighter}** — no bout found")
         return
-    event, competition, fighter_competitor = result
+    event, competition, fighter_competitor, league_slug = result
     competition_id = competition["id"]
     if ufctracker.is_tracked(channel.id, competition_id):
         botlog.event(f"⏭️ Skipped ({label}): **{fighter}** — bout `{competition_id}` already being tracked in <#{channel.id}>")
@@ -479,7 +479,7 @@ async def _auto_ufc(
 
     fighter_id = None if total_direction else fighter_competitor["id"]
     fighter_name = None if total_direction else fighter_competitor["athlete"]["displayName"]
-    embed, file = await ufctracker.build_embed(competition, event["name"], fighter_id, fighter_name, total_direction, total_line)
+    embed, file = await ufctracker.build_embed(competition, league_slug, event["name"], fighter_id, fighter_name, total_direction, total_line)
     message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
     ufctracker.register_message(message.id, channel.id, competition_id, None)
     await message.add_reaction(TRASH_EMOJI)
@@ -488,7 +488,7 @@ async def _auto_ufc(
         botlog.event(f"⏭️ Not tracked ({label}): **{fighter}** — bout `{competition_id}` already finished, posted final result only")
         return
     ufctracker.start_tracking(
-        message, channel.id, event["id"], competition_id, competition["date"], None, event["name"],
+        message, channel.id, league_slug, event["id"], competition_id, competition["date"], None, event["name"],
         fighter_id, fighter_name, total_direction, total_line,
     )
     log.info("Auto-tracked UFC pick '%s' -> bout %s", fighter, competition_id)
