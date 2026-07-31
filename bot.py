@@ -168,10 +168,10 @@ async def _auto_track(
 async def _auto_f5(
     channel: discord.abc.Messageable, sport_value: str, team: str,
     total_direction: Optional[str] = None, total_line: Optional[float] = None,
-    combined: bool = False,
+    combined: bool = False, handicap_line: Optional[float] = None,
 ):
-    """F5 (First 5 Innings) picks - moneyline, team total, or combined
-    total - settle after the 5th inning, not the whole game - see
+    """F5 (First 5 Innings) picks - moneyline, team total, combined total, or
+    handicap/run-line - settle after the 5th inning, not the whole game - see
     f5tracker.py. combined=True means total_direction/total_line grade both
     sides' F5 runs summed together, not team's own - team is still used to
     find the match either way."""
@@ -189,14 +189,16 @@ async def _auto_f5(
         return
 
     picked_team = None if combined else team
-    embed, file = await f5tracker.build_embed(game, sport_id, picked_team, total_direction, total_line)
+    embed, file = await f5tracker.build_embed(game, sport_id, picked_team, total_direction, total_line, handicap_line)
     message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
     f5tracker.register_message(message.id, channel.id, game_id, None)
     await message.add_reaction(TRASH_EMOJI)
 
     if await asyncio.to_thread(scores365.innings_breakdown, game_id, f5tracker.THROUGH_INNING) is not None:
         return  # F5 was already decided by the time this pick was posted
-    f5tracker.start_tracking(message, sport_id, game, channel.id, None, picked_team, total_direction, total_line)
+    f5tracker.start_tracking(
+        message, sport_id, game, channel.id, None, picked_team, total_direction, total_line, handicap_line
+    )
     log.info("Auto-tracked F5 pick '%s' -> game %s", team, game_id)
 
 
@@ -338,6 +340,8 @@ async def on_message(message: discord.Message):
                 await _auto_f5(
                     target_channel, pick["sport"], pick["team"], pick["direction"], pick["line"], combined=True
                 )
+            elif pick["kind"] == "f5_handicap":
+                await _auto_f5(target_channel, pick["sport"], pick["team"], handicap_line=pick["line"])
             elif pick["kind"] == "inning_runs":
                 await _auto_inning_runs(target_channel, pick["team"], pick["pick_type"])
             elif pick["kind"] == "inning1_result":
@@ -625,7 +629,9 @@ async def _gather_tracked_items(channel_id: int) -> list[dict]:
         })
 
     for entry in f5tracker.list_tracked_details(channel_id):
-        if entry.get("picked_team") and entry.get("total_direction") and entry.get("total_line") is not None:
+        if entry.get("picked_team") and entry.get("handicap_line") is not None:
+            pick_label = f"{entry['picked_team']} F5 {entry['handicap_line']:+g}"
+        elif entry.get("picked_team") and entry.get("total_direction") and entry.get("total_line") is not None:
             pick_label = f"{entry['picked_team']} F5 {entry['total_direction'].title()} {entry['total_line']:g}"
         elif entry.get("total_direction") and entry.get("total_line") is not None:
             pick_label = f"F5 {entry['total_direction'].title()} {entry['total_line']:g}"

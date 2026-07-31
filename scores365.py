@@ -416,6 +416,27 @@ def grade_f5_moneyline(game: dict, home_runs: int, away_runs: int, picked_team: 
     return "won" if picked_runs > other_runs else "lost"
 
 
+def grade_f5_handicap(game: dict, home_runs: int, away_runs: int, team: str, line: float) -> Optional[str]:
+    """Grades an F5 (First 5 Innings) run-line/handicap pick - the line is
+    added to the picked team's own 1st-5th inning runs before comparing
+    against the other side's (e.g. team +0.5 wins if it doesn't lose the F5
+    window outright; team -1.5 needs to win the F5 window by 2+). A whole-
+    number line can land on an exact tie after adjustment (push); a
+    half-point line never can."""
+    home = (game.get("homeCompetitor") or {}).get("name", "")
+    away = (game.get("awayCompetitor") or {}).get("name", "")
+    if names_match(home, team):
+        picked_runs, other_runs = home_runs, away_runs
+    elif names_match(away, team):
+        picked_runs, other_runs = away_runs, home_runs
+    else:
+        return None
+    adjusted = picked_runs + line
+    if adjusted == other_runs:
+        return "push"
+    return "won" if adjusted > other_runs else "lost"
+
+
 def grade_f5_team_total(
     game: dict, home_runs: int, away_runs: int, team: str, direction: str, line: float
 ) -> Optional[str]:

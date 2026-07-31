@@ -2,10 +2,12 @@
 """
 Manages background tasks for "F5" (First 5 Innings) picks - moneyline (one
 side to be ahead through 5 innings), team total (one side's own 1st-5th
-inning runs vs. a line), or combined total (both sides summed vs. a line,
-same as tracker.py's game total but scoped to just the first 5 innings) -
-all settle once the 5th inning is fully complete, not when the whole game
-finishes, so they don't share tracker.py's wait-for-the-full-game design.
+inning runs vs. a line), combined total (both sides summed vs. a line, same
+as tracker.py's game total but scoped to just the first 5 innings), or
+handicap/run-line (a team's own 1st-5th inning runs adjusted by a +/- line
+before comparing against the other side's) - all settle once the 5th inning
+is fully complete, not when the whole game finishes, so they don't share
+tracker.py's wait-for-the-full-game design.
 
 Backed by 365scores' per-game detail call (see scores365.innings_breakdown),
 which works across every league 365scores covers under baseball (MLB, KBO,
@@ -81,13 +83,13 @@ def unregister_message(message_id: int):
 
 def _persist(
     channel_id: int, game_id, message_id: int, sport_id, owner_id: int, picked_team: Optional[str] = None,
-    total_direction: Optional[str] = None, total_line: Optional[float] = None,
+    total_direction: Optional[str] = None, total_line: Optional[float] = None, handicap_line: Optional[float] = None,
 ):
     data = state.load_f5()
     data[track_key(channel_id, game_id)] = {
         "channel_id": channel_id, "game_id": game_id, "message_id": message_id,
         "sport_id": sport_id, "owner_id": owner_id, "picked_team": picked_team,
-        "total_direction": total_direction, "total_line": total_line,
+        "total_direction": total_direction, "total_line": total_line, "handicap_line": handicap_line,
     }
     state.save_f5(data)
 
@@ -113,13 +115,15 @@ def stop_tracking(channel_id: int, game_id) -> bool:
 
 async def build_embed(
     game: dict, sport_id: Optional[int], picked_team: Optional[str] = None,
-    total_direction: Optional[str] = None, total_line: Optional[float] = None,
+    total_direction: Optional[str] = None, total_line: Optional[float] = None, handicap_line: Optional[float] = None,
 ) -> tuple[discord.Embed, discord.File]:
-    """Exactly one of three modes applies per pick: picked_team alone is an
-    F5 moneyline; picked_team + total_direction/total_line grades that
-    team's own 1st-5th inning total against a line; total_direction/
-    total_line with no picked_team grades the *combined* (both sides
-    summed) 1st-5th inning total against a line instead."""
+    """Exactly one of four modes applies per pick: picked_team + handicap_line
+    grades that team's own 1st-5th inning runs adjusted by the line against
+    the other side's; picked_team alone (no handicap/total) is an F5
+    moneyline; picked_team + total_direction/total_line grades that team's
+    own 1st-5th inning total against a line; total_direction/total_line with
+    no picked_team grades the *combined* (both sides summed) 1st-5th inning
+    total against a line instead."""
     home_competitor = game.get("homeCompetitor") or {}
     away_competitor = game.get("awayCompetitor") or {}
     status = scores365.map_status_type(game.get("statusGroup"))
@@ -129,7 +133,9 @@ async def build_embed(
     breakdown = await asyncio.to_thread(scores365.innings_breakdown, game.get("id"), THROUGH_INNING)
     decided = breakdown is not None
     if decided:
-        if picked_team and total_direction and total_line is not None:
+        if picked_team and handicap_line is not None:
+            result = scores365.grade_f5_handicap(game, breakdown[0], breakdown[1], picked_team, handicap_line)
+        elif picked_team and total_direction and total_line is not None:
             result = scores365.grade_f5_team_total(
                 game, breakdown[0], breakdown[1], picked_team, total_direction, total_line
             )
@@ -163,7 +169,9 @@ async def build_embed(
     if author_bits:
         embed.set_author(name=" • ".join(author_bits))
 
-    if picked_team and total_direction and total_line is not None:
+    if picked_team and handicap_line is not None:
+        description_lines = [f"{picked_team} F5 {handicap_line:+g}"]
+    elif picked_team and total_direction and total_line is not None:
         description_lines = [f"{picked_team} F5 {total_direction.title()} {total_line:g}"]
     elif total_direction and total_line is not None:
         description_lines = [f"F5 {total_direction.title()} {total_line:g}"]
@@ -217,6 +225,7 @@ async def build_embed(
 async def _track_loop(
     message: discord.Message, sport_id: int, game_id, channel_id: int, owner_id: int,
     picked_team: Optional[str] = None, total_direction: Optional[str] = None, total_line: Optional[float] = None,
+    handicap_line: Optional[float] = None,
 ):
     key = track_key(channel_id, game_id)
     deadline = time.monotonic() + config.MAX_TRACK_HOURS * 3600
@@ -260,7 +269,7 @@ async def _track_loop(
                 continue
             consecutive_misses = 0
 
-            embed, file = await build_embed(game, sport_id, picked_team, total_direction, total_line)
+            embed, file = await build_embed(game, sport_id, picked_team, total_direction, total_line, handicap_line)
 
             if hibernated:
                 # The final wake right before kickoff - bump the card to the
@@ -280,7 +289,10 @@ async def _track_loop(
                     message = new_message
                     _message_owners.pop(old_message.id, None)
                     register_message(message.id, channel_id, game_id, owner_id)
-                    _persist(channel_id, game_id, message.id, sport_id, owner_id, picked_team, total_direction, total_line)
+                    _persist(
+                        channel_id, game_id, message.id, sport_id, owner_id, picked_team,
+                        total_direction, total_line, handicap_line,
+                    )
                     try:
                         await old_message.delete()
                     except discord.HTTPException as e:
@@ -302,7 +314,9 @@ async def _track_loop(
 
             breakdown = await asyncio.to_thread(scores365.innings_breakdown, game_id, THROUGH_INNING)
             if breakdown is not None:
-                if picked_team and total_direction and total_line is not None:
+                if picked_team and handicap_line is not None:
+                    result = scores365.grade_f5_handicap(game, breakdown[0], breakdown[1], picked_team, handicap_line)
+                elif picked_team and total_direction and total_line is not None:
                     result = scores365.grade_f5_team_total(
                         game, breakdown[0], breakdown[1], picked_team, total_direction, total_line
                     )
@@ -333,17 +347,20 @@ async def _track_loop(
 def start_tracking(
     message: discord.Message, sport_id: int, game: dict, channel_id: int, owner_id: int,
     picked_team: Optional[str] = None, total_direction: Optional[str] = None, total_line: Optional[float] = None,
+    handicap_line: Optional[float] = None,
 ):
     game_id = game["id"]
     key = track_key(channel_id, game_id)
     if key in _active:
         return
     task = asyncio.create_task(
-        _track_loop(message, sport_id, game_id, channel_id, owner_id, picked_team, total_direction, total_line)
+        _track_loop(
+            message, sport_id, game_id, channel_id, owner_id, picked_team, total_direction, total_line, handicap_line
+        )
     )
     _active[key] = task
     register_message(message.id, channel_id, game_id, owner_id)
-    _persist(channel_id, game_id, message.id, sport_id, owner_id, picked_team, total_direction, total_line)
+    _persist(channel_id, game_id, message.id, sport_id, owner_id, picked_team, total_direction, total_line, handicap_line)
 
 
 async def resume_all(client: discord.Client):
@@ -371,6 +388,6 @@ async def resume_all(client: discord.Client):
 
         start_tracking(
             message, sport_id, game, channel_id, owner_id, entry["picked_team"],
-            entry.get("total_direction"), entry.get("total_line"),
+            entry.get("total_direction"), entry.get("total_line"), entry.get("handicap_line"),
         )
         log.info("Resumed F5 tracking for game %s in channel %s", game_id, channel_id)

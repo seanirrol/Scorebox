@@ -127,6 +127,20 @@ _F5_COMBINED_TOTAL_RE = re.compile(
     re.IGNORECASE,
 )
 
+# "NC Dinos vs Kia Tigers - F5 Kia Tigers +0.5" - an F5 run-line/handicap:
+# the named team's own 1st-5th inning runs, adjusted by the signed line,
+# compared against the other side's (see grade_f5_handicap) - distinct from
+# _F5_TOTAL_RE/_F5_COMBINED_TOTAL_RE, which grade a team's (or the combined)
+# runs against an Over/Under line rather than adjusting one side's score.
+# The named team is validated against a matchup side the same way
+# _NAMED_TEAM_TOTAL_RE is, to avoid false positives.
+_F5_HANDICAP_RE = re.compile(
+    r"^(.+?)\s*(?:@|vs\.?|v\.?)\s*(.+?)\s*-\s*"
+    r"(?:f5|first\s+5\s+innings|first\s+five\s+innings|1st\s+5\s+innings)"
+    r"\s+(.+?)\s+([+-]\d+(?:\.\d+)?)\b",
+    re.IGNORECASE,
+)
+
 # "Team A @ Team B - Over 9.5", "... - Over 8.5 Total Runs", or "Team A vs
 # Team B Under 4" (no dash at all - confirmed live, a real soccer pick was
 # worded this way) - a game total, not a single player's stat
@@ -406,6 +420,21 @@ def _parse_f5_combined_total_pick(description: str, sport: str) -> Optional[dict
     }
 
 
+def _parse_f5_handicap_pick(description: str, sport: str) -> Optional[dict]:
+    text = _clean_line(description)
+    m = _F5_HANDICAP_RE.match(text)
+    if not m:
+        return None
+    team_a, team_b, named_team = m.group(1).strip(), m.group(2).strip(), m.group(3).strip()
+    if not team_a or not team_b or not named_team:
+        return None
+    if not (scores365.names_match(named_team, team_a) or scores365.names_match(named_team, team_b)):
+        return None  # doesn't look like either matchup side - don't guess
+    return {
+        "kind": "f5_handicap", "sport": sport, "team": named_team, "line": float(m.group(4)),
+    }
+
+
 def _parse_total_pick(sport: str, description: str) -> Optional[dict]:
     text = _clean_line(description)
     m = _TOTAL_LINE_RE.match(text)
@@ -461,6 +490,10 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
         f5_combined = _parse_f5_combined_total_pick(description, sport)
         if f5_combined:
             return f5_combined
+
+        f5_handicap = _parse_f5_handicap_pick(description, sport)
+        if f5_handicap:
+            return f5_handicap
 
     named_total = _parse_named_team_total_pick(sport, description)
     if named_total:
