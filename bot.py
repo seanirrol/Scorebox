@@ -259,6 +259,21 @@ async def _auto_playerprops(
         log.info("Auto-playerprops: couldn't reach ESPN for '%s': %s", player, e)
         botlog.event(f"❌ Not tracked (prop): **{player}** {stat} — couldn't reach ESPN: {e}")
         return
+    if not entity and sport_value == "basketball":
+        # A generic "Basketball"/"NBA" header is sometimes used for a WNBA
+        # player too (confirmed live - real picks for both Kamilla Cardoso
+        # and Allisha Gray silently failed this way, since the search above
+        # only ever hits the NBA endpoint for a bare "basketball" sport
+        # value) - retry against WNBA before giving up, rather than relying
+        # on the source to tag it correctly.
+        try:
+            entity = await asyncio.to_thread(espn.find_player, player, "wnba")
+        except espn.EspnError as e:
+            log.info("Auto-playerprops: couldn't reach ESPN for '%s': %s", player, e)
+            botlog.event(f"❌ Not tracked (prop): **{player}** {stat} — couldn't reach ESPN: {e}")
+            return
+        if entity:
+            sport_value = "wnba"
     if not entity:
         log.info("Auto-playerprops: no player found for '%s' (%s)", player, sport_value)
         botlog.event(f"❌ Not tracked (prop): **{player}** {stat} ({sport_value}) — player not found on ESPN")
