@@ -958,6 +958,28 @@ async def tracked(interaction: discord.Interaction):
     await interaction.followup.send("\n\n".join(sections), view=view, ephemeral=True)
 
 
+@tree.command(name="pending", description="List cards waiting out their post-result delete timer (only usable in the logs channel)")
+async def pending(interaction: discord.Interaction):
+    if interaction.channel_id != botlog.LOG_CHANNEL_ID:
+        await interaction.response.send_message(f"This command only works in <#{botlog.LOG_CHANNEL_ID}>.", ephemeral=True)
+        return
+    _log_command(interaction)
+    await interaction.response.defer(ephemeral=True)
+
+    entries = pendingdelete.list_pending()
+    if not entries:
+        await interaction.followup.send("Nothing is currently waiting to be deleted.", ephemeral=True)
+        return
+
+    entries.sort(key=lambda e: e["delete_at"])
+    lines = [
+        f"- {(entry.get('label') or '(no description)').replace(chr(10), ' • ')} "
+        f"— <#{entry['channel_id']}> — deletes <t:{int(entry['delete_at'])}:R>"
+        for entry in entries
+    ]
+    await interaction.followup.send("\n".join(lines), ephemeral=True)
+
+
 def main():
     if not config.DISCORD_TOKEN:
         raise SystemExit("DISCORD_TOKEN is not set. Copy .env.example to .env and fill it in.")

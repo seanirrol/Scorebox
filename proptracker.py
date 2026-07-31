@@ -399,7 +399,7 @@ async def _track_loop(
                 # no reaction, but still cleans up after the same 24h window
                 # rather than polling every cycle until MAX_TRACK_HOURS runs
                 # out and leaving the stale card behind forever.
-                pendingdelete.start(channel_id, message)
+                pendingdelete.start(channel_id, message, embed.description or "")
                 break
     except asyncio.CancelledError:
         raise

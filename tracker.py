@@ -352,7 +352,7 @@ async def _track_loop(
                             await message.add_reaction(reaction)
                         except discord.HTTPException as e:
                             log.warning("Failed to add result reaction: %s", e)
-                pendingdelete.start(channel_id, message)
+                pendingdelete.start(channel_id, message, embed.description or "")
                 break
     except asyncio.CancelledError:
         raise

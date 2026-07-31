@@ -30,10 +30,18 @@ log = logging.getLogger("scorebox.pendingdelete")
 DELETE_AFTER_SECONDS = 24 * 3600
 
 
-def _persist(channel_id: int, message_id: int, delete_at: float):
+def _persist(channel_id: int, message_id: int, delete_at: float, label: str):
     data = state.load_pending_deletes()
-    data[str(message_id)] = {"channel_id": channel_id, "message_id": message_id, "delete_at": delete_at}
+    data[str(message_id)] = {
+        "channel_id": channel_id, "message_id": message_id, "delete_at": delete_at, "label": label,
+    }
     state.save_pending_deletes(data)
+
+
+def list_pending() -> list[dict]:
+    """Every card currently waiting out its post-result delete window,
+    across all channels - backs the /pending command."""
+    return list(state.load_pending_deletes().values())
 
 
 def _forget(message_id: int):
@@ -54,12 +62,15 @@ async def _delete(channel_id: int, message_id: int, delete_at: float, message: O
         log.warning("Failed to delete pending message %s: %s", message_id, e)
 
 
-def start(channel_id: int, message: discord.Message, delete_at: Optional[float] = None):
+def start(channel_id: int, message: discord.Message, label: str, delete_at: Optional[float] = None):
     """Called by a tracker right after grading a pick, in place of its own
     sleep-then-delete. delete_at defaults to now + the standard 24h window -
-    only overridden when resuming (see resume_all)."""
+    only overridden when resuming (see resume_all). label is whatever the
+    tracker's own embed description said (e.g. "Kia Tigers F5 +0.5") - kept
+    only for the /pending command's display, since a graded card's original
+    tracker-specific state is discarded once it gets here."""
     delete_at = delete_at if delete_at is not None else time.time() + DELETE_AFTER_SECONDS
-    _persist(channel_id, message.id, delete_at)
+    _persist(channel_id, message.id, delete_at, label)
     asyncio.create_task(_delete(channel_id, message.id, delete_at, message, None))
 
 
