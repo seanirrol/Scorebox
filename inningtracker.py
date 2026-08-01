@@ -45,6 +45,11 @@ _message_owners: dict[int, tuple] = {}
 _RESULT_TITLES = {"won": "<:winmark:1532115635071488221> Pick Won", "lost": "<:lossmark:1532115600162422894> Pick Lost"}
 _RESULT_REACTIONS = {"won": "<:winmark:1532115635071488221>", "lost": "<:lossmark:1532115600162422894>"}
 
+# Reactions the bot itself ever adds - excluded when carrying reactions
+# forward across a repost (see _repost_final) so a manually-added marker
+# (e.g. tagging a card as part of a parlay) isn't confused for one of these.
+_SERVICE_EMOJIS = {TRASH_EMOJI, *_RESULT_REACTIONS.values()}
+
 _PICK_LABELS = {"YRFI": "Yes Runs 1st Inning", "NRFI": "No Runs 1st Inning"}
 
 
@@ -175,6 +180,50 @@ async def _track_loop(message: discord.Message, channel_id: int, event_id, pick_
 
     consecutive_misses = 0
     consecutive_edit_failures = 0
+
+    async def _repost_final(embed: discord.Embed, file: discord.File):
+        """Bumps the card to the bottom of the channel (pre-kickoff or
+        graded) - falls back to editing in place if the repost send itself
+        fails. Carries forward any reaction someone added beyond the bot's
+        own service ones (e.g. tagging a card as part of a parlay) -
+        otherwise silently lost every time a repost deletes the old
+        message. Discord has no way to make a reaction reappear as added by
+        the original user once that message is gone, so this re-adds the
+        same emoji under the bot's own account instead."""
+        nonlocal message
+        try:
+            fresh = await message.channel.fetch_message(message.id)
+            carry_emojis = [r.emoji for r in fresh.reactions if str(r.emoji) not in _SERVICE_EMOJIS]
+        except discord.HTTPException:
+            carry_emojis = []
+
+        try:
+            new_message = await throttle.run(channel_id, lambda: message.channel.send(embed=embed, file=file))
+        except discord.HTTPException as e:
+            log.warning("Failed to repost final inning tracking message: %s", e)
+            try:
+                await throttle.run(channel_id, lambda: message.edit(embed=embed, attachments=[file]))
+            except discord.HTTPException as e2:
+                log.warning("Failed to edit inning tracking message as a fallback: %s", e2)
+            return
+        try:
+            await new_message.add_reaction(TRASH_EMOJI)
+        except discord.HTTPException as e:
+            log.warning("Failed to react to reposted final inning tracking message: %s", e)
+        for emoji in carry_emojis:
+            try:
+                await new_message.add_reaction(emoji)
+            except discord.HTTPException as e:
+                log.warning("Failed to carry forward reaction %s: %s", emoji, e)
+        old_message = message
+        message = new_message
+        _message_owners.pop(old_message.id, None)
+        register_message(message.id, channel_id, event_id, pick_type, owner_id)
+        try:
+            await old_message.delete()
+        except discord.HTTPException as e:
+            log.warning("Failed to delete old inning tracking message after final repost: %s", e)
+
     await asyncio.sleep(random.uniform(0, config.UPDATE_INTERVAL_SECONDS))
     try:
         while time.monotonic() < deadline:
@@ -228,24 +277,8 @@ async def _track_loop(message: discord.Message, channel_id: int, event_id, pick_
                 # bottom of the channel instead of editing a message that may
                 # be buried under whatever chat happened during the (possibly
                 # long) hibernation. Same treatment as tracker.py/proptracker.py.
-                try:
-                    new_message = await throttle.run(channel_id, lambda: message.channel.send(embed=embed, file=file))
-                except discord.HTTPException as e:
-                    log.warning("Failed to repost inning tracking message near kickoff: %s", e)
-                else:
-                    try:
-                        await new_message.add_reaction(TRASH_EMOJI)
-                    except discord.HTTPException as e:
-                        log.warning("Failed to react to reposted inning tracking message: %s", e)
-                    old_message = message
-                    message = new_message
-                    _message_owners.pop(old_message.id, None)
-                    register_message(message.id, channel_id, event_id, pick_type, owner_id)
-                    _persist(channel_id, event_id, pick_type, message.id, team_id, owner_id)
-                    try:
-                        await old_message.delete()
-                    except discord.HTTPException as e:
-                        log.warning("Failed to delete old inning tracking message after repost: %s", e)
+                await _repost_final(embed, file)
+                _persist(channel_id, event_id, pick_type, message.id, team_id, owner_id)
                 continue
 
             breakdown = espn.get_first_inning_breakdown(event)
@@ -254,27 +287,7 @@ async def _track_loop(message: discord.Message, channel_id: int, event_id, pick_
                 # of editing in place - same reasoning as the pre-kickoff bump
                 # above: a live game can run long enough that the original
                 # card is buried under chat by the time the 1st inning wraps.
-                try:
-                    new_message = await throttle.run(channel_id, lambda: message.channel.send(embed=embed, file=file))
-                except discord.HTTPException as e:
-                    log.warning("Failed to repost final inning tracking message: %s", e)
-                    try:
-                        await throttle.run(channel_id, lambda: message.edit(embed=embed, attachments=[file]))
-                    except discord.HTTPException as e2:
-                        log.warning("Failed to edit inning tracking message as a fallback: %s", e2)
-                else:
-                    try:
-                        await new_message.add_reaction(TRASH_EMOJI)
-                    except discord.HTTPException as e:
-                        log.warning("Failed to react to reposted final inning tracking message: %s", e)
-                    old_message = message
-                    message = new_message
-                    _message_owners.pop(old_message.id, None)
-                    register_message(message.id, channel_id, event_id, pick_type, owner_id)
-                    try:
-                        await old_message.delete()
-                    except discord.HTTPException as e:
-                        log.warning("Failed to delete old inning tracking message after final repost: %s", e)
+                await _repost_final(embed, file)
 
                 if breakdown is not None:
                     result = espn.grade_yrfi(sum(breakdown), pick_type)

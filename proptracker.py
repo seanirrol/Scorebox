@@ -137,6 +137,11 @@ def _fmt_value(v) -> str:
 _RESULT_TITLES = {"won": "<:winmark:1532115635071488221> Pick Won", "lost": "<:lossmark:1532115600162422894> Pick Lost", "push": "➖ Push"}
 _RESULT_REACTIONS = {"won": "<:winmark:1532115635071488221>", "lost": "<:lossmark:1532115600162422894>"}
 
+# Reactions the bot itself ever adds - excluded when carrying reactions
+# forward across a repost (see _repost_final) so a manually-added marker
+# (e.g. tagging a card as part of a parlay) isn't confused for one of these.
+_SERVICE_EMOJIS = {TRASH_EMOJI, *_RESULT_REACTIONS.values()}
+
 
 async def build_embed(
     player_name: str,
@@ -270,6 +275,50 @@ async def _track_loop(
 
     consecutive_misses = 0
     consecutive_edit_failures = 0
+
+    async def _repost_final(embed: discord.Embed, file: discord.File):
+        """Bumps the card to the bottom of the channel (pre-kickoff or
+        graded) - falls back to editing in place if the repost send itself
+        fails. Carries forward any reaction someone added beyond the bot's
+        own service ones (e.g. tagging a card as part of a parlay) -
+        otherwise silently lost every time a repost deletes the old
+        message. Discord has no way to make a reaction reappear as added by
+        the original user once that message is gone, so this re-adds the
+        same emoji under the bot's own account instead."""
+        nonlocal message
+        try:
+            fresh = await message.channel.fetch_message(message.id)
+            carry_emojis = [r.emoji for r in fresh.reactions if str(r.emoji) not in _SERVICE_EMOJIS]
+        except discord.HTTPException:
+            carry_emojis = []
+
+        try:
+            new_message = await throttle.run(channel_id, lambda: message.channel.send(embed=embed, file=file))
+        except discord.HTTPException as e:
+            log.warning("Failed to repost final prop tracking message: %s", e)
+            try:
+                await throttle.run(channel_id, lambda: message.edit(embed=embed, attachments=[file]))
+            except discord.HTTPException as e2:
+                log.warning("Failed to edit prop tracking message as a fallback: %s", e2)
+            return
+        try:
+            await new_message.add_reaction(TRASH_EMOJI)
+        except discord.HTTPException as e:
+            log.warning("Failed to react to reposted final prop tracking message: %s", e)
+        for emoji in carry_emojis:
+            try:
+                await new_message.add_reaction(emoji)
+            except discord.HTTPException as e:
+                log.warning("Failed to carry forward reaction %s: %s", emoji, e)
+        old_message = message
+        message = new_message
+        _message_owners.pop(old_message.id, None)
+        register_message(message.id, channel_id, event_id, entity_id, stat_key, owner_id)
+        try:
+            await old_message.delete()
+        except discord.HTTPException as e:
+            log.warning("Failed to delete old prop tracking message after final repost: %s", e)
+
     await asyncio.sleep(random.uniform(0, config.UPDATE_INTERVAL_SECONDS))
     try:
         while time.monotonic() < deadline:
@@ -350,27 +399,11 @@ async def _track_loop(
                 # The final wake right before start - bump the card to the
                 # bottom of the channel instead of editing a message that may
                 # be buried under whatever chat happened during hibernation.
-                try:
-                    new_message = await throttle.run(channel_id, lambda: message.channel.send(embed=embed, file=file))
-                except discord.HTTPException as e:
-                    log.warning("Failed to repost prop tracking message near start: %s", e)
-                else:
-                    try:
-                        await new_message.add_reaction(TRASH_EMOJI)
-                    except discord.HTTPException as e:
-                        log.warning("Failed to react to reposted prop tracking message: %s", e)
-                    old_message = message
-                    message = new_message
-                    _message_owners.pop(old_message.id, None)
-                    register_message(message.id, channel_id, event_id, entity_id, stat_key, owner_id)
-                    _persist(
-                        channel_id, event_id, entity_id, stat_key, message.id, sport, team_id, photo_url,
-                        stat_label, player_name, owner_id, direction, line, known_team_name,
-                    )
-                    try:
-                        await old_message.delete()
-                    except discord.HTTPException as e:
-                        log.warning("Failed to delete old prop tracking message after repost: %s", e)
+                await _repost_final(embed, file)
+                _persist(
+                    channel_id, event_id, entity_id, stat_key, message.id, sport, team_id, photo_url,
+                    stat_label, player_name, owner_id, direction, line, known_team_name,
+                )
                 continue
 
             if espn.is_finished(event) or espn.is_postponed(event):
@@ -378,27 +411,7 @@ async def _track_loop(
                 # of editing in place - same reasoning as the pre-kickoff bump
                 # above: a live event can run long enough that the original
                 # card is buried under chat by the time it's graded.
-                try:
-                    new_message = await throttle.run(channel_id, lambda: message.channel.send(embed=embed, file=file))
-                except discord.HTTPException as e:
-                    log.warning("Failed to repost final prop tracking message: %s", e)
-                    try:
-                        await throttle.run(channel_id, lambda: message.edit(embed=embed, attachments=[file]))
-                    except discord.HTTPException as e2:
-                        log.warning("Failed to edit prop tracking message as a fallback: %s", e2)
-                else:
-                    try:
-                        await new_message.add_reaction(TRASH_EMOJI)
-                    except discord.HTTPException as e:
-                        log.warning("Failed to react to reposted final prop tracking message: %s", e)
-                    old_message = message
-                    message = new_message
-                    _message_owners.pop(old_message.id, None)
-                    register_message(message.id, channel_id, event_id, entity_id, stat_key, owner_id)
-                    try:
-                        await old_message.delete()
-                    except discord.HTTPException as e:
-                        log.warning("Failed to delete old prop tracking message after final repost: %s", e)
+                await _repost_final(embed, file)
 
                 if espn.is_finished(event) and direction is not None and line is not None:
                     reaction = _RESULT_REACTIONS.get(espn.grade_over_under(current_value, direction, line))

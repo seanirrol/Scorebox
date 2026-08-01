@@ -48,6 +48,11 @@ _RESULT_TITLES = {
 }
 _RESULT_REACTIONS = {"won": "<:winmark:1532115635071488221>", "lost": "<:lossmark:1532115600162422894>", "void": "🚫"}
 
+# Reactions the bot itself ever adds - excluded when carrying reactions
+# forward across a repost (see _repost_final) so a manually-added marker
+# (e.g. tagging a card as part of a parlay) isn't confused for one of these.
+_SERVICE_EMOJIS = {TRASH_EMOJI, *_RESULT_REACTIONS.values()}
+
 
 def _grade(
     game: dict, picked_team: Optional[str], team_total: Optional[str],
@@ -256,12 +261,25 @@ async def _track_loop(
     consecutive_edit_failures = 0
 
     async def _repost_final(embed: discord.Embed, file: discord.File):
-        """Bumps the card to the bottom of the channel for a graded/voided
-        result, same repost mechanics as the pre-kickoff bump below - a
-        long-running match can get buried under chat by the time it's
-        decided, right when visibility matters most. Falls back to editing
-        in place if the repost send itself fails."""
+        """Bumps the card to the bottom of the channel (pre-kickoff, graded,
+        or voided) - a long-running match can get buried under chat by the
+        time anything actually changes. Falls back to editing in place if
+        the repost send itself fails.
+
+        Carries forward any reaction someone added beyond the bot's own
+        service ones (e.g. tagging a card as part of a parlay) - confirmed
+        live this was otherwise silently lost every time a repost deleted
+        the old message. Discord has no way to make a reaction reappear as
+        added by the original user once that message is gone, so this
+        re-adds the same emoji under the bot's own account instead - the
+        marker survives, just no longer attributed to whoever added it."""
         nonlocal message
+        try:
+            fresh = await message.channel.fetch_message(message.id)
+            carry_emojis = [r.emoji for r in fresh.reactions if str(r.emoji) not in _SERVICE_EMOJIS]
+        except discord.HTTPException:
+            carry_emojis = []
+
         try:
             new_message = await throttle.run(channel_id, lambda: message.channel.send(embed=embed, file=file))
         except discord.HTTPException as e:
@@ -275,6 +293,11 @@ async def _track_loop(
             await new_message.add_reaction(TRASH_EMOJI)
         except discord.HTTPException as e:
             log.warning("Failed to react to reposted final tracking message: %s", e)
+        for emoji in carry_emojis:
+            try:
+                await new_message.add_reaction(emoji)
+            except discord.HTTPException as e:
+                log.warning("Failed to carry forward reaction %s: %s", emoji, e)
         old_message = message
         message = new_message
         _message_owners.pop(old_message.id, None)
@@ -341,27 +364,11 @@ async def _track_loop(
                 # be buried under whatever chat happened during the (possibly
                 # long) hibernation. This is the one moment reposting helps
                 # rather than hurts, since it's about to actually go live.
-                try:
-                    new_message = await throttle.run(channel_id, lambda: message.channel.send(embed=embed, file=file))
-                except discord.HTTPException as e:
-                    log.warning("Failed to repost tracking message near kickoff: %s", e)
-                else:
-                    try:
-                        await new_message.add_reaction(TRASH_EMOJI)
-                    except discord.HTTPException as e:
-                        log.warning("Failed to react to reposted tracking message: %s", e)
-                    old_message = message
-                    message = new_message
-                    _message_owners.pop(old_message.id, None)
-                    register_message(message.id, channel_id, game_id, owner_id)
-                    _persist(
-                        channel_id, game_id, message.id, sport_id, owner_id, picked_team,
-                        total_direction, total_line, team_total,
-                    )
-                    try:
-                        await old_message.delete()
-                    except discord.HTTPException as e:
-                        log.warning("Failed to delete old tracking message after repost: %s", e)
+                await _repost_final(embed, file)
+                _persist(
+                    channel_id, game_id, message.id, sport_id, owner_id, picked_team,
+                    total_direction, total_line, team_total,
+                )
                 continue
 
             if scores365.is_finished(game):
