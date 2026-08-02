@@ -229,6 +229,13 @@ def _strip_trailing_parens(text: str) -> str:
 
 def _clean_line(line: str) -> str:
     text = line.strip()
+    # Some sources copy-paste with an em/en dash instead of a plain hyphen
+    # (confirmed live: "Matteo Berrettini vs Mariano Navone – Matteo
+    # Berrettini ML") - every dash-anchored regex in this module expects a
+    # literal "-", so normalizing here (the universal entry point every
+    # parser below calls first) fixes all of them at once rather than
+    # special-casing each one.
+    text = text.replace("–", "-").replace("—", "-")
     text = re.sub(r"[✅❌⭐️🔥💰]+\s*$", "", text).strip()
     while True:
         stripped = _strip_trailing_parens(text)
@@ -329,6 +336,16 @@ _PARTIAL_GAME_MARKERS = (
 )
 
 
+# "Team A vs Team B - Team X ML" - a matchup followed by an explicit dash +
+# named-team + ML/Moneyline trailer, used to disambiguate which side is
+# actually picked (see _parse_team_pick below, which previously ignored
+# this entirely and always defaulted to the first-listed team - confirmed
+# live a real "Daniel Vallejo vs Juncheng Shang - Juncheng Shang ML" pick
+# would have silently tracked Vallejo, the WRONG side, since Shang is the
+# second-listed team here).
+_MATCHUP_ML_TRAILER_RE = re.compile(r"^(.+?)\s*-\s*(.+?)\s*(?:ML|Moneyline)\s*$", re.IGNORECASE)
+
+
 def _parse_team_pick(description: str) -> Optional[str]:
     text = _clean_line(description)
     lowered = text.lower()
@@ -336,7 +353,16 @@ def _parse_team_pick(description: str) -> Optional[str]:
         return None
     for sep in (" vs. ", " vs ", " v. ", " v "):
         if sep in text:
-            return text.split(sep, 1)[0].strip()
+            team_a, rest = (p.strip() for p in text.split(sep, 1))
+            m = _MATCHUP_ML_TRAILER_RE.match(rest)
+            if m:
+                team_b, named = m.group(1).strip(), m.group(2).strip()
+                if scores365.names_match(named, team_a):
+                    return team_a
+                if scores365.names_match(named, team_b):
+                    return team_b
+                return None  # explicit pick doesn't match either side - don't guess
+            return team_a
     for cutword in ("Moneyline", "ML", " Over ", " Under "):
         idx = text.find(cutword)
         if idx > 0:
@@ -842,6 +868,18 @@ def parse_picks_message(content: str) -> list[dict]:
         # case still falls through to the stricter _is_simple_pick_name check.
         pick = _parse_description(sport, current_category.lower(), _clean_line(bare), is_prop_category=False)
         if pick and pick["kind"] != "track":
+            results.append(pick)
+            continue
+
+        # A full "Team A vs Team B[ - Team X ML]" matchup line is a
+        # different, stronger structural signal than the "leftover text
+        # after cutword-stripping" case the comment above worries about -
+        # unambiguous and safe to trust even on an untagged bullet.
+        # Confirmed live a real "Daniel Vallejo vs Juncheng Shang -
+        # Juncheng Shang ML" pick under a bare "Tennis" bullet header was
+        # previously dropped entirely, since only a bare name/ML (no
+        # matchup) was ever recognized here.
+        if pick and pick["kind"] == "track" and any(sep in bare for sep in (" vs. ", " vs ", " v. ", " v ")):
             results.append(pick)
             continue
 
