@@ -39,6 +39,10 @@ log = logging.getLogger("scorebox.parlaytracker")
 _WINMARK = "<:winmark:1532115635071488221>"
 _LOSSMARK = "<:lossmark:1532115600162422894>"
 
+# A real parlay is at least 3 legs - 1-2 cards sharing an emoji is more
+# likely just a personal marker unrelated to a parlay, not worth announcing.
+MIN_PARLAY_LEGS = 3
+
 
 def _key(channel_id: int, emoji: str) -> str:
     return f"{channel_id}:{emoji}"
@@ -105,6 +109,15 @@ async def handle_leg_result(
 
         if group is None:
             total = await _count_group_size(channel, channel_id, emoji, message.id)
+            if total < MIN_PARLAY_LEGS:
+                # Fewer than 3 cards share this emoji - not a parlay,
+                # probably just an unrelated personal marker on 1-2 cards.
+                # No group is created, so a later leg with the same emoji
+                # re-runs this same count (by then one fewer, since this
+                # leg's own tracker has already stopped tracking it) rather
+                # than reading a stale total from a group that was never
+                # actually established.
+                continue
             group = {
                 "channel_id": channel_id, "emoji": emoji, "total_legs": total,
                 "resolved_legs": 0, "won": 0, "voided": 0, "lost": False,
