@@ -32,6 +32,13 @@ import throttle
 
 log = logging.getLogger("scorebox.parlaytracker")
 
+# Same custom emoji every individual tracker already uses for a graded
+# pick's own Won/Lost badge (see e.g. tracker.py's _RESULT_REACTIONS) -
+# reused here so a parlay update visually matches every other result in
+# the channel instead of introducing a third, different-looking pair.
+_WINMARK = "<:winmark:1532115635071488221>"
+_LOSSMARK = "<:lossmark:1532115600162422894>"
+
 
 def _key(channel_id: int, emoji: str) -> str:
     return f"{channel_id}:{emoji}"
@@ -127,13 +134,13 @@ async def handle_leg_result(
         if was_already_lost:
             pass  # parlay already busted from an earlier leg - stay quiet
         elif result == "lost":
-            text = f"📉 Parlay {emoji} lost{voided_suffix}"
+            text = f"{_LOSSMARK} Parlay {emoji} lost{voided_suffix}"
         elif effective_total <= 0:
             text = f"➖ Parlay {emoji} — every leg voided, no result{voided_suffix}"
         elif all_resolved and group["won"] >= effective_total:
-            text = f"🎉 Parlay {emoji} {group['won']}/{effective_total} wins — HIT!{voided_suffix}"
+            text = f"{_WINMARK} Parlay {emoji} {group['won']}/{effective_total} wins — HIT!{voided_suffix}"
         elif result == "won":
-            text = f"✅ Parlay {emoji} {group['won']}/{effective_total} wins{voided_suffix}"
+            text = f"{_WINMARK} Parlay {emoji} {group['won']}/{effective_total} wins{voided_suffix}"
 
         if text:
             try:
