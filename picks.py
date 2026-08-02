@@ -355,12 +355,25 @@ def _is_simple_pick_name(text: str) -> Optional[str]:
 # other header-less basketball pick.
 _INFER_SPORT_CANDIDATES = [s for s in espn.STAT_CATALOG if s != "wnba"]
 
+# Stat words that are only in one ESPN-supported sport's catalog, but are
+# actually the dominant real-world wording for a DIFFERENT, unsupported
+# sport (see espn.UNSUPPORTED_SPORTS) - "Goals" is hockey's only in this
+# catalog, but overwhelmingly means soccer in a real picks channel (soccer
+# isn't ESPN-prop-supported at all). Confirmed live: a real "Lionel Messi
+# Goals" pick got silently misrouted to a hockey player search instead of
+# being recognized as unparseable. Excluded from inference entirely rather
+# than guessing wrong - a genuine bare hockey goals prop still works fine
+# with an explicit "[Hockey]"/"[NHL]" tag.
+_UNINFERABLE_STATS = {"goals"}
+
 
 def _infer_sport_from_stat(description: str) -> Optional[str]:
     pm = _PLAYER_STAT_RE.match(description)
     if not pm:
         return None
     raw_stat = pm.group(4).strip()
+    if raw_stat.lower() in _UNINFERABLE_STATS:
+        return None
     matches = {sport for sport in _INFER_SPORT_CANDIDATES if _match_stat_label(sport, raw_stat)}
     return matches.pop() if len(matches) == 1 else None
 
@@ -741,12 +754,19 @@ def parse_picks_message(content: str) -> list[dict]:
             # giving up: a player-prop-shaped line whose stat wording is
             # unique to exactly one sport can still be safely inferred (see
             # _infer_sport_from_stat). Anything else genuinely has no way to
-            # know the sport, so it's skipped rather than guessed.
-            sport = _infer_sport_from_stat(bare)
-            if sport:
-                prop = _parse_player_prop(sport, sport, bare)
-                if prop:
-                    results.append(prop)
+            # know the sport, so it's skipped rather than guessed. A
+            # team-vs-team matchup line is excluded even though it can still
+            # match the same Over/Under shape (e.g. "LA Galaxy vs FC Dallas
+            # Over 2.5 Goals") - that's a game total, not a player name, and
+            # inferring a sport for a bare untagged total isn't safe the way
+            # it is for a player prop (confirmed live: this was silently
+            # misparsed as a "player" search for the literal matchup text).
+            if not any(sep in bare for sep in (" vs. ", " vs ", " v. ", " v ")):
+                sport = _infer_sport_from_stat(bare)
+                if sport:
+                    prop = _parse_player_prop(sport, sport, bare)
+                    if prop:
+                        results.append(prop)
             continue
 
         if current_category.lower().endswith("props"):
