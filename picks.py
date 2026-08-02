@@ -106,6 +106,13 @@ _SET1_TOTAL_GAMES_RE = re.compile(
     r"^(.+?)\s*(?:@|vs\.?|v\.?)\s*(.+?)\s*-\s*1st\s+set\s*(?:total\s+)?(?:games\s+)?(Over|Under)\s+([\d.]+)",
     re.IGNORECASE,
 )
+# Same market, number-before-marker word order (confirmed live: "Over 8.5
+# 1st Set Total Games") - mirrors _MATCH_TOTAL_GAMES_AFTER_RE's same
+# before/after split below for the whole-match version.
+_SET1_TOTAL_GAMES_AFTER_RE = re.compile(
+    r"^(.+?)\s*(?:@|vs\.?|v\.?)\s*(.+?)\s*-?\s*(Over|Under)\s+([\d.]+)\s*1st\s+set\s*(?:total\s+)?games\b",
+    re.IGNORECASE,
+)
 
 # "Team A vs Team B - Total Games Over 23.5" (marker before the number) /
 # "Team A vs Team B - Over 23.5 Total Games" or "... Over 23.5 Games"
@@ -545,7 +552,7 @@ def _parse_set1_pick(description: str) -> Optional[str]:
 
 def _parse_set1_total_games_pick(description: str) -> Optional[dict]:
     text = _clean_line(description)
-    m = _SET1_TOTAL_GAMES_RE.match(text)
+    m = _SET1_TOTAL_GAMES_RE.match(text) or _SET1_TOTAL_GAMES_AFTER_RE.match(text)
     if not m:
         return None
     team = m.group(1).strip()  # either side - just used to look the match up
