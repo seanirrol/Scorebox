@@ -145,10 +145,15 @@ def pick_label(market: str, team: Optional[str], direction: Optional[str], line:
 async def build_embed(
     game: dict, sport_id: Optional[int], market: str,
     team: Optional[str] = None, direction: Optional[str] = None, line: Optional[float] = None,
+    force_result: Optional[str] = None,
 ) -> tuple[discord.Embed, discord.File]:
     """Exactly one of the four markets applies per pick (see this module's
     docstring) - team is the named player for set1_moneyline/win_a_set,
-    direction+line are the Over/Under (or Yes/No) line for the other two."""
+    direction+line are the Over/Under (or Yes/No) line for the other two.
+
+    force_result overrides the color/title as if this were already graded
+    that way, regardless of the game's actual live status - used only by
+    _track_loop's interrupted-and-never-resumed timeout branch."""
     home_competitor = game.get("homeCompetitor") or {}
     away_competitor = game.get("awayCompetitor") or {}
     status = scores365.map_status_type(game.get("statusGroup"), game.get("statusText"))
@@ -186,8 +191,16 @@ async def build_embed(
         decided = decided_result is not None
         result = decided_result
 
-    embed_color = {"won": 0x2ECC71, "lost": 0xE74C3C, "push": 0x95A5A6}.get(result, 0x3498DB)
-    embed = discord.Embed(color=embed_color)
+    if force_result:
+        color_status = force_result
+    elif result:
+        color_status = result
+    elif status in ("notstarted", "finished"):
+        color_status = status
+    else:
+        color_status = "inprogress"
+
+    embed = discord.Embed(color=scoreimage.EMBED_COLOR[color_status])
     if result:
         embed.title = _RESULT_TITLES[result]
 
@@ -204,13 +217,10 @@ async def build_embed(
 
     if decided:
         period_text = final_period_text
-        card_status = "finished"
     elif status == "inprogress":
         period_text = scores365.status_line(game, sport_id)
-        card_status = "inprogress"
     else:
         period_text = ""
-        card_status = "notstarted"
 
     if frozen_cols is not None:
         home_cols, away_cols = [frozen_cols[0]], [frozen_cols[1]]
@@ -228,7 +238,7 @@ async def build_embed(
 
     image_bytes = await asyncio.to_thread(
         scoreimage.render_score_card,
-        home_name, away_name, home_logo_url, away_logo_url, home_cols, away_cols, period_text, card_status,
+        home_name, away_name, home_logo_url, away_logo_url, home_cols, away_cols, period_text, color_status,
     )
     file = discord.File(io.BytesIO(image_bytes), filename="score.png")
     embed.set_image(url="attachment://score.png")
@@ -400,9 +410,8 @@ async def _track_loop(
             # just slow - tag it Voided/No Action instead of silently
             # leaving the card stuck with no result and no cleanup.
             if game and scores365.is_interrupted(game):
-                embed, file = await build_embed(game, sport_id, market, team, direction, line)
+                embed, file = await build_embed(game, sport_id, market, team, direction, line, force_result="void")
                 embed.title = _RESULT_TITLES["void"]
-                embed.color = 0x95A5A6
                 carry_emojis = await _repost_final(embed, file)
                 try:
                     await message.add_reaction(_RESULT_REACTIONS["void"])

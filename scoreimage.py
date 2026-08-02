@@ -79,19 +79,28 @@ _CARD_BG_COLOR = (45, 47, 51, 255)  # dark gray
 _CARD_BORDER_COLOR = (255, 255, 255, 25)
 _NAME_COLOR = (220, 221, 222, 255)  # discord's default light text
 _PILL_TEXT_COLOR = (255, 255, 255, 255)
-_SCORE_COLOR = {
-    "notstarted": (52, 152, 219, 255),  # blue
-    "inprogress": (255, 23, 68, 255),  # neon red
-    "finished": (46, 204, 113, 255),  # green
+
+# A card's pill/score-digit color reflects its current lifecycle state -
+# hibernating before kickoff, live once it starts, then whichever of
+# won/lost/push/void it's finally graded as. "finished" is a fallback for a
+# finished card with nothing to grade at all (e.g. a manual /track with no
+# pick attached) - green, matching this bot's original behavior from before
+# result-specific coloring existed. Single source of truth for both the
+# image (RGBA) and each tracker's Discord embed side-color (hex, below).
+_PALETTE = {
+    "notstarted": (52, 152, 219),  # blue
+    "inprogress": (241, 196, 15),  # yellow
+    "won": (46, 204, 113),  # green
+    "lost": (231, 76, 60),  # red
+    "push": (149, 165, 166),  # grey
+    "void": (155, 89, 182),  # purple
+    "finished": (46, 204, 113),  # green (fallback)
 }
-# The score/value digits themselves use a separate palette from the pill -
-# neon red digits were hard to read at a glance on a live card, so those go
-# white while the pill above them stays red.
-_SCORE_TEXT_COLOR = {
-    "notstarted": (52, 152, 219, 255),  # blue
-    "inprogress": (255, 255, 255, 255),  # white
-    "finished": (46, 204, 113, 255),  # green
-}
+_SCORE_COLOR = {key: (*rgb, 255) for key, rgb in _PALETTE.items()}
+# Score digits now match the pill/card color for the same state rather than
+# a separate always-white-while-live palette.
+_SCORE_TEXT_COLOR = _SCORE_COLOR
+EMBED_COLOR = {key: (rgb[0] << 16) + (rgb[1] << 8) + rgb[2] for key, rgb in _PALETTE.items()}
 
 _logo_cache: dict[str, Image.Image] = {}
 

@@ -120,10 +120,16 @@ def stop_tracking(channel_id: int, game_id) -> bool:
     return False
 
 
-async def build_embed(game: dict, sport_id: Optional[int], team: str, pick: str) -> tuple[discord.Embed, discord.File]:
+async def build_embed(
+    game: dict, sport_id: Optional[int], team: str, pick: str, force_result: Optional[str] = None,
+) -> tuple[discord.Embed, discord.File]:
     """team is used to locate the game (either side works for a Draw pick);
     pick is either the literal "DRAW" or the actual team name being backed
-    to lead after the 1st inning."""
+    to lead after the 1st inning.
+
+    force_result overrides the color/title as if this were already graded
+    that way, regardless of the game's actual live status - used only by
+    _track_loop's interrupted-and-never-resumed timeout branch."""
     home_competitor = game.get("homeCompetitor") or {}
     away_competitor = game.get("awayCompetitor") or {}
     status = scores365.map_status_type(game.get("statusGroup"), game.get("statusText"))
@@ -132,8 +138,16 @@ async def build_embed(game: dict, sport_id: Optional[int], team: str, pick: str)
     decided = breakdown is not None
     result = scores365.grade_inning1_result(game, breakdown[0], breakdown[1], pick) if decided else None
 
-    embed_color = {"won": 0x2ECC71, "lost": 0xE74C3C}.get(result, 0x3498DB)
-    embed = discord.Embed(color=embed_color)
+    if force_result:
+        color_status = force_result
+    elif result:
+        color_status = result
+    elif status in ("notstarted", "finished"):
+        color_status = status
+    else:
+        color_status = "inprogress"
+
+    embed = discord.Embed(color=scoreimage.EMBED_COLOR[color_status])
     if result:
         embed.title = _RESULT_TITLES[result]
 
@@ -151,13 +165,10 @@ async def build_embed(game: dict, sport_id: Optional[int], team: str, pick: str)
 
     if decided:
         period_text = "1st Inning Final"
-        card_status = "finished"
     elif status == "inprogress":
         period_text = scores365.status_line(game, sport_id)
-        card_status = "inprogress"
     else:
         period_text = ""
-        card_status = "notstarted"
 
     if decided:
         # Frozen at the 1st-inning score that decided the pick, even though
@@ -176,7 +187,7 @@ async def build_embed(game: dict, sport_id: Optional[int], team: str, pick: str)
 
     image_bytes = await asyncio.to_thread(
         scoreimage.render_score_card,
-        home_name, away_name, home_logo_url, away_logo_url, home_cols, away_cols, period_text, card_status,
+        home_name, away_name, home_logo_url, away_logo_url, home_cols, away_cols, period_text, color_status,
     )
     file = discord.File(io.BytesIO(image_bytes), filename="score.png")
     embed.set_image(url="attachment://score.png")
@@ -325,9 +336,8 @@ async def _track_loop(
             # - tag it Voided/No Action instead of silently leaving the card
             # stuck with no result and no cleanup.
             if game and scores365.is_interrupted(game):
-                embed, file = await build_embed(game, sport_id, team, pick)
+                embed, file = await build_embed(game, sport_id, team, pick, force_result="void")
                 embed.title = _RESULT_TITLES["void"]
-                embed.color = 0x95A5A6
                 carry_emojis = await _repost_final(embed, file)
                 try:
                     await message.add_reaction(_RESULT_REACTIONS["void"])

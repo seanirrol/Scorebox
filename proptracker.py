@@ -53,12 +53,6 @@ _active_props: dict[str, asyncio.Task] = {}
 # the reaction-based delete handler in bot.py look up who can delete a message.
 _message_owners: dict[int, tuple] = {}
 
-_STATUS_COLOR = {
-    "notstarted": 0x3498DB,  # blue
-    "inprogress": 0xE74C3C,  # red
-    "finished": 0x2ECC71,  # green
-}
-
 
 def _stat_key_str(stat_key: tuple) -> str:
     label, discriminator = stat_key
@@ -189,10 +183,39 @@ async def build_embed(
         status_type = "inprogress"
     else:
         status_type = "notstarted"
-    # No color/pill styling exists for "postponed" specifically - reuse the
-    # notstarted (blue) look, since the pill *text* (below) already says
-    # "Postponed"/"Canceled" via espn.match_status_text's detail field.
-    render_status = "notstarted" if status_type == "postponed" else status_type
+
+    result = None
+    if status_type == "finished" and direction is not None and line is not None:
+        result = espn.grade_over_under(current_value, direction, line)
+
+    early_win = False
+    if not result and status_type == "inprogress" and direction == "over" and line is not None:
+        # A counting stat (hits, runs, yards, etc.) only ever climbs during a
+        # game - once an Over line is already cleared, it can't un-clear, so
+        # it's safe to tag the pick a win before the match actually ends.
+        # Unders are deliberately excluded - the value could still climb past
+        # the line later, so an early "Won" tag there could turn out wrong.
+        # Exact-equal isn't tagged either - that's still genuinely undecided
+        # (could become a push or an Over by the final value).
+        try:
+            if current_value is not None and float(current_value) > line:
+                early_win = True
+        except (TypeError, ValueError):
+            pass
+
+    if status_type == "postponed":
+        # A postponed/canceled event never produces a graded win/loss -
+        # treated as a voided leg, same as an interrupted-and-never-resumed
+        # match elsewhere in this bot.
+        color_status = "void"
+    elif result:
+        color_status = result
+    elif early_win:
+        color_status = "won"
+    elif status_type in ("notstarted", "finished"):
+        color_status = status_type
+    else:
+        color_status = "inprogress"
 
     competitors = comp.get("competitors", [])
     home_name = next((c.get("team", {}).get("displayName", "?") for c in competitors if c.get("homeAway") == "home"), "?")
@@ -225,28 +248,15 @@ async def build_embed(
     period_text = "" if status_type == "notstarted" else espn.match_status_text(event, sport)
     image_bytes = await asyncio.to_thread(
         scoreimage.render_player_card,
-        team_name, photo_url, player_name, stat_label, _fmt_value(current_value), render_status, period_text,
+        team_name, photo_url, player_name, stat_label, _fmt_value(current_value), color_status, period_text,
     )
     file = discord.File(io.BytesIO(image_bytes), filename="score.png")
 
-    embed = discord.Embed(color=_STATUS_COLOR.get(status_type, 0x95A5A6))
-    if status_type == "finished" and direction is not None and line is not None:
-        result = espn.grade_over_under(current_value, direction, line)
-        if result:
-            embed.title = _RESULT_TITLES[result]
-    elif status_type == "inprogress" and direction == "over" and line is not None:
-        # A counting stat (hits, runs, yards, etc.) only ever climbs during a
-        # game - once an Over line is already cleared, it can't un-clear, so
-        # it's safe to tag the pick a win before the match actually ends.
-        # Unders are deliberately excluded - the value could still climb past
-        # the line later, so an early "Won" tag there could turn out wrong.
-        # Exact-equal isn't tagged either - that's still genuinely undecided
-        # (could become a push or an Over by the final value).
-        try:
-            if current_value is not None and float(current_value) > line:
-                embed.title = _RESULT_TITLES["won"]
-        except (TypeError, ValueError):
-            pass
+    embed = discord.Embed(color=scoreimage.EMBED_COLOR[color_status])
+    if result:
+        embed.title = _RESULT_TITLES[result]
+    elif early_win:
+        embed.title = _RESULT_TITLES["won"]
     embed.set_author(name=sport_tournament)
     embed.description = description
     embed.set_image(url="attachment://score.png")

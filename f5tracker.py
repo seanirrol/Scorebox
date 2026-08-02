@@ -126,6 +126,7 @@ def stop_tracking(channel_id: int, game_id) -> bool:
 async def build_embed(
     game: dict, sport_id: Optional[int], picked_team: Optional[str] = None,
     total_direction: Optional[str] = None, total_line: Optional[float] = None, handicap_line: Optional[float] = None,
+    force_result: Optional[str] = None,
 ) -> tuple[discord.Embed, discord.File]:
     """Exactly one of four modes applies per pick: picked_team + handicap_line
     grades that team's own 1st-5th inning runs adjusted by the line against
@@ -133,7 +134,11 @@ async def build_embed(
     moneyline; picked_team + total_direction/total_line grades that team's
     own 1st-5th inning total against a line; total_direction/total_line with
     no picked_team grades the *combined* (both sides summed) 1st-5th inning
-    total against a line instead."""
+    total against a line instead.
+
+    force_result overrides the color/title as if this were already graded
+    that way, regardless of the game's actual live status - used only by
+    _track_loop's interrupted-and-never-resumed timeout branch."""
     home_competitor = game.get("homeCompetitor") or {}
     away_competitor = game.get("awayCompetitor") or {}
     status = scores365.map_status_type(game.get("statusGroup"), game.get("statusText"))
@@ -156,11 +161,8 @@ async def build_embed(
     else:
         result = None
 
-    embed_color = {"won": 0x2ECC71, "lost": 0xE74C3C, "push": 0x95A5A6}.get(result, 0x3498DB)
-    embed = discord.Embed(color=embed_color)
-    if result:
-        embed.title = _RESULT_TITLES[result]
-    elif status == "inprogress" and total_direction == "over" and total_line is not None:
+    early_win = False
+    if not result and status == "inprogress" and total_direction == "over" and total_line is not None:
         # Same early-win idea as tracker.py/proptracker.py's Over tagging -
         # a team's (or the combined) innings-1-5 run total only climbs as
         # innings complete, so once the partial total already clears the
@@ -173,7 +175,24 @@ async def build_embed(
         else:
             partial = await asyncio.to_thread(scores365.partial_f5_combined_total, game.get("id"))
         if partial is not None and partial > total_line:
-            embed.title = _RESULT_TITLES["won"]
+            early_win = True
+
+    if force_result:
+        color_status = force_result
+    elif result:
+        color_status = result
+    elif early_win:
+        color_status = "won"
+    elif status in ("notstarted", "finished"):
+        color_status = status
+    else:
+        color_status = "inprogress"
+
+    embed = discord.Embed(color=scoreimage.EMBED_COLOR[color_status])
+    if result:
+        embed.title = _RESULT_TITLES[result]
+    elif early_win:
+        embed.title = _RESULT_TITLES["won"]
 
     author_bits = [b for b in (scores365.sport_label(sport_id), game.get("competitionDisplayName")) if b]
     if author_bits:
@@ -195,13 +214,10 @@ async def build_embed(
 
     if decided:
         period_text = "F5 Final"
-        card_status = "finished"
     elif status == "inprogress":
         period_text = scores365.status_line(game, sport_id)
-        card_status = "inprogress"
     else:
         period_text = ""
-        card_status = "notstarted"
 
     if decided:
         # Frozen at whatever the score was through the 5th inning - the
@@ -223,7 +239,7 @@ async def build_embed(
 
     image_bytes = await asyncio.to_thread(
         scoreimage.render_score_card,
-        home_name, away_name, home_logo_url, away_logo_url, home_cols, away_cols, period_text, card_status,
+        home_name, away_name, home_logo_url, away_logo_url, home_cols, away_cols, period_text, color_status,
     )
     file = discord.File(io.BytesIO(image_bytes), filename="score.png")
     embed.set_image(url="attachment://score.png")
@@ -386,9 +402,10 @@ async def _track_loop(
             # tag it Voided/No Action instead of silently leaving the card
             # stuck with no result and no cleanup.
             if game and scores365.is_interrupted(game):
-                embed, file = await build_embed(game, sport_id, picked_team, total_direction, total_line, handicap_line)
+                embed, file = await build_embed(
+                    game, sport_id, picked_team, total_direction, total_line, handicap_line, force_result="void",
+                )
                 embed.title = _RESULT_TITLES["void"]
-                embed.color = 0x95A5A6
                 carry_emojis = await _repost_final(embed, file)
                 try:
                     await message.add_reaction(_RESULT_REACTIONS["void"])

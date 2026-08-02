@@ -144,8 +144,16 @@ async def build_embed(
     else:
         result = None
 
-    embed_color = {"won": 0x2ECC71, "lost": 0xE74C3C, "push": 0x95A5A6}.get(result, 0x3498DB)
-    embed = discord.Embed(color=embed_color)
+    if result:
+        color_status = result
+    elif decided:
+        color_status = "finished"
+    elif competition.get("status", {}).get("type", {}).get("state") == "in":
+        color_status = "inprogress"
+    else:
+        color_status = "notstarted"
+
+    embed = discord.Embed(color=scoreimage.EMBED_COLOR[color_status])
     if result:
         embed.title = _RESULT_TITLES[result]
     league_label = espn_ufc.LEAGUE_LABELS.get(league_slug, league_slug.upper())
@@ -164,7 +172,6 @@ async def build_embed(
     embed.description = "\n".join(description_lines)
 
     period_text = "Final" if decided else espn_ufc.status_text(competition)
-    card_status = "finished" if decided else ("inprogress" if competition.get("status", {}).get("type", {}).get("state") == "in" else "notstarted")
 
     if decided:
         home_cols = ["W"] if fighter_a.get("winner") else (["L"] if any(c.get("winner") for c in competitors) else ["-"])
@@ -177,7 +184,7 @@ async def build_embed(
 
     image_bytes = await asyncio.to_thread(
         scoreimage.render_score_card,
-        name_a, name_b, home_photo, away_photo, home_cols, away_cols, period_text, card_status,
+        name_a, name_b, home_photo, away_photo, home_cols, away_cols, period_text, color_status,
     )
     file = discord.File(io.BytesIO(image_bytes), filename="score.png")
     embed.set_image(url="attachment://score.png")

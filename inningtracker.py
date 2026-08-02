@@ -129,9 +129,22 @@ async def build_embed(event: dict, pick_type: str) -> tuple[discord.Embed, disco
     result = espn.grade_yrfi(sum(breakdown), pick_type) if decided else None
     postponed = not decided and espn.is_postponed(event)
 
+    if postponed:
+        # A postponed/canceled event never produces a graded win/loss -
+        # treated as a voided leg, same as an interrupted-and-never-resumed
+        # match elsewhere in this bot.
+        color_status = "void"
+    elif result:
+        color_status = result
+    elif decided:
+        color_status = "finished"
+    elif state_name == "in":
+        color_status = "inprogress"
+    else:
+        color_status = "notstarted"
+
     league_name = ((event.get("header", {}).get("league") or {}).get("name")) or "MLB"
-    embed_color = 0x95A5A6 if postponed else {"won": 0x2ECC71, "lost": 0xE74C3C}.get(result, 0x3498DB)
-    embed = discord.Embed(color=embed_color)
+    embed = discord.Embed(color=scoreimage.EMBED_COLOR[color_status])
     if result:
         embed.title = _RESULT_TITLES[result]
     embed.set_author(name=f"MLB • {league_name}" if league_name != "MLB" else "MLB")
@@ -147,26 +160,19 @@ async def build_embed(event: dict, pick_type: str) -> tuple[discord.Embed, disco
 
     if decided:
         period_text = "1st Inning Final"
-        card_status = "finished"
     elif postponed:
-        # No color/pill styling exists for "postponed" specifically - reuse
-        # the notstarted (blue) look, same as proptracker.py's equivalent,
-        # since the pill text itself already says "Postponed"/"Canceled".
         period_text = espn.match_status_text(event, "baseball")
-        card_status = "notstarted"
     elif state_name == "in":
         period_text = status.get("type", {}).get("detail") or "Live"
-        card_status = "inprogress"
     else:
         period_text = ""
-        card_status = "notstarted"
 
     home_cols = [str(breakdown[0])] if decided else ["-"]
     away_cols = [str(breakdown[1])] if decided else ["-"]
 
     image_bytes = await asyncio.to_thread(
         scoreimage.render_score_card,
-        home_name, away_name, home_logo, away_logo, home_cols, away_cols, period_text, card_status,
+        home_name, away_name, home_logo, away_logo, home_cols, away_cols, period_text, color_status,
     )
     file = discord.File(io.BytesIO(image_bytes), filename="score.png")
     embed.set_image(url="attachment://score.png")

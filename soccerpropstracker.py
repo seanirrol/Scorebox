@@ -134,8 +134,11 @@ def _fmt_value(v) -> str:
 async def build_embed(
     game: dict, member_id, member_competitor_id, player_name: str, photo_url: Optional[str],
     stat_label: str, stat_name: str,
-    direction: Optional[str] = None, line: Optional[float] = None,
+    direction: Optional[str] = None, line: Optional[float] = None, force_result: Optional[str] = None,
 ) -> tuple[discord.Embed, discord.File]:
+    """force_result overrides the color/title as if this were already graded
+    that way, regardless of the game's actual live status - used only by
+    _track_loop's interrupted-and-never-resumed timeout branch."""
     home_competitor = game.get("homeCompetitor") or {}
     away_competitor = game.get("awayCompetitor") or {}
     status = scores365.map_status_type(game.get("statusGroup"), game.get("statusText"))
@@ -145,6 +148,32 @@ async def build_embed(
     current_value = None
     if status != "notstarted":
         current_value = scores365.soccer_player_stat(game, member_id, stat_name)
+
+    result = None
+    if status == "finished" and direction is not None and line is not None:
+        result = scores365.grade_over_under(current_value, direction, line)
+
+    early_win = False
+    if not result and status == "inprogress" and direction == "over" and line is not None:
+        # Same early-win idea as proptracker.py/tennispropstracker.py's Over
+        # tagging - goals/assists/cards only ever accumulate during a match,
+        # so once the line is already cleared it can't un-clear.
+        try:
+            if current_value is not None and float(current_value) > line:
+                early_win = True
+        except (TypeError, ValueError):
+            pass
+
+    if force_result:
+        color_status = force_result
+    elif result:
+        color_status = result
+    elif early_win:
+        color_status = "won"
+    elif status in ("notstarted", "finished"):
+        color_status = status
+    else:
+        color_status = "inprogress"
 
     description_lines = [f"{home_competitor.get('name', '?')} v {away_competitor.get('name', '?')}"]
     if direction is not None and line is not None:
@@ -159,27 +188,15 @@ async def build_embed(
     period_text = "" if status == "notstarted" else scores365.status_line(game, sport_id)
     image_bytes = await asyncio.to_thread(
         scoreimage.render_player_card,
-        team_name, photo_url, player_name, stat_label, _fmt_value(current_value), status, period_text,
+        team_name, photo_url, player_name, stat_label, _fmt_value(current_value), color_status, period_text,
     )
     file = discord.File(io.BytesIO(image_bytes), filename="score.png")
 
-    embed_color = {"won": 0x2ECC71, "lost": 0xE74C3C, "push": 0x95A5A6}
-    embed = discord.Embed(color=0x3498DB)
-    if status == "finished" and direction is not None and line is not None:
-        result = scores365.grade_over_under(current_value, direction, line)
-        if result:
-            embed.title = _RESULT_TITLES[result]
-            embed.color = embed_color[result]
-    elif status == "inprogress" and direction == "over" and line is not None:
-        # Same early-win idea as proptracker.py/tennispropstracker.py's Over
-        # tagging - goals/assists/cards only ever accumulate during a match,
-        # so once the line is already cleared it can't un-clear.
-        try:
-            if current_value is not None and float(current_value) > line:
-                embed.title = _RESULT_TITLES["won"]
-                embed.color = embed_color["won"]
-        except (TypeError, ValueError):
-            pass
+    embed = discord.Embed(color=scoreimage.EMBED_COLOR[color_status])
+    if result:
+        embed.title = _RESULT_TITLES[result]
+    elif early_win:
+        embed.title = _RESULT_TITLES["won"]
     author_bits = [b for b in (scores365.sport_label(sport_id), game.get("competitionDisplayName")) if b]
     if author_bits:
         embed.set_author(name=" • ".join(author_bits))
@@ -337,10 +354,10 @@ async def _track_loop(
             # result and no cleanup.
             if game and scores365.is_interrupted(game):
                 embed, file = await build_embed(
-                    game, member_id, member_competitor_id, player_name, photo_url, stat_label, stat_name, direction, line
+                    game, member_id, member_competitor_id, player_name, photo_url, stat_label, stat_name,
+                    direction, line, force_result="void",
                 )
                 embed.title = _RESULT_TITLES["void"]
-                embed.color = 0x95A5A6
                 carry_emojis = await _repost_final(embed, file)
                 try:
                     await message.add_reaction(_RESULT_REACTIONS["void"])
