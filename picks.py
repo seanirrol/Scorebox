@@ -173,8 +173,14 @@ _UFC_ROUND_TOTAL_RE = re.compile(
 # actually happening for the "Total Runs" wording example already called
 # out in this module's own docstring). The dash is optional since not every
 # source includes one.
+# The trailing stat word after the number is fully optional and unanchored
+# to any specific wording ("Total Runs", "Goals", "Total Points", or
+# nothing at all) - confirmed live "LA Galaxy vs FC Dallas Over 2.5 Goals"
+# (no literal "Total") previously fell through this regex entirely (it only
+# accepted a bare number or "Total <word>"), silently misparsed as a team
+# moneyline pick on "LA Galaxy" instead of a game total.
 _TOTAL_LINE_RE = re.compile(
-    r"^(.+?)\s*(?:@|vs\.?|v\.?)\s*(.+?)\s*(?:-\s*)?(Over|Under)\s+([\d.]+)(?:\s+Total\s+\w+)?\s*$",
+    r"^(.+?)\s*(?:@|vs\.?|v\.?)\s*(.+?)\s*(?:-\s*)?(Over|Under)\s+([\d.]+)(?:\s+\S.*)?\s*$",
     re.IGNORECASE,
 )
 
@@ -281,6 +287,34 @@ def _parse_tennis_player_prop(description: str) -> Optional[dict]:
     if not player or not stat_label:
         return None
     return {"kind": "tennis_playerprops", "player": player, "stat": stat_label, "direction": direction, "line": line}
+
+
+def _match_soccer_stat_label(raw_stat: str) -> Optional[str]:
+    """Soccer-only equivalent of _match_stat_label - ESPN doesn't support
+    soccer at all (see espn.py's module docstring), so soccer props are
+    backed by scores365.SOCCER_STAT_CATALOG instead."""
+    raw = raw_stat.strip().lower()
+    catalog = scores365.SOCCER_STAT_CATALOG
+    for label in catalog:
+        if label.lower() == raw:
+            return label
+    for label in catalog:
+        if raw in label.lower() or label.lower() in raw:
+            return label
+    return None
+
+
+def _parse_soccer_player_prop(description: str) -> Optional[dict]:
+    pm = _PLAYER_STAT_RE.match(description)
+    if not pm:
+        return None
+    player = re.sub(r"[\s-]+$", "", pm.group(1)).strip()
+    direction = pm.group(2).lower()
+    line = float(pm.group(3))
+    stat_label = _match_soccer_stat_label(pm.group(4).strip())
+    if not player or not stat_label:
+        return None
+    return {"kind": "soccer_playerprops", "player": player, "stat": stat_label, "direction": direction, "line": line}
 
 
 # Partial-game qualifiers (settle on a sub-period, not the final score) -
@@ -641,6 +675,24 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
             tennis_prop = _parse_tennis_player_prop(description)
             if tennis_prop:
                 return tennis_prop
+            if _PLAYER_STAT_RE.match(description):
+                # Player-prop-shaped but an unrecognized/unsupported stat
+                # (e.g. "Winners", never tracked here - see
+                # tennispropstracker.py's module docstring) - don't let this
+                # fall through to _parse_player_prop (always fails for
+                # tennis - ESPN doesn't support it at all) and then the
+                # generic team-pick fallback below, which would otherwise
+                # misparse the player's own name as if it were a team.
+                return None
+
+        if sport == "soccer":
+            soccer_prop = _parse_soccer_player_prop(description)
+            if soccer_prop:
+                return soccer_prop
+            if _PLAYER_STAT_RE.match(description):
+                # Same reasoning as tennis above - e.g. "Shots"/"Passes"
+                # aren't supported (see scores365.SOCCER_STAT_CATALOG).
+                return None
 
         prop = _parse_player_prop(sport_key, sport, description)
         if prop:

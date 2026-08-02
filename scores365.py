@@ -9,6 +9,7 @@ consistent shape - a better fit here than TheSportsDB's free tier, which has
 no true live-score endpoint for most sports.
 """
 
+import concurrent.futures
 import datetime
 import re
 import time
@@ -66,6 +67,20 @@ def competitor_logo_url(competitor: dict) -> Optional[str]:
     if not comp_id or version is None:
         return None
     return _LOGO_URL_TEMPLATE.format(version=version, id=comp_id)
+
+
+_ATHLETE_PHOTO_URL_TEMPLATE = "https://imagecache.365scores.com/image/upload/f_png,w_100,h_100,c_limit,q_auto:eco,dpr_2/v{version}/Athletes/{id}"
+
+
+def athlete_photo_url(member: dict) -> Optional[str]:
+    """A soccer roster member's own headshot - confirmed live this uses
+    their athleteId (a stable cross-match person id), not their id (a
+    per-match roster-entry id, which is what "members" is otherwise keyed
+    by everywhere else, e.g. play-by-play events' playerId)."""
+    athlete_id, version = member.get("athleteId"), member.get("imageVersion")
+    if not athlete_id or version is None:
+        return None
+    return _ATHLETE_PHOTO_URL_TEMPLATE.format(version=version, id=athlete_id)
 
 # statusGroup: 2 = not started, 3 = in progress, 4+ = terminal (ended/postponed/...)
 _STATUS_RANK = {"inprogress": 0, "notstarted": 1, "finished": 2}
@@ -135,6 +150,15 @@ def _get_game_detail(game_id) -> Optional[dict]:
     detail = data.get("game")
     _game_detail_cache[game_id] = {"detail": detail, "fetched_at": time.monotonic()}
     return detail
+
+
+def soccer_game_detail(game_id) -> Optional[dict]:
+    """Public wrapper around _get_game_detail - soccerpropstracker.py's own
+    polling needs the same full single-game object find_soccer_player
+    already fetches (for its "events"/"members" - not present on the bulk
+    games/current/ list), so this is just named for that call site rather
+    than something volleyball-specific."""
+    return _get_game_detail(game_id)
 
 
 def _norm_score(v):
@@ -245,6 +269,94 @@ def tennis_player_stat(game_id, competitor_id, stat_name: str) -> Optional[float
     for item in data.get("statistics", []):
         if item.get("competitorId") == competitor_id and item.get("name") == stat_name:
             return _parse_tennis_stat_value(item.get("value"))
+    return None
+
+
+# --- soccer player props -----------------------------------------------
+
+# Labels this bot can grade a soccer player prop against - "Assists" is
+# handled specially in soccer_player_stat (365scores logs no separate
+# "Assist" event type at all, only Goal events with an assisting player
+# attached). Shots/Shots on Target aren't here - confirmed live 365scores
+# only exposes those as team-level aggregates (see the /game/stats/
+# endpoint used by tennis_player_stat above), never broken out per player.
+SOCCER_STAT_CATALOG = {"Goals": "Goals", "Assists": "Assists", "Yellow Cards": "Yellow Cards", "Red Cards": "Red Cards"}
+
+_SOCCER_EVENT_TYPES = {"Goals": "Goal", "Yellow Cards": "Yellow Card", "Red Cards": "Red Card"}
+
+# How far ahead of kickoff a not-yet-started match is still worth searching
+# for a named player - see find_soccer_player.
+_SOCCER_PROP_SEARCH_WINDOW_SECONDS = 2 * 3600
+
+
+def soccer_player_stat(game: dict, member_id, stat_label: str) -> Optional[int]:
+    """Counts a player's occurrences of a stat from this game's own
+    play-by-play event log (game["events"], from _get_game_detail) - unlike
+    tennis, 365scores has no continuous per-player stat endpoint for soccer
+    at all, only individually-logged events. Confirmed live against real
+    matches (goals, assists via a goal's extraPlayers, and cards all
+    resolve correctly this way). member_id must be a roster member's "id"
+    (matches events' playerId/extraPlayers), not its "athleteId" (see
+    athlete_photo_url) - the two are different id spaces."""
+    events = game.get("events") or []
+    if stat_label == "Assists":
+        return sum(
+            1 for e in events
+            if e.get("eventType", {}).get("name") == "Goal" and member_id in (e.get("extraPlayers") or [])
+        )
+    event_type = _SOCCER_EVENT_TYPES.get(stat_label)
+    if not event_type:
+        return None
+    return sum(1 for e in events if e.get("eventType", {}).get("name") == event_type and e.get("playerId") == member_id)
+
+
+def find_soccer_player(player_name: str) -> Optional[tuple[dict, dict]]:
+    """
+    Searches currently live soccer matches, plus ones kicking off within the
+    next couple hours, for a player by name. Unlike every other find_*
+    lookup in this module, soccer's bulk game list only carries TEAM names
+    (a "competitor" here is a club, not a person, unlike tennis) - there's
+    no way to find which match a named player is in without actually
+    opening each candidate match's own roster via _get_game_detail. Bounded
+    to live + imminent matches (confirmed live: ~40-50 at any moment) and
+    fetched in parallel, rather than every match 365scores currently has
+    scheduled (860+) - a soccer prop pick is virtually never about a match
+    still hours away with no lineup out yet, and scanning all of them would
+    be both far too slow for a single auto-track lookup and needlessly
+    heavy on 365scores.
+
+    Returns (game, member) - game is the full single-game detail object
+    (see _get_game_detail), member is that player's own entry from its
+    "members" roster list. Prefers a live match over a not-yet-started one,
+    then the soonest kickoff among not-yet-started candidates.
+    """
+    games = _fetch_games_for_sport(SPORT_IDS["soccer"])  # raises ScoresError if entirely unreachable
+
+    now = time.time()
+    candidates = []
+    for game in games:
+        status = map_status_type(game.get("statusGroup"), game.get("statusText"))
+        if status == "inprogress":
+            candidates.append((0, 0.0, game["id"]))
+        elif status == "notstarted":
+            kickoff = start_epoch(game)
+            if kickoff and 0 < kickoff - now < _SOCCER_PROP_SEARCH_WINDOW_SECONDS:
+                candidates.append((1, kickoff, game["id"]))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda c: (c[0], c[1]))
+
+    game_ids = [c[2] for c in candidates]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=15) as pool:
+        details = dict(zip(game_ids, pool.map(_get_game_detail, game_ids)))
+
+    for _, _, game_id in candidates:
+        detail = details.get(game_id)
+        if not detail:
+            continue
+        for member in detail.get("members", []):
+            if names_match(member.get("name", ""), player_name) or names_match(member.get("shortName", ""), player_name):
+                return detail, member
     return None
 
 

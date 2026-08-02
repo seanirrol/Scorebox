@@ -32,6 +32,7 @@ import picks
 import proptracker
 import scores365
 import settracker
+import soccerpropstracker
 import tennispropstracker
 import throttle
 import tracker
@@ -71,6 +72,7 @@ async def on_ready():
     await inning1tracker.resume_all(client)
     await settracker.resume_all(client)
     await tennispropstracker.resume_all(client)
+    await soccerpropstracker.resume_all(client)
     await ufctracker.resume_all(client)
     await pendingdelete.resume_all(client)
 
@@ -103,6 +105,9 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     if not info:
         info = ufctracker.get_message_owner(payload.message_id)
         kind = "ufc"
+    if not info:
+        info = soccerpropstracker.get_message_owner(payload.message_id)
+        kind = "soccer_prop"
     if not info:
         return
 
@@ -143,9 +148,12 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     elif kind == "tennis_prop":
         channel_id, game_id, competitor_id, stat_name, _ = info
         tennispropstracker.stop_tracking(channel_id, game_id, competitor_id, stat_name)
-    else:
+    elif kind == "ufc":
         channel_id, competition_id, _ = info
         ufctracker.stop_tracking(channel_id, competition_id)
+    else:
+        channel_id, game_id, member_id, stat_name, _ = info
+        soccerpropstracker.stop_tracking(channel_id, game_id, member_id, stat_name)
 
     reactor = str(payload.member) if payload.member else f"user `{payload.user_id}`"
     botlog.event(f"🗑️ Untracked (🗑️ reaction, {kind}): message `{payload.message_id}` in <#{payload.channel_id}> — by **{reactor}**")
@@ -361,6 +369,56 @@ async def _auto_tennis_playerprops(
     botlog.event(f"✅ Tracked (tennis prop): **{player}** {stat} in <#{channel.id}>")
 
 
+async def _auto_soccer_playerprops(
+    channel: discord.abc.Messageable, player: str, stat: str,
+    direction: Optional[str] = None, line: Optional[float] = None,
+):
+    """Soccer-only equivalent of _auto_playerprops, backed by 365scores
+    instead of ESPN (which doesn't support soccer at all) - see
+    soccerpropstracker.py. Unlike tennis (where the player IS the
+    "competitor"), a soccer player has to be found via their match's own
+    roster (scores365.find_soccer_player), since 365scores' bulk game list
+    only carries club names."""
+    stat_name = scores365.SOCCER_STAT_CATALOG.get(stat)
+    if not stat_name:
+        botlog.event(f"❌ Not tracked (soccer prop): **{player}** {stat} — unknown stat")
+        return
+    try:
+        result = await asyncio.to_thread(scores365.find_soccer_player, player)
+    except scores365.ScoresError as e:
+        log.info("Auto-soccer-playerprops: couldn't reach 365scores for '%s': %s", player, e)
+        botlog.event(f"❌ Not tracked (soccer prop): **{player}** {stat} — couldn't reach 365scores: {e}")
+        return
+    if not result:
+        log.info("Auto-soccer-playerprops: no player found for '%s'", player)
+        botlog.event(f"❌ Not tracked (soccer prop): **{player}** {stat} — player not found (not in a live/imminent match)")
+        return
+    game, member = result
+    game_id, member_id, member_competitor_id = game["id"], member["id"], member.get("competitorId")
+    resolved_name = member.get("name", player)
+    photo_url = scores365.athlete_photo_url(member)
+    if soccerpropstracker.is_tracked(channel.id, game_id, member_id, stat_name):
+        botlog.event(f"⏭️ Skipped (soccer prop): **{player}** {stat} — already being tracked in <#{channel.id}>")
+        return
+
+    embed, file = await soccerpropstracker.build_embed(
+        game, member_id, member_competitor_id, resolved_name, photo_url, stat, stat_name, direction, line
+    )
+    message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
+    soccerpropstracker.register_message(message.id, channel.id, game_id, member_id, stat_name, None)
+    await message.add_reaction(TRASH_EMOJI)
+
+    if scores365.is_finished(game):
+        botlog.event(f"⏭️ Not tracked (soccer prop): **{player}** {stat} — match already finished, posted final value only")
+        return
+    soccerpropstracker.start_tracking(
+        message, game_id, channel.id, member_id, member_competitor_id, stat_name, photo_url,
+        stat, resolved_name, None, direction, line,
+    )
+    log.info("Auto-tracked soccer player prop pick: %s - %s", player, stat)
+    botlog.event(f"✅ Tracked (soccer prop): **{player}** {stat} in <#{channel.id}>")
+
+
 async def _auto_inning_runs(channel: discord.abc.Messageable, team: str, pick_type: str):
     """YRFI/NRFI picks settle after just the 1st inning, not the whole game
     - see inningtracker.py. Always baseball, so no sport param needed."""
@@ -562,6 +620,10 @@ async def on_message(message: discord.Message):
                 await _auto_tennis_playerprops(
                     target_channel, pick["player"], pick["stat"], pick.get("direction"), pick.get("line")
                 )
+            elif pick["kind"] == "soccer_playerprops":
+                await _auto_soccer_playerprops(
+                    target_channel, pick["player"], pick["stat"], pick.get("direction"), pick.get("line")
+                )
             elif pick["kind"] == "ufc_moneyline":
                 await _auto_ufc(target_channel, pick["team"])
             elif pick["kind"] == "ufc_round_total":
@@ -665,7 +727,12 @@ async def track(interaction: discord.Interaction, sport: app_commands.Choice[str
 async def stat_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
     sport = getattr(interaction.namespace, "sport", None)
     sport_key = sport.value if hasattr(sport, "value") else sport
-    labels = list(scores365.TENNIS_STAT_CATALOG.keys()) if sport_key == "tennis" else list(espn.STAT_CATALOG.get(sport_key, {}).keys())
+    if sport_key == "tennis":
+        labels = list(scores365.TENNIS_STAT_CATALOG.keys())
+    elif sport_key == "soccer":
+        labels = list(scores365.SOCCER_STAT_CATALOG.keys())
+    else:
+        labels = list(espn.STAT_CATALOG.get(sport_key, {}).keys())
     matches = [label for label in labels if current.lower() in label.lower()]
     return [app_commands.Choice(name=label, value=label) for label in matches[:25]]
 
@@ -715,6 +782,51 @@ async def _playerprops_tennis(interaction: discord.Interaction, player: str, sta
     botlog.event(f"✅ Tracked (manual, tennis prop): **{player}** {stat} in <#{interaction.channel_id}>, by **{interaction.user}**")
 
 
+async def _playerprops_soccer(interaction: discord.Interaction, player: str, stat: str):
+    """Soccer-only equivalent of /playerprops' ESPN-backed body, using
+    365scores instead (see soccerpropstracker.py)."""
+    stat_name = scores365.SOCCER_STAT_CATALOG.get(stat)
+    if not stat_name:
+        await interaction.followup.send(
+            f"Unknown stat '{stat}' for Soccer - pick one from the autocomplete list.", ephemeral=True
+        )
+        return
+
+    try:
+        result = await asyncio.to_thread(scores365.find_soccer_player, player)
+    except scores365.ScoresError as e:
+        await interaction.followup.send(f"Couldn't reach 365scores: {e}", ephemeral=True)
+        return
+    if not result:
+        await interaction.followup.send(
+            f"No live or imminent (within 2h) match found with a player named **{player}**.", ephemeral=True
+        )
+        return
+    game, member = result
+    game_id, member_id, member_competitor_id = game["id"], member["id"], member.get("competitorId")
+    resolved_name = member.get("name", player)
+    photo_url = scores365.athlete_photo_url(member)
+
+    embed, file = await soccerpropstracker.build_embed(
+        game, member_id, member_competitor_id, resolved_name, photo_url, stat, stat_name
+    )
+    message = await interaction.followup.send(embed=embed, file=file, wait=True)
+
+    # interaction followup messages are bound to a webhook token that expires
+    # after ~15 minutes; re-fetch as a plain channel message so edits keep
+    # working for the entire tracking duration.
+    message = await interaction.channel.fetch_message(message.id)
+    soccerpropstracker.register_message(message.id, interaction.channel_id, game_id, member_id, stat_name, interaction.user.id)
+    await message.add_reaction(TRASH_EMOJI)
+
+    if not scores365.is_finished(game):
+        soccerpropstracker.start_tracking(
+            message, game_id, interaction.channel_id, member_id, member_competitor_id, stat_name, photo_url,
+            stat, resolved_name, interaction.user.id,
+        )
+    botlog.event(f"✅ Tracked (manual, soccer prop): **{player}** {stat} in <#{interaction.channel_id}>, by **{interaction.user}**")
+
+
 @tree.command(name="playerprops", description="Track a player's live stat, e.g. Points, Earned Runs, Aces")
 @app_commands.describe(
     sport="Sport to search in",
@@ -734,9 +846,13 @@ async def playerprops(interaction: discord.Interaction, sport: app_commands.Choi
         await _playerprops_tennis(interaction, player, stat)
         return
 
+    if sport.value == "soccer":
+        await _playerprops_soccer(interaction, player, stat)
+        return
+
     if sport.value not in espn.SPORT_PATHS:
         await interaction.followup.send(
-            f"{sport.name} isn't supported for /playerprops yet - only Baseball, Basketball, Hockey, NFL, and Tennis for now.",
+            f"{sport.name} isn't supported for /playerprops yet - only Baseball, Basketball, Hockey, NFL, Tennis, and Soccer for now.",
             ephemeral=True,
         )
         return
@@ -830,6 +946,14 @@ def _untrack_one(channel_id: int, game_id: str, player: Optional[str]) -> list[s
         if player and player.lower() not in entry["player_name"].lower():
             continue
         if tennispropstracker.stop_tracking(channel_id, entry["game_id"], entry["competitor_id"], entry["stat_name"]):
+            stopped.append(f"{entry['player_name']} ({entry['stat_label']})")
+
+    for entry in soccerpropstracker.list_tracked_details(channel_id):
+        if str(entry["game_id"]) != str(game_id):
+            continue
+        if player and player.lower() not in entry["player_name"].lower():
+            continue
+        if soccerpropstracker.stop_tracking(channel_id, entry["game_id"], entry["member_id"], entry["stat_name"]):
             stopped.append(f"{entry['player_name']} ({entry['stat_label']})")
 
     return stopped
@@ -966,6 +1090,14 @@ async def _gather_tracked_items(channel_id: int) -> list[dict]:
                 tennispropstracker.stop_tracking(cid, gid, comp, sn),
         })
 
+    for entry in soccerpropstracker.list_tracked_details(channel_id):
+        items.append({
+            "kind": "soccer_prop", "label": f"{entry['player_name']} ({entry['stat_label']})", "id_label": entry["game_id"],
+            "message_id": entry["message_id"],
+            "stop": lambda cid=channel_id, gid=entry["game_id"], mid=entry["member_id"], sn=entry["stat_name"]:
+                soccerpropstracker.stop_tracking(cid, gid, mid, sn),
+        })
+
     for entry in ufctracker.list_tracked_details(channel_id):
         if entry.get("fighter_name"):
             pick_label = f"{entry['fighter_name']} ML"
@@ -1018,6 +1150,7 @@ _SECTION_TITLES = {
     "inning1": "Tracked 1st inning result picks",
     "set1": "Tracked 1st set picks",
     "tennis_prop": "Tracked tennis player props",
+    "soccer_prop": "Tracked soccer player props",
     "ufc": "Tracked UFC picks",
 }
 

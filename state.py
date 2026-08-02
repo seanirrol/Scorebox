@@ -24,6 +24,7 @@ SET1_FILE = os.path.join(_DIR, "set1_state.json")
 TENNIS_PROPS_FILE = os.path.join(_DIR, "tennis_props_state.json")
 PENDING_DELETE_FILE = os.path.join(_DIR, "pending_delete_state.json")
 UFC_FILE = os.path.join(_DIR, "ufc_state.json")
+SOCCER_PROPS_FILE = os.path.join(_DIR, "soccer_props_state.json")
 
 
 def _load(path: str) -> dict[str, Any]:
@@ -111,3 +112,11 @@ def load_ufc() -> dict[str, Any]:
 
 def save_ufc(data: dict[str, Any]):
     _save(UFC_FILE, data)
+
+
+def load_soccer_props() -> dict[str, Any]:
+    return _load(SOCCER_PROPS_FILE)
+
+
+def save_soccer_props(data: dict[str, Any]):
+    _save(SOCCER_PROPS_FILE, data)
