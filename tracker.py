@@ -12,6 +12,7 @@ import discord
 
 import botlog
 import config
+import parlaytracker
 import pendingdelete
 import scoreimage
 import scores365
@@ -288,7 +289,7 @@ async def _track_loop(
                 await throttle.run(channel_id, lambda: message.edit(embed=embed, attachments=[file]))
             except discord.HTTPException as e2:
                 log.warning("Failed to edit tracking message as a fallback: %s", e2)
-            return
+            return carry_emojis
         try:
             await new_message.add_reaction(TRASH_EMOJI)
         except discord.HTTPException as e:
@@ -306,6 +307,7 @@ async def _track_loop(
             await old_message.delete()
         except discord.HTTPException as e:
             log.warning("Failed to delete old tracking message after final repost: %s", e)
+        return carry_emojis
 
     # Random head start so many trackers started around the same moment don't
     # all land on the same wall-clock instant every cycle and pile up against
@@ -372,15 +374,18 @@ async def _track_loop(
                 continue
 
             if scores365.is_finished(game):
-                await _repost_final(embed, file)
+                carry_emojis = await _repost_final(embed, file)
 
                 if picked_team or (total_direction and total_line is not None):
-                    reaction = _RESULT_REACTIONS.get(_grade(game, picked_team, team_total, total_direction, total_line))
+                    result = _grade(game, picked_team, team_total, total_direction, total_line)
+                    reaction = _RESULT_REACTIONS.get(result)
                     if reaction:
                         try:
                             await message.add_reaction(reaction)
                         except discord.HTTPException as e:
                             log.warning("Failed to add result reaction: %s", e)
+                    if result:
+                        await parlaytracker.handle_leg_result(message.channel, channel_id, message, result, carry_emojis)
                 pendingdelete.start(channel_id, message, embed.description or "")
                 break
 
@@ -408,12 +413,13 @@ async def _track_loop(
                 embed, file = await build_embed(game, sport_id, picked_team, total_direction, total_line, team_total)
                 embed.title = _RESULT_TITLES["void"]
                 embed.color = 0x95A5A6
-                await _repost_final(embed, file)
+                carry_emojis = await _repost_final(embed, file)
                 try:
                     await message.add_reaction(_RESULT_REACTIONS["void"])
                 except discord.HTTPException as e:
                     log.warning("Failed to add void reaction: %s", e)
                 pendingdelete.start(channel_id, message, embed.description or "")
+                await parlaytracker.handle_leg_result(message.channel, channel_id, message, "void", carry_emojis)
                 botlog.event(f"➖ Voided (interrupted, never resumed): game `{game_id}` in <#{channel_id}>")
     except asyncio.CancelledError:
         raise

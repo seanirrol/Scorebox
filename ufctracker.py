@@ -28,6 +28,7 @@ import discord
 import botlog
 import config
 import espn_ufc
+import parlaytracker
 import pendingdelete
 import scoreimage
 import scores365
@@ -220,7 +221,7 @@ async def _track_loop(
                 await throttle.run(channel_id, lambda: message.edit(embed=embed, attachments=[file]))
             except discord.HTTPException as e2:
                 log.warning("Failed to edit UFC tracking message as a fallback: %s", e2)
-            return
+            return carry_emojis
         try:
             await new_message.add_reaction(TRASH_EMOJI)
         except discord.HTTPException as e:
@@ -238,6 +239,7 @@ async def _track_loop(
             await old_message.delete()
         except discord.HTTPException as e:
             log.warning("Failed to delete old UFC tracking message after final repost: %s", e)
+        return carry_emojis
 
     await asyncio.sleep(random.uniform(0, config.UPDATE_INTERVAL_SECONDS))
     try:
@@ -308,7 +310,7 @@ async def _track_loop(
                 # of editing in place - same reasoning as the pre-fight bump
                 # above: a live card can run long enough that the original
                 # card is buried under chat by the time the bout is graded.
-                await _repost_final(embed, file)
+                carry_emojis = await _repost_final(embed, file)
 
                 reaction = _RESULT_REACTIONS.get(result)
                 if reaction:
@@ -316,6 +318,8 @@ async def _track_loop(
                         await message.add_reaction(reaction)
                     except discord.HTTPException as e:
                         log.warning("Failed to add result reaction: %s", e)
+                if result:
+                    await parlaytracker.handle_leg_result(message.channel, channel_id, message, result, carry_emojis)
                 pendingdelete.start(channel_id, message, embed.description or "")
                 break
 

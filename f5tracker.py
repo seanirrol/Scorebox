@@ -30,6 +30,7 @@ import discord
 
 import botlog
 import config
+import parlaytracker
 import pendingdelete
 import scoreimage
 import scores365
@@ -266,7 +267,7 @@ async def _track_loop(
                 await throttle.run(channel_id, lambda: message.edit(embed=embed, attachments=[file]))
             except discord.HTTPException as e2:
                 log.warning("Failed to edit F5 tracking message as a fallback: %s", e2)
-            return
+            return carry_emojis
         try:
             await new_message.add_reaction(TRASH_EMOJI)
         except discord.HTTPException as e:
@@ -284,6 +285,7 @@ async def _track_loop(
             await old_message.delete()
         except discord.HTTPException as e:
             log.warning("Failed to delete old F5 tracking message after final repost: %s", e)
+        return carry_emojis
 
     await asyncio.sleep(random.uniform(0, config.UPDATE_INTERVAL_SECONDS))
     game = None
@@ -351,7 +353,7 @@ async def _track_loop(
                 else:
                     result = scores365.grade_f5_moneyline(game, breakdown[0], breakdown[1], picked_team)
 
-                await _repost_final(embed, file)
+                carry_emojis = await _repost_final(embed, file)
 
                 reaction = _RESULT_REACTIONS.get(result)
                 if reaction:
@@ -360,6 +362,8 @@ async def _track_loop(
                     except discord.HTTPException as e:
                         log.warning("Failed to add result reaction: %s", e)
                 pendingdelete.start(channel_id, message, embed.description or "")
+                if result:
+                    await parlaytracker.handle_leg_result(message.channel, channel_id, message, result, carry_emojis)
                 break
 
             try:
@@ -385,12 +389,13 @@ async def _track_loop(
                 embed, file = await build_embed(game, sport_id, picked_team, total_direction, total_line, handicap_line)
                 embed.title = _RESULT_TITLES["void"]
                 embed.color = 0x95A5A6
-                await _repost_final(embed, file)
+                carry_emojis = await _repost_final(embed, file)
                 try:
                     await message.add_reaction(_RESULT_REACTIONS["void"])
                 except discord.HTTPException as e:
                     log.warning("Failed to add void reaction: %s", e)
                 pendingdelete.start(channel_id, message, embed.description or "")
+                await parlaytracker.handle_leg_result(message.channel, channel_id, message, "void", carry_emojis)
                 botlog.event(f"➖ Voided (F5, interrupted, never resumed): game `{game_id}` in <#{channel_id}>")
     except asyncio.CancelledError:
         raise

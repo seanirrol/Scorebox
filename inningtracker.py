@@ -25,6 +25,7 @@ import discord
 import botlog
 import config
 import espn
+import parlaytracker
 import pendingdelete
 import scoreimage
 import scores365
@@ -205,7 +206,7 @@ async def _track_loop(message: discord.Message, channel_id: int, event_id, pick_
                 await throttle.run(channel_id, lambda: message.edit(embed=embed, attachments=[file]))
             except discord.HTTPException as e2:
                 log.warning("Failed to edit inning tracking message as a fallback: %s", e2)
-            return
+            return carry_emojis
         try:
             await new_message.add_reaction(TRASH_EMOJI)
         except discord.HTTPException as e:
@@ -223,6 +224,7 @@ async def _track_loop(message: discord.Message, channel_id: int, event_id, pick_
             await old_message.delete()
         except discord.HTTPException as e:
             log.warning("Failed to delete old inning tracking message after final repost: %s", e)
+        return carry_emojis
 
     await asyncio.sleep(random.uniform(0, config.UPDATE_INTERVAL_SECONDS))
     try:
@@ -287,7 +289,7 @@ async def _track_loop(message: discord.Message, channel_id: int, event_id, pick_
                 # of editing in place - same reasoning as the pre-kickoff bump
                 # above: a live game can run long enough that the original
                 # card is buried under chat by the time the 1st inning wraps.
-                await _repost_final(embed, file)
+                carry_emojis = await _repost_final(embed, file)
 
                 if breakdown is not None:
                     result = espn.grade_yrfi(sum(breakdown), pick_type)
@@ -297,6 +299,13 @@ async def _track_loop(message: discord.Message, channel_id: int, event_id, pick_
                             await message.add_reaction(reaction)
                         except discord.HTTPException as e:
                             log.warning("Failed to add result reaction: %s", e)
+                else:
+                    # A postponed/canceled event never produces a graded
+                    # win/loss - treated as a voided leg for parlay
+                    # purposes, same as an interrupted-and-never-resumed
+                    # match elsewhere in this bot.
+                    result = "void"
+                await parlaytracker.handle_leg_result(message.channel, channel_id, message, result, carry_emojis)
                 # A postponed/canceled event never produces a graded result -
                 # no reaction, but still cleans up after the same 24h window
                 # rather than polling every cycle until MAX_TRACK_HOURS runs
