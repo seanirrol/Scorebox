@@ -235,6 +235,56 @@ def grade_tennis_set(game: dict, home_games: int, away_games: int, picked_team: 
     return "won" if picked_games > other_games else "lost"
 
 
+def tennis_match_games(game: dict) -> tuple[int, int]:
+    """(home_games, away_games) running totals across every set so far -
+    unlike tennis_first_set_result, not gated on each set being fully
+    complete (includes whatever the current, still-live set's partial score
+    is too). Confirmed live: an unplayed Set N stage sits at
+    homeCompetitorScore/awayCompetitorScore -1/-1 (365scores' own "not yet"
+    sentinel, handled by _norm_score already), contributing 0 rather than
+    needing special-casing here. Used both for live per-side display and,
+    once the match itself finishes, final grading (home+away summed)
+    against a "Total Games" line."""
+    home_total = away_total = 0
+    for stage in game.get("stages") or []:
+        if not re.match(r"^Set \d+$", stage.get("name") or ""):
+            continue
+        home = _norm_score(stage.get("homeCompetitorScore"))
+        away = _norm_score(stage.get("awayCompetitorScore"))
+        if home is not None:
+            home_total += home
+        if away is not None:
+            away_total += away
+    return home_total, away_total
+
+
+def grade_win_a_set(game: dict, picked_team: str, direction: str) -> Optional[str]:
+    """Grades a "Player to Win a Set" (direction="yes") or "Player Not to
+    Win a Set" (direction="no") pick. Winning at least one set is safe to
+    grade a "yes" pick a win as soon as it happens - a player can't un-win a
+    set - but a "no" pick (or a "yes" pick that hasn't happened yet) can
+    only be graded once the whole match is over with the picked player
+    still on zero sets won."""
+    home = (game.get("homeCompetitor") or {}).get("name", "")
+    away = (game.get("awayCompetitor") or {}).get("name", "")
+    scores = main_scores(game)
+    if not scores:
+        return None
+    if names_match(home, picked_team):
+        picked_sets = scores[0]
+    elif names_match(away, picked_team):
+        picked_sets = scores[1]
+    else:
+        return None
+    if picked_sets >= 1:
+        won_a_set = True
+    elif is_finished(game):
+        won_a_set = False
+    else:
+        return None
+    return ("won" if won_a_set else "lost") if direction == "yes" else ("lost" if won_a_set else "won")
+
+
 # Our display label -> 365scores' own stat name (confirmed live against the
 # /web/game/stats/ endpoint). "Winners"/"Unforced Errors" aren't tracked by
 # 365scores at all for tennis - confirmed live across 46 real finished

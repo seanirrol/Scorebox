@@ -143,8 +143,8 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
         channel_id, game_id, _ = info
         inning1tracker.stop_tracking(channel_id, game_id)
     elif kind == "set1":
-        channel_id, game_id, _ = info
-        settracker.stop_tracking(channel_id, game_id)
+        channel_id, game_id, market, _ = info
+        settracker.stop_tracking(channel_id, game_id, market)
     elif kind == "tennis_prop":
         channel_id, game_id, competitor_id, stat_name, _ = info
         tennispropstracker.stop_tracking(channel_id, game_id, competitor_id, stat_name)
@@ -491,37 +491,45 @@ async def _auto_inning1_result(channel: discord.abc.Messageable, team: str, pick
     botlog.event(f"✅ Tracked (1st inning result): **{team}** ({pick}) — game `{game_id}` in <#{channel.id}>")
 
 
-async def _auto_set1(channel: discord.abc.Messageable, team: str):
-    """Tennis 1st-Set moneyline picks settle after Set 1, not the whole
-    match - see settracker.py. Backed by 365scores (like f5tracker.py), not
-    ESPN - always tennis."""
+async def _auto_tennis_market(
+    channel: discord.abc.Messageable, team: str, market: str,
+    direction: Optional[str] = None, line: Optional[float] = None,
+):
+    """Tennis "extra market" picks (1st Set ML/Total Games, Match Total
+    Games, Win a Set) all settle on some part of the match rather than the
+    whole thing finishing normally - see settracker.py. Backed by 365scores
+    (like f5tracker.py), not ESPN - always tennis. team is either the named
+    player (set1_moneyline/win_a_set) or just one of the two matchup sides
+    used to look the match up (set1_total_games/match_total_games, no
+    specific team being graded)."""
     try:
         result = await asyncio.to_thread(scores365.find_match_for_team, team, "tennis")
     except scores365.ScoresError as e:
-        log.info("Auto-1st-set: couldn't reach 365scores for '%s': %s", team, e)
-        botlog.event(f"❌ Not tracked (1st set): **{team}** — couldn't reach 365scores: {e}")
+        log.info("Auto-tennis-market (%s): couldn't reach 365scores for '%s': %s", market, team, e)
+        botlog.event(f"❌ Not tracked ({market}): **{team}** — couldn't reach 365scores: {e}")
         return
     if not result:
-        log.info("Auto-1st-set: no match found for '%s'", team)
-        botlog.event(f"❌ Not tracked (1st set): **{team}** — no match found")
+        log.info("Auto-tennis-market (%s): no match found for '%s'", market, team)
+        botlog.event(f"❌ Not tracked ({market}): **{team}** — no match found")
         return
     game, sport_id = result
     game_id = game["id"]
-    if settracker.is_tracked(channel.id, game_id):
-        botlog.event(f"⏭️ Skipped (1st set): **{team}** — game `{game_id}` already being tracked in <#{channel.id}>")
+    if settracker.is_tracked(channel.id, game_id, market):
+        botlog.event(f"⏭️ Skipped ({market}): **{team}** — game `{game_id}` already being tracked in <#{channel.id}>")
         return
 
-    embed, file = await settracker.build_embed(game, sport_id, team)
+    embed, file = await settracker.build_embed(game, sport_id, market, team, direction, line)
     message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
-    settracker.register_message(message.id, channel.id, game_id, None)
+    settracker.register_message(message.id, channel.id, game_id, market, None)
     await message.add_reaction(TRASH_EMOJI)
 
-    if scores365.tennis_first_set_result(game) is not None:
-        botlog.event(f"⏭️ Not tracked (1st set): **{team}** — game `{game_id}` Set 1 already decided, posted final result only")
+    decided, _ = settracker.grade_now(game, market, team, direction, line)
+    if decided:
+        botlog.event(f"⏭️ Not tracked ({market}): **{team}** — game `{game_id}` already decided, posted final result only")
         return  # already decided by the time this pick was posted
-    settracker.start_tracking(message, sport_id, game, channel.id, None, team)
-    log.info("Auto-tracked 1st-set pick '%s' -> game %s", team, game_id)
-    botlog.event(f"✅ Tracked (1st set): **{team}** — game `{game_id}` in <#{channel.id}>")
+    settracker.start_tracking(message, sport_id, game, channel.id, market, None, team, direction, line)
+    log.info("Auto-tracked tennis-market (%s) pick '%s' -> game %s", market, team, game_id)
+    botlog.event(f"✅ Tracked ({market}): **{team}** — game `{game_id}` in <#{channel.id}>")
 
 
 async def _auto_ufc(
@@ -615,7 +623,17 @@ async def on_message(message: discord.Message):
             elif pick["kind"] == "inning1_result":
                 await _auto_inning1_result(target_channel, pick["team"], pick["pick"])
             elif pick["kind"] == "set1_moneyline":
-                await _auto_set1(target_channel, pick["team"])
+                await _auto_tennis_market(target_channel, pick["team"], "set1_moneyline")
+            elif pick["kind"] == "tennis_set1_total_games":
+                await _auto_tennis_market(
+                    target_channel, pick["team"], "set1_total_games", pick["direction"], pick["line"]
+                )
+            elif pick["kind"] == "tennis_match_total_games":
+                await _auto_tennis_market(
+                    target_channel, pick["team"], "match_total_games", pick["direction"], pick["line"]
+                )
+            elif pick["kind"] == "tennis_win_a_set":
+                await _auto_tennis_market(target_channel, pick["team"], "win_a_set", pick["direction"])
             elif pick["kind"] == "tennis_playerprops":
                 await _auto_tennis_playerprops(
                     target_channel, pick["player"], pick["stat"], pick.get("direction"), pick.get("line")
@@ -919,8 +937,13 @@ def _untrack_one(channel_id: int, game_id: str, player: Optional[str]) -> list[s
     if inning1tracker.stop_tracking(channel_id, game_id):
         stopped.append("1st inning result pick")
 
-    if settracker.stop_tracking(channel_id, game_id):
-        stopped.append("1st set pick")
+    for entry in settracker.list_tracked_details(channel_id):
+        if str(entry["game_id"]) != str(game_id):
+            continue
+        if player and entry.get("team") and player.lower() not in entry["team"].lower():
+            continue
+        if settracker.stop_tracking(channel_id, entry["game_id"], entry["market"]):
+            stopped.append(f"{entry['market']} pick")
 
     if ufctracker.stop_tracking(channel_id, game_id):
         stopped.append("UFC pick")
@@ -1076,10 +1099,11 @@ async def _gather_tracked_items(channel_id: int) -> list[dict]:
         })
 
     for entry in settracker.list_tracked_details(channel_id):
+        label = settracker.pick_label(entry["market"], entry.get("team"), entry.get("direction"), entry.get("line"))
         items.append({
-            "kind": "set1", "label": f"{entry['team']} 1st Set ML", "id_label": entry["game_id"],
+            "kind": "set1", "label": label, "id_label": entry["game_id"],
             "message_id": entry["message_id"],
-            "stop": lambda cid=channel_id, gid=entry["game_id"]: settracker.stop_tracking(cid, gid),
+            "stop": lambda cid=channel_id, gid=entry["game_id"], m=entry["market"]: settracker.stop_tracking(cid, gid, m),
         })
 
     for entry in tennispropstracker.list_tracked_details(channel_id):
@@ -1148,7 +1172,7 @@ _SECTION_TITLES = {
     "inning": "Tracked 1st-inning picks",
     "f5": "Tracked F5 (1st 5 innings) picks",
     "inning1": "Tracked 1st inning result picks",
-    "set1": "Tracked 1st set picks",
+    "set1": "Tracked tennis extra-market picks",
     "tennis_prop": "Tracked tennis player props",
     "soccer_prop": "Tracked soccer player props",
     "ufc": "Tracked UFC picks",

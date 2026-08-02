@@ -96,6 +96,42 @@ _SET1_MARKER_RE = re.compile(
     re.IGNORECASE,
 )
 
+# "Team A vs Team B - 1st Set Total Games Over 8.5" / "... - 1st Set Over
+# 8.5 Games" - the COMBINED games played in Set 1 (both sides summed), not
+# who wins it (see _SET1_MARKER_RE above for that). Checked before the
+# generic game-total parser for the same reason F5's combined total is -
+# without the explicit "1st Set" marker this would otherwise be graded
+# against the whole match's sets-won score instead of just Set 1's games.
+_SET1_TOTAL_GAMES_RE = re.compile(
+    r"^(.+?)\s*(?:@|vs\.?|v\.?)\s*(.+?)\s*-\s*1st\s+set\s*(?:total\s+)?(?:games\s+)?(Over|Under)\s+([\d.]+)",
+    re.IGNORECASE,
+)
+
+# "Team A vs Team B - Total Games Over 23.5" (marker before the number) /
+# "Team A vs Team B - Over 23.5 Total Games" or "... Over 23.5 Games"
+# (marker after) - the combined games across the WHOLE match, not just Set
+# 1. Requires an explicit "Games" marker somewhere - without it this would
+# otherwise be indistinguishable from (and silently mis-graded as) a
+# generic total against tennis's sets-won score, which could never reach a
+# realistic games-total line like 23.5.
+_MATCH_TOTAL_GAMES_BEFORE_RE = re.compile(
+    r"^(.+?)\s*(?:@|vs\.?|v\.?)\s*(.+?)\s*-\s*(?:total\s+)?games\s+(Over|Under)\s+([\d.]+)",
+    re.IGNORECASE,
+)
+_MATCH_TOTAL_GAMES_AFTER_RE = re.compile(
+    r"^(.+?)\s*(?:@|vs\.?|v\.?)\s*(.+?)\s*-?\s*(Over|Under)\s+([\d.]+)\s*(?:total\s+)?games\b",
+    re.IGNORECASE,
+)
+
+# "Team A vs Team B - Venus Williams to Win a Set" (Yes) / "... - Venus
+# Williams No to Win a Set" / "... - Not Venus Williams to Win a Set" (No,
+# either word order) - whether the named player wins at least one set
+# during the match, not who wins the match outright.
+_WIN_A_SET_RE = re.compile(
+    r"^(.+?)\s*(?:@|vs\.?|v\.?)\s*(.+?)\s*-\s*(.+?)\s+to\s+win\s+a\s+set\b",
+    re.IGNORECASE,
+)
+
 # "Team A vs Team B - 1st Inning Draw" (or "Tie") - the Draw side of the same
 # 3-way "1st inning result" market. Either team name is enough to look the
 # game up - grading only cares whether the 1st inning runs end level.
@@ -507,6 +543,55 @@ def _parse_set1_pick(description: str) -> Optional[str]:
     return _parse_team_pick(text)
 
 
+def _parse_set1_total_games_pick(description: str) -> Optional[dict]:
+    text = _clean_line(description)
+    m = _SET1_TOTAL_GAMES_RE.match(text)
+    if not m:
+        return None
+    team = m.group(1).strip()  # either side - just used to look the match up
+    if not team:
+        return None
+    return {
+        "kind": "tennis_set1_total_games", "team": team,
+        "direction": m.group(3).lower(), "line": float(m.group(4)),
+    }
+
+
+def _parse_match_total_games_pick(description: str) -> Optional[dict]:
+    text = _clean_line(description)
+    m = _MATCH_TOTAL_GAMES_BEFORE_RE.match(text) or _MATCH_TOTAL_GAMES_AFTER_RE.match(text)
+    if not m:
+        return None
+    team = m.group(1).strip()  # either side - just used to look the match up
+    if not team:
+        return None
+    return {
+        "kind": "tennis_match_total_games", "team": team,
+        "direction": m.group(3).lower(), "line": float(m.group(4)),
+    }
+
+
+def _parse_win_a_set_pick(description: str) -> Optional[dict]:
+    text = _clean_line(description)
+    m = _WIN_A_SET_RE.match(text)
+    if not m:
+        return None
+    team_a, team_b, named = m.group(1).strip(), m.group(2).strip(), m.group(3).strip()
+    direction = "yes"
+    # A leading or trailing "No"/"Not" right against the player's name flips
+    # the pick - e.g. "Venus Williams No to Win a Set" or "Not Venus
+    # Williams to Win a Set".
+    stripped = re.sub(r"^(?:not|no)\s+|\s+(?:not|no)$", "", named, flags=re.IGNORECASE).strip()
+    if stripped != named:
+        direction = "no"
+        named = stripped
+    if not team_a or not team_b or not named:
+        return None
+    if not (scores365.names_match(named, team_a) or scores365.names_match(named, team_b)):
+        return None  # doesn't look like either matchup side - don't guess
+    return {"kind": "tennis_win_a_set", "team": named, "direction": direction}
+
+
 def _parse_inning1_draw_pick(description: str) -> Optional[dict]:
     text = _clean_line(description)
     m = _INNING1_DRAW_RE.match(text)
@@ -662,6 +747,22 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
         ufc_round_total = _parse_ufc_round_total_pick(description)
         if ufc_round_total:
             return ufc_round_total
+
+    if sport == "tennis":
+        win_a_set = _parse_win_a_set_pick(description)
+        if win_a_set:
+            return win_a_set
+
+        # Checked before Match Total Games - "1st Set Total Games" is the
+        # more specific shape, same reasoning as F5's combined total vs.
+        # baseball's generic total elsewhere in this function.
+        set1_total_games = _parse_set1_total_games_pick(description)
+        if set1_total_games:
+            return set1_total_games
+
+        match_total_games = _parse_match_total_games_pick(description)
+        if match_total_games:
+            return match_total_games
 
     named_total = _parse_named_team_total_pick(sport, description)
     if named_total:
