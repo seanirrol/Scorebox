@@ -353,11 +353,19 @@ def _gosu_matches_for_slug(game_slug: str) -> list[dict]:
 
 
 def _gosu_find_match(matches: list[dict], team_a: str, team_b: str, expected_epoch: Optional[float]) -> Optional[dict]:
+    # names_match (word-prefix based) rather than the plain compact-
+    # substring _loose_contains_match - confirmed live a real "Yakult's
+    # Brothers" pick failed to resolve against GosuGamers' own "Yakult
+    # Brothers" (no apostrophe-s), since the extra "s" broke substring
+    # containment in both directions even though every actual word still
+    # matched. names_match tokenizes on punctuation (including apostrophes)
+    # instead of just stripping it, so "Yakult's"/"Yakult" both reduce to
+    # the same "yakult" token.
     def is_a(name):
-        return _loose_contains_match(name, team_a)
+        return names_match(name, team_a)
 
     def is_b(name):
-        return _loose_contains_match(name, team_b)
+        return names_match(name, team_b)
 
     candidates = [
         m for m in matches
