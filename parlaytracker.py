@@ -38,7 +38,9 @@ LOST from then on), but the card keeps updating as any still-pending legs
 finish, rather than freezing mid-parlay.
 """
 
+import asyncio
 import logging
+from collections import defaultdict
 from typing import Optional
 
 import discord
@@ -48,6 +50,18 @@ import state
 import throttle
 
 log = logging.getLogger("scorebox.parlaytracker")
+
+# Serializes group-creation/update per (channel, emoji) - several legs'
+# trackers commonly start hibernating within the same moment (e.g. right
+# after a batch of picks all auto-track together), and without this, two
+# concurrent report_leg_progress/handle_leg_result calls could each load
+# state before the other saves, both see "no group yet", and each
+# independently create and post its own separate summary card for the
+# same parlay - confirmed live: a 3-leg group produced 3 separate
+# "0/3 resolved" cards instead of one. Keyed per-group (not one global
+# lock) so unrelated parlays in other channels/emoji aren't serialized
+# against each other.
+_group_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
 # Same custom emoji every individual tracker already uses for a graded
 # pick's own Won/Lost badge (see e.g. tracker.py's _RESULT_REACTIONS) -
@@ -305,14 +319,15 @@ async def report_leg_progress(
     for emoji_obj in marker_emojis:
         emoji = str(emoji_obj)
         key = _key(channel_id, emoji)
-        data = state.load_parlays()
-        group = await _ensure_group(data, key, channel, channel_id, emoji, message.id)
-        if group is None:
-            continue
-        group.setdefault("legs", {})[leg_id] = {"label": label, "status": "pending", "detail": detail}
-        group["summary_message_id"] = await _post_or_edit_summary(channel, channel_id, group)
-        data[key] = group
-        state.save_parlays(data)
+        async with _group_locks[key]:
+            data = state.load_parlays()
+            group = await _ensure_group(data, key, channel, channel_id, emoji, message.id)
+            if group is None:
+                continue
+            group.setdefault("legs", {})[leg_id] = {"label": label, "status": "pending", "detail": detail}
+            group["summary_message_id"] = await _post_or_edit_summary(channel, channel_id, group)
+            data[key] = group
+            state.save_parlays(data)
 
 
 async def handle_leg_result(
@@ -332,29 +347,31 @@ async def handle_leg_result(
     for emoji_obj in marker_emojis:
         emoji = str(emoji_obj)
         key = _key(channel_id, emoji)
-        data = state.load_parlays()
-        group = await _ensure_group(data, key, channel, channel_id, emoji, message.id)
-        if group is None:
-            continue
+        async with _group_locks[key]:
+            data = state.load_parlays()
+            group = await _ensure_group(data, key, channel, channel_id, emoji, message.id)
+            if group is None:
+                continue
 
-        group["resolved_legs"] += 1
-        if result == "won":
-            group["won"] += 1
-        elif result in ("push", "void"):
-            group["voided"] += 1
-            group["total_legs"] = max(group["total_legs"] - 1, 0)
-        elif result == "lost":
-            group["lost"] = True
+            group["resolved_legs"] += 1
+            if result == "won":
+                group["won"] += 1
+            elif result in ("push", "void"):
+                group["voided"] += 1
+                group["total_legs"] = max(group["total_legs"] - 1, 0)
+            elif result == "lost":
+                group["lost"] = True
 
-        group.setdefault("legs", {})[leg_id] = {"label": label, "status": result, "detail": _RESULT_DETAIL[result]}
-        group["summary_message_id"] = await _repost_summary(channel, channel_id, key, group)
+            group.setdefault("legs", {})[leg_id] = {"label": label, "status": result, "detail": _RESULT_DETAIL[result]}
+            group["summary_message_id"] = await _repost_summary(channel, channel_id, key, group)
 
-        all_resolved = group["resolved_legs"] >= group["total_legs"] + group["voided"]
-        if all_resolved:
-            # Every original leg has now produced a result - the group's
-            # done. The summary card message itself stays in the channel
-            # (not deleted) as the final record, just no longer tracked.
-            data.pop(key, None)
-        else:
-            data[key] = group
-        state.save_parlays(data)
+            all_resolved = group["resolved_legs"] >= group["total_legs"] + group["voided"]
+            if all_resolved:
+                # Every original leg has now produced a result - the
+                # group's done. The summary card message itself stays in
+                # the channel (not deleted) as the final record, just no
+                # longer tracked.
+                data.pop(key, None)
+            else:
+                data[key] = group
+            state.save_parlays(data)
