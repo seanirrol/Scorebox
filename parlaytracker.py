@@ -324,7 +324,15 @@ async def report_leg_progress(
             group = await _ensure_group(data, key, channel, channel_id, emoji, message.id)
             if group is None:
                 continue
-            group.setdefault("legs", {})[leg_id] = {"label": label, "status": "pending", "detail": detail}
+            legs = group.setdefault("legs", {})
+            if leg_id not in legs:
+                # Wasn't part of the original group-size scan (e.g. still
+                # mid-auto-track and not yet reactable at that exact
+                # moment) - grow the total to include it now rather than
+                # leaving the "X/N resolved" count permanently
+                # undercounting a leg that's clearly part of the group.
+                group["total_legs"] += 1
+            legs[leg_id] = {"label": label, "status": "pending", "detail": detail}
             group["summary_message_id"] = await _post_or_edit_summary(channel, channel_id, group)
             data[key] = group
             state.save_parlays(data)
@@ -353,6 +361,15 @@ async def handle_leg_result(
             if group is None:
                 continue
 
+            legs = group.setdefault("legs", {})
+            if leg_id not in legs:
+                # Same self-correction as report_leg_progress - a leg
+                # resolving without ever having reported pending progress
+                # first (e.g. it settled faster than its own next poll
+                # cycle) still needs to grow the total if it wasn't part
+                # of the original group-size scan.
+                group["total_legs"] += 1
+
             group["resolved_legs"] += 1
             if result == "won":
                 group["won"] += 1
@@ -362,7 +379,7 @@ async def handle_leg_result(
             elif result == "lost":
                 group["lost"] = True
 
-            group.setdefault("legs", {})[leg_id] = {"label": label, "status": result, "detail": _RESULT_DETAIL[result]}
+            legs[leg_id] = {"label": label, "status": result, "detail": _RESULT_DETAIL[result]}
             group["summary_message_id"] = await _repost_summary(channel, channel_id, key, group)
 
             all_resolved = group["resolved_legs"] >= group["total_legs"] + group["voided"]
