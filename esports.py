@@ -611,15 +611,26 @@ def grade_total_maps(series_data: dict, direction: str, line: float) -> Optional
     return "won" if total < line else "lost"
 
 
-def grade_win_at_least_one_map(series_data: dict, picked_team: str) -> Optional[str]:
-    """"Wins at Least One Map" - the underdog isn't swept 0-N. Resolves the
-    moment the picked team's map count reaches 1 (can't be undone - same
-    early-decidable reasoning as an Over line elsewhere in this bot), or
-    once the series ends with them still on 0."""
+def grade_win_at_least_one_map(series_data: dict, picked_team: str, direction: str = "yes") -> Optional[str]:
+    """"Wins at Least One Map" (direction="yes") - the underdog isn't swept
+    0-N. Resolves the moment the picked team's map count reaches 1 (can't
+    be undone - same early-decidable reasoning as an Over line elsewhere
+    in this bot), or once the series ends with them still on 0.
+
+    direction="no" is the inverse - "does NOT win at least one map", i.e.
+    the picked team gets swept - equally early-decidable the moment they
+    win their first map (dead for good, can't un-win it) or confirmed the
+    moment the series ends with them still on 0."""
     scores = _oriented_scores(series_data, picked_team)
     if scores is None:
         return None
     picked, _other = scores
+    if direction == "no":
+        if picked >= 1:
+            return "lost"
+        if is_decided(series_data):
+            return "won"
+        return None
     if picked >= 1:
         return "won"
     if is_decided(series_data):
@@ -641,7 +652,10 @@ def grade_correct_score(series_data: dict, picked_team: str, picked_maps: int, o
 
 
 def grade_map_winner(series_data: dict, map_number: int, picked_team: str) -> Optional[str]:
-    """Individual Map N winner - e.g. "Map 2 Winner"."""
+    """Individual Map N winner - e.g. "Map 2 Winner". Voided rather than
+    left stuck pending forever if the series ends without that map ever
+    being played (e.g. "Map 3 Winner" picked on a Bo3 that finished 2-0 -
+    there never was a map 3)."""
     home, away = series_data["home_team"], series_data["away_team"]
     if names_match(home, picked_team):
         picked_side = "home"
@@ -650,9 +664,32 @@ def grade_map_winner(series_data: dict, map_number: int, picked_team: str) -> Op
     else:
         return None
     winners = map_winners(series_data)
-    if map_number < 1 or map_number > len(winners):
-        return None
+    if map_number < 1 or map_number > len(winners) or winners[map_number - 1] is None:
+        return "void" if is_decided(series_data) else None
     winner_side = winners[map_number - 1]
-    if winner_side is None:
-        return None
     return "won" if winner_side == picked_side else "lost"
+
+
+def grade_match_and_map_winner(series_data: dict, map_number: int, picked_team: str) -> Optional[str]:
+    """Correlated same-game pick requiring BOTH conditions to be true - the
+    picked team wins the map AND wins the series outright (e.g. a
+    sportsbook's "Match Winner / Map 2 Winner" same-game combo). A failed
+    map result kills the whole pick immediately regardless of how the
+    series ends (can't be undone); otherwise it can only resolve once the
+    series itself is decided, since the match-winner half is never known
+    before then. A voided map (never played) voids the whole pick, same
+    reasoning as a voided leg elsewhere in this bot - the combo can't be
+    evaluated as bet if half of it never happened."""
+    map_result = grade_map_winner(series_data, map_number, picked_team)
+    if map_result == "lost":
+        return "lost"
+    match_result = grade_match_winner(series_data, picked_team)
+    if match_result is None:
+        return None
+    if match_result != "won":
+        return "lost"
+    if map_result == "won":
+        return "won"
+    if map_result == "void":
+        return "void"
+    return None

@@ -726,6 +726,18 @@ _ESPORTS_MAP_WINNER_RE = re.compile(
     r"^(.+?)\s*(?:@|vs\.?|v\.?)\s*(.+?)\s*-\s*(.+?)\s+map\s*(\d+)\s+winner\b", re.IGNORECASE,
 )
 
+# "Team A vs Team B - Team X ML and Map 2 Winner" / "... Match Winner / Map
+# 2 Winner" - a correlated same-game combo requiring BOTH conditions (see
+# esports.grade_match_and_map_winner), distinct from either market alone.
+# Checked before _ESPORTS_MAP_WINNER_RE - without this, that regex's own
+# non-greedy team-name group would otherwise swallow the "ML and" part as
+# if it were part of the team name and still fuzzy-match, silently
+# misparsing this as a plain Map N Winner pick.
+_ESPORTS_MATCH_AND_MAP_WINNER_RE = re.compile(
+    r"^(.+?)\s*(?:@|vs\.?|v\.?)\s*(.+?)\s*-\s*(.+?)\s+(?:ml|moneyline|match\s+winner)\s*(?:and|\+|/|&)\s*map\s*(\d+)\s+winner\b",
+    re.IGNORECASE,
+)
+
 # "Team A vs Team B - Team X to Win at Least One Map" / "... - Team X Wins
 # at Least One Map" - whether the named team avoids being swept, not who
 # wins the series outright.
@@ -784,8 +796,8 @@ def _parse_esports_map_winner(text: str) -> Optional[dict]:
     }
 
 
-def _parse_esports_win_at_least_one_map(text: str) -> Optional[dict]:
-    m = _ESPORTS_WIN_AT_LEAST_ONE_MAP_RE.match(text)
+def _parse_esports_match_and_map_winner(text: str) -> Optional[dict]:
+    m = _ESPORTS_MATCH_AND_MAP_WINNER_RE.match(text)
     if not m:
         return None
     team_a, team_b, named = m.group(1).strip(), m.group(2).strip(), m.group(3).strip()
@@ -793,7 +805,31 @@ def _parse_esports_win_at_least_one_map(text: str) -> Optional[dict]:
         return None
     if not (scores365.names_match(named, team_a) or scores365.names_match(named, team_b)):
         return None
-    return {"kind": "esports_win_at_least_one_map", "team_a": team_a, "team_b": team_b, "team": named}
+    return {
+        "kind": "esports_match_and_map_winner", "team_a": team_a, "team_b": team_b,
+        "team": named, "map_number": int(m.group(4)),
+    }
+
+
+def _parse_esports_win_at_least_one_map(text: str) -> Optional[dict]:
+    m = _ESPORTS_WIN_AT_LEAST_ONE_MAP_RE.match(text)
+    if not m:
+        return None
+    team_a, team_b, named = m.group(1).strip(), m.group(2).strip(), m.group(3).strip()
+    direction = "yes"
+    # A leading/trailing "No"/"Not" right against the team's name flips the
+    # pick to "does NOT win at least one map" (swept) - e.g. "LGD Gaming No
+    # to Win at Least One Map" / "Not LGD Gaming to Win at Least One Map" -
+    # same convention as tennis's win_a_set market elsewhere in this file.
+    stripped = re.sub(r"^(?:not|no)\s+|\s+(?:not|no)$", "", named, flags=re.IGNORECASE).strip()
+    if stripped != named:
+        direction = "no"
+        named = stripped
+    if not team_a or not team_b or not named:
+        return None
+    if not (scores365.names_match(named, team_a) or scores365.names_match(named, team_b)):
+        return None
+    return {"kind": "esports_win_at_least_one_map", "team_a": team_a, "team_b": team_b, "team": named, "direction": direction}
 
 
 def _parse_esports_correct_score(text: str) -> Optional[dict]:
@@ -835,7 +871,8 @@ def _parse_esports_match_winner(text: str) -> Optional[dict]:
 def _parse_esports_pick(description: str, sport: str) -> Optional[dict]:
     text = _clean_line(description)
     for parser in (
-        _parse_esports_map_handicap, _parse_esports_total_maps, _parse_esports_map_winner,
+        _parse_esports_map_handicap, _parse_esports_total_maps,
+        _parse_esports_match_and_map_winner, _parse_esports_map_winner,
         _parse_esports_win_at_least_one_map, _parse_esports_correct_score, _parse_esports_match_winner,
     ):
         pick = parser(text)

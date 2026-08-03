@@ -65,9 +65,9 @@ _message_owners: dict[int, tuple] = {}
 
 _RESULT_TITLES = {
     "won": "<:winmark:1532115635071488221> Pick Won", "lost": "<:lossmark:1532115600162422894> Pick Lost",
-    "push": "➖ Push",
+    "push": "➖ Push", "void": "🚫 Voided (No Action)",
 }
-_RESULT_REACTIONS = {"won": "<:winmark:1532115635071488221>", "lost": "<:lossmark:1532115600162422894>"}
+_RESULT_REACTIONS = {"won": "<:winmark:1532115635071488221>", "lost": "<:lossmark:1532115600162422894>", "void": "🚫"}
 
 # Reactions the bot itself ever adds - excluded when carrying reactions
 # forward across a repost (see _repost_final) so a manually-added marker
@@ -151,8 +151,10 @@ def pick_label(
         return f"{direction.title()} {line:g} Total Maps"
     if market == "map_winner":
         return f"{picked_team} Map {map_number} Winner"
+    if market == "match_and_map_winner":
+        return f"{picked_team} ML + Map {map_number} Winner"
     if market == "win_at_least_one_map":
-        return f"{picked_team} to Win at Least One Map"
+        return f"{picked_team} to {'Not ' if direction == 'no' else ''}Win at Least One Map"
     return f"{picked_team} to Win {picked_maps}-{other_maps}"  # correct_score
 
 
@@ -171,8 +173,10 @@ def grade_now(
         result = esports.grade_total_maps(series_data, direction, line)
     elif market == "map_winner":
         result = esports.grade_map_winner(series_data, map_number, picked_team)
+    elif market == "match_and_map_winner":
+        result = esports.grade_match_and_map_winner(series_data, map_number, picked_team)
     elif market == "win_at_least_one_map":
-        result = esports.grade_win_at_least_one_map(series_data, picked_team)
+        result = esports.grade_win_at_least_one_map(series_data, picked_team, direction or "yes")
     else:  # correct_score
         result = esports.grade_correct_score(series_data, picked_team, picked_maps, other_maps)
     return result is not None, result

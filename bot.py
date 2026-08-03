@@ -716,10 +716,15 @@ async def on_message(message: discord.Message):
                     target_channel, pick["sport"], pick["team_a"], pick["team_b"], "map_winner",
                     picked_team=pick["team"], map_number=pick["map_number"],
                 )
+            elif pick["kind"] == "esports_match_and_map_winner":
+                await _auto_esports(
+                    target_channel, pick["sport"], pick["team_a"], pick["team_b"], "match_and_map_winner",
+                    picked_team=pick["team"], map_number=pick["map_number"],
+                )
             elif pick["kind"] == "esports_win_at_least_one_map":
                 await _auto_esports(
                     target_channel, pick["sport"], pick["team_a"], pick["team_b"], "win_at_least_one_map",
-                    picked_team=pick["team"],
+                    picked_team=pick["team"], direction=pick["direction"],
                 )
             elif pick["kind"] == "esports_correct_score":
                 await _auto_esports(
