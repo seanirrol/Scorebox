@@ -129,13 +129,24 @@ async def _count_group_size(channel: discord.abc.Messageable, channel_id: int, e
 
 
 async def _ensure_group(
-    data: dict, key: str, channel: discord.abc.Messageable, channel_id: int, emoji: str, exclude_message_id: int,
+    data: dict, key: str, channel: discord.abc.Messageable, channel_id: int, emoji: str,
+    exclude_message_id: int, leg_id: str,
 ) -> Optional[dict]:
     """Returns the existing group record, or - the first time any leg
     reports in for this emoji - counts how many cards share it and creates
     one if that's at least MIN_PARLAY_LEGS. Returns None if there's no
     group and none should be created (not enough cards share this emoji -
-    probably just an unrelated personal marker)."""
+    probably just an unrelated personal marker).
+
+    leg_id is pre-seeded into the fresh group's legs dict (as an empty
+    placeholder, immediately overwritten by the caller right after this
+    returns) purely so report_leg_progress/handle_leg_result's own "is this
+    a never-before-seen leg?" growth check doesn't also count it a second
+    time - _count_group_size's total already includes the very leg that's
+    triggering group creation right now (its own "count = 1 (the one that
+    just reported in)"), so without this a brand new group's total_legs
+    came out one too high every time (confirmed live: a genuine 4-leg
+    parlay's first-ever summary card read "0/5 resolved")."""
     group = data.get(key)
     if group is not None:
         return group
@@ -145,7 +156,7 @@ async def _ensure_group(
     return {
         "channel_id": channel_id, "emoji": emoji, "total_legs": total,
         "resolved_legs": 0, "won": 0, "voided": 0, "lost": False,
-        "summary_message_id": None, "legs": {},
+        "summary_message_id": None, "legs": {leg_id: {}},
     }
 
 
@@ -321,7 +332,7 @@ async def report_leg_progress(
         key = _key(channel_id, emoji)
         async with _group_locks[key]:
             data = state.load_parlays()
-            group = await _ensure_group(data, key, channel, channel_id, emoji, message.id)
+            group = await _ensure_group(data, key, channel, channel_id, emoji, message.id, leg_id)
             if group is None:
                 continue
             legs = group.setdefault("legs", {})
@@ -357,7 +368,7 @@ async def handle_leg_result(
         key = _key(channel_id, emoji)
         async with _group_locks[key]:
             data = state.load_parlays()
-            group = await _ensure_group(data, key, channel, channel_id, emoji, message.id)
+            group = await _ensure_group(data, key, channel, channel_id, emoji, message.id, leg_id)
             if group is None:
                 continue
 
