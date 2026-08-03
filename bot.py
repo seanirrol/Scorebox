@@ -682,6 +682,10 @@ async def on_message(message: discord.Message):
                 await _auto_tennis_market(
                     target_channel, pick["team"], "match_total_games", pick["direction"], pick["line"]
                 )
+            elif pick["kind"] == "tennis_player_total_games":
+                await _auto_tennis_market(
+                    target_channel, pick["team"], "player_total_games", pick["direction"], pick["line"]
+                )
             elif pick["kind"] == "tennis_win_a_set":
                 await _auto_tennis_market(target_channel, pick["team"], "win_a_set", pick["direction"])
             elif pick["kind"] == "tennis_playerprops":

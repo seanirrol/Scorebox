@@ -139,6 +139,8 @@ def pick_label(market: str, team: Optional[str], direction: Optional[str], line:
         return f"1st Set {direction.title()} {line:g} Games"
     if market == "match_total_games":
         return f"{direction.title()} {line:g} Total Games"
+    if market == "player_total_games":
+        return f"{team} {direction.title()} {line:g} Total Games"
     return f"{team} {'to Win a Set' if direction == 'yes' else 'Not to Win a Set'}"  # win_a_set
 
 
@@ -184,6 +186,17 @@ async def build_embed(
         home_games, away_games = scores365.tennis_match_games(game)
         if decided:
             result = scores365.grade_over_under(home_games + away_games, direction, line)
+        frozen_cols = (str(home_games), str(away_games))  # live-running, shown whether decided or not
+
+    elif market == "player_total_games":
+        # Unlike match_total_games (both sides summed), this is one named
+        # player's own games won across the whole match - a distinct,
+        # commonly-bet prop line, not to be confused with the combined total.
+        decided = scores365.is_finished(game)
+        home_games, away_games = scores365.tennis_match_games(game)
+        player_games = home_games if scores365.names_match(home_competitor.get("name", ""), team) else away_games
+        if decided:
+            result = scores365.grade_over_under(player_games, direction, line)
         frozen_cols = (str(home_games), str(away_games))  # live-running, shown whether decided or not
 
     else:  # win_a_set

@@ -136,6 +136,26 @@ _MATCH_TOTAL_GAMES_AFTER_RE = re.compile(
     re.IGNORECASE,
 )
 
+# "Rebecca Sramkova vs Anna Blinkova - Rebecca Sramkova Over 11.5 Total
+# Games" - a named PLAYER's own games won across the whole match, not the
+# two sides combined (see _MATCH_TOTAL_GAMES_.../grade_over_under above) -
+# a distinct, commonly-bet prop line. The named player between the dash and
+# Over/Under is what distinguishes this from the combined-total shape above
+# (which has no name there at all) - checked first and validated against
+# the matchup the same way _WIN_A_SET_RE is, falling through to the
+# combined-total parser if it doesn't look like either side (confirmed live
+# this was previously silently swallowed as a combined match total, with
+# the player's own name folded into the "team" match-lookup string instead
+# of ever being used to orient which side's games actually get graded).
+_PLAYER_TOTAL_GAMES_BEFORE_RE = re.compile(
+    r"^(.+?)\s*(?:@|vs\.?|v\.?)\s*(.+?)\s*-\s*(.+?)\s+(?:total\s+)?games\s+(Over|Under)\s+([\d.]+)",
+    re.IGNORECASE,
+)
+_PLAYER_TOTAL_GAMES_AFTER_RE = re.compile(
+    r"^(.+?)\s*(?:@|vs\.?|v\.?)\s*(.+?)\s*-\s*(.+?)\s+(Over|Under)\s+([\d.]+)\s*(?:total\s+)?games\b",
+    re.IGNORECASE,
+)
+
 # "Team A vs Team B - Venus Williams to Win a Set" (Yes) / "... - Venus
 # Williams No to Win a Set" / "... - Not Venus Williams to Win a Set" (No,
 # either word order) - whether the named player wins at least one set
@@ -570,6 +590,22 @@ def _parse_set1_total_games_pick(description: str) -> Optional[dict]:
     }
 
 
+def _parse_player_total_games_pick(description: str) -> Optional[dict]:
+    text = _clean_line(description)
+    m = _PLAYER_TOTAL_GAMES_BEFORE_RE.match(text) or _PLAYER_TOTAL_GAMES_AFTER_RE.match(text)
+    if not m:
+        return None
+    team_a, team_b, named = m.group(1).strip(), m.group(2).strip(), m.group(3).strip()
+    if not team_a or not team_b or not named:
+        return None
+    if not (scores365.names_match(named, team_a) or scores365.names_match(named, team_b)):
+        return None  # doesn't look like either matchup side - let the combined-total parser try instead
+    return {
+        "kind": "tennis_player_total_games", "team": named,
+        "direction": m.group(4).lower(), "line": float(m.group(5)),
+    }
+
+
 def _parse_match_total_games_pick(description: str) -> Optional[dict]:
     text = _clean_line(description)
     m = _MATCH_TOTAL_GAMES_BEFORE_RE.match(text) or _MATCH_TOTAL_GAMES_AFTER_RE.match(text)
@@ -965,6 +1001,14 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
         set1_total_games = _parse_set1_total_games_pick(description)
         if set1_total_games:
             return set1_total_games
+
+        # Checked before the combined-match version - a named player right
+        # before Over/Under is what distinguishes "that player's own games
+        # won" from "both sides' games summed" (see _PLAYER_TOTAL_GAMES_...
+        # above).
+        player_total_games = _parse_player_total_games_pick(description)
+        if player_total_games:
+            return player_total_games
 
         match_total_games = _parse_match_total_games_pick(description)
         if match_total_games:
