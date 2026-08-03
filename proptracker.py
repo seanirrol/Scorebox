@@ -390,10 +390,15 @@ async def _track_loop(
                 except discord.HTTPException:
                     marker_emojis = []
                 if marker_emojis:
-                    pre_label = (
+                    pre_comp = (event.get("header", {}).get("competitions") or [{}])[0]
+                    pre_competitors = pre_comp.get("competitors", [])
+                    pre_home = next((c.get("team", {}).get("displayName", "?") for c in pre_competitors if c.get("homeAway") == "home"), "?")
+                    pre_away = next((c.get("team", {}).get("displayName", "?") for c in pre_competitors if c.get("homeAway") == "away"), "?")
+                    pre_pick = (
                         f"{player_name} {direction.title()} {line:g} {stat_label}"
                         if direction is not None and line is not None else player_name
                     )
+                    pre_label = f"{pre_home} v {pre_away} - {pre_pick}"
                     await parlaytracker.report_leg_progress(
                         message.channel, channel_id, message, "proptracker", key, pre_label,
                         f"NOT STARTED - <t:{int(kickoff)}:f>", marker_emojis,
@@ -437,10 +442,15 @@ async def _track_loop(
                 player_name, entity_id, photo_url, sport, stat_label, current_value, is_home, team, event,
                 direction, line, known_team_name,
             )
-            leg_label = (
+            leg_comp = (event.get("header", {}).get("competitions") or [{}])[0]
+            leg_competitors = leg_comp.get("competitors", [])
+            leg_home = next((c.get("team", {}).get("displayName", "?") for c in leg_competitors if c.get("homeAway") == "home"), "?")
+            leg_away = next((c.get("team", {}).get("displayName", "?") for c in leg_competitors if c.get("homeAway") == "away"), "?")
+            leg_pick = (
                 f"{player_name} {direction.title()} {line:g} {stat_label}" if direction is not None and line is not None
                 else player_name
             )
+            leg_label = f"{leg_home} v {leg_away} - {leg_pick}"
 
             if hibernated:
                 # The final wake right before start - bump the card to the

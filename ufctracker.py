@@ -284,12 +284,20 @@ async def _track_loop(
                 except discord.HTTPException:
                     marker_emojis = []
                 if marker_emojis:
+                    pre_competitors = refreshed[0].get("competitors", [])
+                    pre_fighter_a = next((c for c in pre_competitors if c.get("order") == 1), pre_competitors[0] if pre_competitors else {})
+                    pre_fighter_b = next((c for c in pre_competitors if c.get("order") == 2), pre_competitors[1] if len(pre_competitors) > 1 else {})
+                    pre_matchup = (
+                        f"{(pre_fighter_a.get('athlete') or {}).get('displayName', '?')} vs "
+                        f"{(pre_fighter_b.get('athlete') or {}).get('displayName', '?')}"
+                    )
                     if fighter_id is not None:
-                        pre_label = f"{fighter_name} ML"
+                        pre_pick = f"{fighter_name} ML"
                     elif total_direction and total_line is not None:
-                        pre_label = f"Fight {total_direction.title()} {total_line:g} Rounds"
+                        pre_pick = f"{total_direction.title()} {total_line:g} Rounds"
                     else:
-                        pre_label = event_name
+                        pre_pick = None
+                    pre_label = f"{pre_matchup} - {pre_pick}" if pre_pick else pre_matchup
                     await parlaytracker.report_leg_progress(
                         message.channel, channel_id, message, "ufctracker", key, pre_label,
                         f"NOT STARTED - <t:{int(kickoff)}:f>", marker_emojis,
@@ -315,12 +323,20 @@ async def _track_loop(
             competition, _fighter = refreshed
 
             embed, file = await build_embed(competition, league_slug, event_name, fighter_id, fighter_name, total_direction, total_line)
+            leg_competitors = competition.get("competitors", [])
+            leg_fighter_a = next((c for c in leg_competitors if c.get("order") == 1), leg_competitors[0] if leg_competitors else {})
+            leg_fighter_b = next((c for c in leg_competitors if c.get("order") == 2), leg_competitors[1] if len(leg_competitors) > 1 else {})
+            leg_matchup = (
+                f"{(leg_fighter_a.get('athlete') or {}).get('displayName', '?')} vs "
+                f"{(leg_fighter_b.get('athlete') or {}).get('displayName', '?')}"
+            )
             if fighter_id is not None:
-                leg_label = f"{fighter_name} ML"
+                leg_pick = f"{fighter_name} ML"
             elif total_direction and total_line is not None:
-                leg_label = f"Fight {total_direction.title()} {total_line:g} Rounds"
+                leg_pick = f"{total_direction.title()} {total_line:g} Rounds"
             else:
-                leg_label = event_name
+                leg_pick = None
+            leg_label = f"{leg_matchup} - {leg_pick}" if leg_pick else leg_matchup
 
             if hibernated:
                 # The final wake right before start - bump the card to the

@@ -344,7 +344,9 @@ async def _track_loop(
                 except discord.HTTPException:
                     marker_emojis = []
                 if marker_emojis:
-                    pre_label = pick_label(market, picked_team, direction, line, map_number, picked_maps, other_maps)
+                    pre_matchup = f"{series_data.get('home_team') or '?'} vs {series_data.get('away_team') or '?'}"
+                    pre_pick = pick_label(market, picked_team, direction, line, map_number, picked_maps, other_maps)
+                    pre_label = f"{pre_matchup} - {pre_pick}"
                     await parlaytracker.report_leg_progress(
                         message.channel, channel_id, message, "esportstracker", key, pre_label,
                         f"NOT STARTED - <t:{int(kickoff)}:f>", marker_emojis,
@@ -396,7 +398,9 @@ async def _track_loop(
                         log.warning("Failed to add result reaction: %s", e)
                 pendingdelete.start(channel_id, message, embed.description or "")
                 if result:
-                    leg_label = pick_label(market, picked_team, direction, line, map_number, picked_maps, other_maps)
+                    leg_matchup = f"{series_data.get('home_team') or '?'} vs {series_data.get('away_team') or '?'}"
+                    leg_pick = pick_label(market, picked_team, direction, line, map_number, picked_maps, other_maps)
+                    leg_label = f"{leg_matchup} - {leg_pick}"
                     await parlaytracker.handle_leg_result(
                         message.channel, channel_id, message, "esportstracker", key, leg_label, result, carry_emojis,
                     )
@@ -414,7 +418,9 @@ async def _track_loop(
                     detail = "NOT STARTED"
                 else:
                     detail = f"LIVE, Game {series_data['current_game_number']}"
-                leg_label = pick_label(market, picked_team, direction, line, map_number, picked_maps, other_maps)
+                leg_matchup = f"{series_data.get('home_team') or '?'} vs {series_data.get('away_team') or '?'}"
+                leg_pick = pick_label(market, picked_team, direction, line, map_number, picked_maps, other_maps)
+                leg_label = f"{leg_matchup} - {leg_pick}"
                 await parlaytracker.report_leg_progress(
                     message.channel, channel_id, message, "esportstracker", key, leg_label, detail, marker_emojis,
                 )

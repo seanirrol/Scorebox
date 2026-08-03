@@ -339,9 +339,9 @@ async def _track_loop(
                     marker_emojis = []
                 if marker_emojis:
                     pre_embed, _pre_file = await build_embed(game, sport_id, picked_team, total_direction, total_line, handicap_line)
-                    pre_label = pre_embed.description.splitlines()[0] if pre_embed.description else (
-                        f"{(game.get('homeCompetitor') or {}).get('name', '?')} vs {(game.get('awayCompetitor') or {}).get('name', '?')}"
-                    )
+                    pre_matchup = f"{(game.get('homeCompetitor') or {}).get('name', '?')} vs {(game.get('awayCompetitor') or {}).get('name', '?')}"
+                    pre_pick = pre_embed.description.splitlines()[0] if pre_embed.description else None
+                    pre_label = f"{pre_matchup} - {pre_pick}" if pre_pick and pre_pick != pre_matchup else pre_matchup
                     await parlaytracker.report_leg_progress(
                         message.channel, channel_id, message, "f5tracker", key, pre_label,
                         f"NOT STARTED - <t:{int(kickoff)}:f>", marker_emojis,
@@ -364,9 +364,9 @@ async def _track_loop(
             consecutive_misses = 0
 
             embed, file = await build_embed(game, sport_id, picked_team, total_direction, total_line, handicap_line)
-            leg_label = embed.description.splitlines()[0] if embed.description else (
-                f"{(game.get('homeCompetitor') or {}).get('name', '?')} vs {(game.get('awayCompetitor') or {}).get('name', '?')}"
-            )
+            leg_matchup = f"{(game.get('homeCompetitor') or {}).get('name', '?')} vs {(game.get('awayCompetitor') or {}).get('name', '?')}"
+            leg_pick = embed.description.splitlines()[0] if embed.description else None
+            leg_label = f"{leg_matchup} - {leg_pick}" if leg_pick and leg_pick != leg_matchup else leg_matchup
 
             if hibernated:
                 # The final wake right before kickoff - bump the card to the

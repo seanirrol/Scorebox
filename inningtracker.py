@@ -274,8 +274,12 @@ async def _track_loop(message: discord.Message, channel_id: int, event_id, pick_
                 except discord.HTTPException:
                     marker_emojis = []
                 if marker_emojis:
+                    pre_competitors = comp.get("competitors", [])
+                    pre_home = next((c.get("team", {}).get("displayName", "?") for c in pre_competitors if c.get("homeAway") == "home"), "?")
+                    pre_away = next((c.get("team", {}).get("displayName", "?") for c in pre_competitors if c.get("homeAway") == "away"), "?")
                     await parlaytracker.report_leg_progress(
-                        message.channel, channel_id, message, "inningtracker", key, _PICK_LABELS[pick_type],
+                        message.channel, channel_id, message, "inningtracker", key,
+                        f"{pre_away} v {pre_home} - {_PICK_LABELS[pick_type]}",
                         f"NOT STARTED - <t:{int(kickoff)}:f>", marker_emojis,
                     )
 
@@ -296,6 +300,10 @@ async def _track_loop(message: discord.Message, channel_id: int, event_id, pick_
             consecutive_misses = 0
 
             embed, file = await build_embed(event, pick_type)
+            leg_competitors = (event.get("header", {}).get("competitions") or [{}])[0].get("competitors", [])
+            leg_home = next((c.get("team", {}).get("displayName", "?") for c in leg_competitors if c.get("homeAway") == "home"), "?")
+            leg_away = next((c.get("team", {}).get("displayName", "?") for c in leg_competitors if c.get("homeAway") == "away"), "?")
+            leg_label = f"{leg_away} v {leg_home} - {_PICK_LABELS[pick_type]}"
 
             if hibernated:
                 # The final wake right before kickoff - bump the card to the
@@ -329,7 +337,7 @@ async def _track_loop(message: discord.Message, channel_id: int, event_id, pick_
                     # match elsewhere in this bot.
                     result = "void"
                 await parlaytracker.handle_leg_result(
-                    message.channel, channel_id, message, "inningtracker", key, _PICK_LABELS[pick_type], result, carry_emojis,
+                    message.channel, channel_id, message, "inningtracker", key, leg_label, result, carry_emojis,
                 )
                 # A postponed/canceled event never produces a graded result -
                 # no reaction, but still cleans up after the same 24h window
@@ -354,7 +362,7 @@ async def _track_loop(message: discord.Message, channel_id: int, event_id, pick_
                 else:
                     detail = f"LIVE, {comp.get('status', {}).get('type', {}).get('detail') or 'Live'}"
                 await parlaytracker.report_leg_progress(
-                    message.channel, channel_id, message, "inningtracker", key, _PICK_LABELS[pick_type], detail, marker_emojis,
+                    message.channel, channel_id, message, "inningtracker", key, leg_label, detail, marker_emojis,
                 )
 
             try:

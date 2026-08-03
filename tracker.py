@@ -370,9 +370,9 @@ async def _track_loop(
                     marker_emojis = []
                 if marker_emojis:
                     pre_embed, _pre_file = await build_embed(game, sport_id, picked_team, total_direction, total_line, team_total)
-                    pre_label = pre_embed.description.splitlines()[0] if pre_embed.description else (
-                        f"{(game.get('homeCompetitor') or {}).get('name', '?')} vs {(game.get('awayCompetitor') or {}).get('name', '?')}"
-                    )
+                    pre_matchup = f"{(game.get('homeCompetitor') or {}).get('name', '?')} vs {(game.get('awayCompetitor') or {}).get('name', '?')}"
+                    pre_pick = pre_embed.description.splitlines()[0] if pre_embed.description else None
+                    pre_label = f"{pre_matchup} - {pre_pick}" if pre_pick and pre_pick != pre_matchup else pre_matchup
                     await parlaytracker.report_leg_progress(
                         message.channel, channel_id, message, "tracker", key, pre_label,
                         f"NOT STARTED - <t:{int(kickoff)}:f>", marker_emojis,
@@ -396,11 +396,13 @@ async def _track_loop(
 
             embed, file = await build_embed(game, sport_id, picked_team, total_direction, total_line, team_total)
             # Used for a parlay leg's own label if this card carries a marker
-            # emoji - the pick line when there is one (auto-tracked), else a
-            # plain matchup (manual /track has no pick to describe).
-            leg_label = embed.description.splitlines()[0] if embed.description else (
-                f"{(game.get('homeCompetitor') or {}).get('name', '?')} vs {(game.get('awayCompetitor') or {}).get('name', '?')}"
-            )
+            # emoji - always matchup-prefixed, so a leg's card is
+            # identifiable on its own even sitting next to other legs on the
+            # same market type from a totally different match. The pick line
+            # itself (when there is one - manual /track has none) follows it.
+            leg_matchup = f"{(game.get('homeCompetitor') or {}).get('name', '?')} vs {(game.get('awayCompetitor') or {}).get('name', '?')}"
+            leg_pick = embed.description.splitlines()[0] if embed.description else None
+            leg_label = f"{leg_matchup} - {leg_pick}" if leg_pick and leg_pick != leg_matchup else leg_matchup
 
             if hibernated:
                 # The final wake right before kickoff - bump the card to the

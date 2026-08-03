@@ -297,10 +297,13 @@ async def _track_loop(
                 except discord.HTTPException:
                     marker_emojis = []
                 if marker_emojis:
-                    pre_label = (
-                        f"{player_name} {direction.title()} {line:g} {stat_label}"
-                        if direction is not None and line is not None else player_name
+                    pre_home = game.get("homeCompetitor") or {}
+                    pre_away = game.get("awayCompetitor") or {}
+                    pre_opponent = pre_away.get("name", "?") if pre_home.get("id") == member_competitor_id else pre_home.get("name", "?")
+                    pre_pick = (
+                        f"{direction.title()} {line:g} {stat_label}" if direction is not None and line is not None else ""
                     )
+                    pre_label = f"{player_name} vs {pre_opponent}" + (f" - {pre_pick}" if pre_pick else "")
                     await parlaytracker.report_leg_progress(
                         message.channel, channel_id, message, "soccerpropstracker", key, pre_label,
                         f"NOT STARTED - <t:{int(kickoff)}:f>", marker_emojis,
@@ -325,10 +328,11 @@ async def _track_loop(
             embed, file = await build_embed(
                 game, member_id, member_competitor_id, player_name, photo_url, stat_label, stat_name, direction, line
             )
-            leg_label = (
-                f"{player_name} {direction.title()} {line:g} {stat_label}" if direction is not None and line is not None
-                else player_name
-            )
+            leg_home = game.get("homeCompetitor") or {}
+            leg_away = game.get("awayCompetitor") or {}
+            leg_opponent = leg_away.get("name", "?") if leg_home.get("id") == member_competitor_id else leg_home.get("name", "?")
+            leg_pick = f"{direction.title()} {line:g} {stat_label}" if direction is not None and line is not None else ""
+            leg_label = f"{player_name} vs {leg_opponent}" + (f" - {leg_pick}" if leg_pick else "")
 
             if hibernated:
                 # The final wake right before start - bump the card to the
