@@ -181,12 +181,15 @@ def _build_summary_embed(group: dict) -> discord.Embed:
     else:
         subtitle = f"{group['resolved_legs']}/{group['total_legs'] + group['voided']} resolved{voided_suffix}"
 
+    # One line per leg in the description rather than a field each - a
+    # field's name/value always renders on two lines with no way to merge
+    # them, which ate too much vertical space for a card meant to be
+    # skimmed at a glance.
+    leg_lines = [f"{_leg_square(leg)} {leg['label']} — {leg['detail']}" for leg in group.get("legs", {}).values()]
     embed = discord.Embed(
-        title=f"Parlay {emoji}", description=subtitle,
+        title=f"Parlay {emoji}", description="\n".join([subtitle] + leg_lines),
         color=scoreimage.EMBED_COLOR[_summary_color_status(group)],
     )
-    for leg in group.get("legs", {}).values():
-        embed.add_field(name=f"{_leg_square(leg)} {leg['label']}", value=leg["detail"], inline=False)
     embed.timestamp = discord.utils.utcnow()
     return embed
 
