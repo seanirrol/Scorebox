@@ -268,6 +268,28 @@ def _hawk_map_winners(series_data: dict) -> list[Optional[str]]:
     return winners
 
 
+def _hawk_live_kill_count(series_data: dict) -> Optional[tuple[int, int]]:
+    """(home, away) kill count for whichever map is currently being played
+    - the one entry in the series' own game list with no winner recorded
+    yet. Purely a supplementary live display, not used for grading
+    anything (every market here settles on maps won, not kills)."""
+    ref = series_data["_ref"]
+    games = _hawk_series_games(ref["series"])
+    current = next((g for g in games if g.get("isRadiantWinner") is None), None)
+    if not current:
+        return None
+    states = current.get("states") or []
+    if not states:
+        return None
+    last_state = states[-1]
+    radiant_kills, dire_kills = last_state.get("radiantScore"), last_state.get("direScore")
+    if radiant_kills is None or dire_kills is None:
+        return None
+    team1_kills, team2_kills = (radiant_kills, dire_kills) if current.get("isTeam1Radiant") else (dire_kills, radiant_kills)
+    home_is_team1 = ref["home_is_team1"]
+    return (team1_kills, team2_kills) if home_is_team1 else (team2_kills, team1_kills)
+
+
 # --- GosuGamers (CS2 primary, Dota 2 fallback) ------------------------------
 
 _GOSU_GAME_SLUGS = {"dota2": "dota2", "cs2": "counterstrike"}
@@ -518,6 +540,91 @@ def _gosu_map_winners(series_data: dict) -> list[Optional[str]]:
     return winners
 
 
+# --- Strafe.com (CS2 live round score only) ---------------------------
+
+# CS2's own live in-game progress indicator is the round score, not a kill
+# count - the natural equivalent of hawk.live's live kills for Dota 2.
+# Neither hawk.live nor GosuGamers expose this at all (GosuGamers only ever
+# has the maps-won score, confirmed - see this module's own gosugamers
+# section), so this is a third, narrowly-scoped site used purely for this
+# one supplementary display, same curl-based approach as the other two.
+_STRAFE_SPORT_SLUGS = {"cs2": "csgo"}
+_STRAFE_LIST_CACHE_SECONDS = 15
+_STRAFE_DETAIL_CACHE_SECONDS = 10
+
+_strafe_list_cache: dict = {}  # sport_slug -> (matches, fetched_at)
+_strafe_detail_cache: dict = {}  # slug -> (header, fetched_at)
+
+
+def _strafe_extract_next_data(html: str) -> Optional[dict]:
+    marker = '<script id="__NEXT_DATA__" type="application/json">'
+    start = html.find(marker)
+    if start == -1:
+        return None
+    content_start = start + len(marker)
+    end = html.find("</script>", content_start)
+    if end == -1:
+        return None
+    try:
+        return json.loads(html[content_start:end])
+    except json.JSONDecodeError:
+        return None
+
+
+def _strafe_live_matches(sport_slug: str) -> list[dict]:
+    cached = _strafe_list_cache.get(sport_slug)
+    if cached and time.time() - cached[1] < _STRAFE_LIST_CACHE_SECONDS:
+        return cached[0]
+    try:
+        html = _curl_text(f"https://www.strafe.com/{sport_slug}/")
+    except EsportsError:
+        return []
+    data = _strafe_extract_next_data(html) or {}
+    matches = (((data.get("props") or {}).get("pageProps") or {}).get("matches")) or []
+    _strafe_list_cache[sport_slug] = (matches, time.time())
+    return matches
+
+
+def _strafe_find_live_slug(sport_slug: str, home_team: str, away_team: str) -> Optional[str]:
+    for m in _strafe_live_matches(sport_slug):
+        if m.get("status") != "LIVE":
+            continue
+        names = [(c.get("competitor") or {}).get("name") for c in (m.get("competitors") or [])]
+        if any(names_match(n, home_team) for n in names) and any(names_match(n, away_team) for n in names):
+            return m.get("slug")
+    return None
+
+
+def _strafe_match_header(slug: str) -> Optional[dict]:
+    cached = _strafe_detail_cache.get(slug)
+    if cached and time.time() - cached[1] < _STRAFE_DETAIL_CACHE_SECONDS:
+        return cached[0]
+    try:
+        html = _curl_text(f"https://www.strafe.com/match/{slug}/")
+    except EsportsError:
+        return None
+    data = _strafe_extract_next_data(html) or {}
+    header = (((data.get("props") or {}).get("pageProps") or {}).get("legacyMatch") or {}).get("header")
+    _strafe_detail_cache[slug] = (header, time.time())
+    return header
+
+
+def _strafe_live_round_score(home_team: str, away_team: str) -> Optional[tuple[int, int]]:
+    slug = _strafe_find_live_slug("csgo", home_team, away_team)
+    if not slug:
+        return None
+    header = _strafe_match_header(slug)
+    if not header:
+        return None
+    live = (header.get("scores") or {}).get("live")
+    if not live or live.get("home") is None or live.get("away") is None:
+        return None
+    strafe_home_name = ((header.get("competitors") or {}).get("home") or {}).get("name")
+    if names_match(strafe_home_name, home_team):
+        return live["home"], live["away"]
+    return live["away"], live["home"]
+
+
 # --- public API ---------------------------------------------------------
 
 def get_series(sport: str, team_a: str, team_b: str, start_time: Optional[float] = None) -> Optional[dict]:
@@ -564,6 +671,21 @@ def start_epoch(series_data: dict) -> Optional[float]:
 
 def page_url(series_data: dict) -> str:
     return series_data["page_url"]
+
+
+def live_kill_count(series_data: dict) -> Optional[tuple[int, int]]:
+    """(home, away) live in-map score for whichever map is currently being
+    played - kills for Dota 2 (hawk.live), rounds for CS2 (Strafe.com,
+    since neither hawk.live nor GosuGamers covers CS2 at all, and
+    GosuGamers has no live in-map stat for either game). Purely a
+    supplementary display value, not used for grading anything - every
+    market here settles on maps won. None while notstarted/finished, or
+    if the relevant provider has no live data for this map right now."""
+    if series_data["status"] != "inprogress":
+        return None
+    if series_data["sport"] == "dota2":
+        return _hawk_live_kill_count(series_data)
+    return _strafe_live_round_score(series_data["home_team"], series_data["away_team"])
 
 
 # --- grading -----------------------------------------------------------

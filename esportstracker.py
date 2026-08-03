@@ -227,6 +227,16 @@ async def build_embed(
     home_cols = [str(series_data["home_score"])]
     away_cols = [str(series_data["away_score"])]
 
+    if status == "inprogress":
+        # Live in-map score for whichever map is currently being played -
+        # kills for Dota 2, rounds for CS2 - purely a supplementary display
+        # value, same sub-score-row treatment tennis/volleyball already get
+        # elsewhere in this bot. Not used for grading anything.
+        kill_count = await asyncio.to_thread(esports.live_kill_count, series_data)
+        if kill_count:
+            home_cols.append(str(kill_count[0]))
+            away_cols.append(str(kill_count[1]))
+
     image_bytes = await asyncio.to_thread(
         scoreimage.render_score_card,
         series_data.get("home_team") or "?", series_data.get("away_team") or "?",
