@@ -176,7 +176,7 @@ async def _post_or_edit_summary(channel: discord.abc.Messageable, channel_id: in
     return message.id
 
 
-async def _repost_summary(channel: discord.abc.Messageable, channel_id: int, group: dict) -> Optional[int]:
+async def _repost_summary(channel: discord.abc.Messageable, channel_id: int, key: str, group: dict) -> Optional[int]:
     """Bumps the summary card to the bottom of the channel instead of
     editing it in place - called only once a leg's match has actually
     ended (not on every live poll tick, which would spam the channel),
@@ -185,21 +185,63 @@ async def _repost_summary(channel: discord.abc.Messageable, channel_id: int, gro
     latest known status, not just the one that just resolved - each leg's
     row in group["legs"] is already kept fresh by its own tracker's
     report_leg_progress calls, so this reflects all of them, not a stale
-    snapshot."""
+    snapshot.
+
+    The old message id is persisted as "pending_delete_message_id" BEFORE
+    the send even starts, not just held in a local variable - a bot
+    restart landing anywhere between the send succeeding and the old
+    message actually being deleted would otherwise orphan it in the
+    channel forever, with nothing left anywhere that remembers it needs
+    cleaning up. resume_all sweeps this on startup."""
     text = _summary_text(group)
     old_message_id = group.get("summary_message_id")
+
+    if old_message_id:
+        group["pending_delete_message_id"] = old_message_id
+        data = state.load_parlays()
+        data[key] = group
+        state.save_parlays(data)
+
     try:
         new_message = await throttle.run(channel_id, lambda: channel.send(text))
     except discord.HTTPException as e:
         log.warning("Failed to repost parlay summary card: %s", e)
         return old_message_id
+
     if old_message_id:
         try:
             old_message = await channel.fetch_message(old_message_id)
             await old_message.delete()
         except discord.HTTPException as e:
             log.warning("Failed to delete old parlay summary card %s: %s", old_message_id, e)
+        group["pending_delete_message_id"] = None
+
     return new_message.id
+
+
+async def resume_all(client: discord.Client):
+    """Called once from on_ready - finishes cleaning up any parlay summary
+    card repost that was interrupted mid-flight by a bot restart (killed
+    or redeployed between sending the replacement card and deleting the
+    old one)."""
+    data = state.load_parlays()
+    changed = False
+    for key, group in list(data.items()):
+        old_id = group.get("pending_delete_message_id")
+        if not old_id:
+            continue
+        try:
+            channel = await client.fetch_channel(group["channel_id"])
+            message = await channel.fetch_message(old_id)
+            await message.delete()
+            log.info("Cleaned up an orphaned parlay summary card %s (interrupted repost) in channel %s", old_id, group["channel_id"])
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            pass  # already gone, or no longer reachable - nothing more to do
+        group["pending_delete_message_id"] = None
+        data[key] = group
+        changed = True
+    if changed:
+        state.save_parlays(data)
 
 
 async def report_leg_progress(
@@ -260,7 +302,7 @@ async def handle_leg_result(
             group["lost"] = True
 
         group.setdefault("legs", {})[leg_id] = {"label": label, "status": result, "detail": _RESULT_DETAIL[result]}
-        group["summary_message_id"] = await _repost_summary(channel, channel_id, group)
+        group["summary_message_id"] = await _repost_summary(channel, channel_id, key, group)
 
         all_resolved = group["resolved_legs"] >= group["total_legs"] + group["voided"]
         if all_resolved:

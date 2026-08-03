@@ -29,6 +29,7 @@ import esportstracker
 import f5tracker
 import inning1tracker
 import inningtracker
+import parlaytracker
 import pendingdelete
 import picks
 import proptracker
@@ -77,6 +78,7 @@ async def on_ready():
     await soccerpropstracker.resume_all(client)
     await ufctracker.resume_all(client)
     await esportstracker.resume_all(client)
+    await parlaytracker.resume_all(client)
     await pendingdelete.resume_all(client)
 
 
