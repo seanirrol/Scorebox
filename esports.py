@@ -312,6 +312,26 @@ _gosu_detail_cache: dict = {}  # matchId -> (detail, fetched_at)
 _gosu_last_known_match: dict = {}  # "game_slug|teamA|teamB" (sorted) -> (match, remembered_at)
 
 
+# Next.js can split one continuous React Server Component payload across
+# MULTIPLE self.__next_f.push([1,"..."]) <script> tags once it's long
+# enough - confirmed live: a match with a long enough matchGames history
+# had its own match object torn mid-token exactly at the boundary between
+# two pushes, with literal `</script><script>...` HTML sitting in the
+# middle of what should have been one continuous JSON string. Each push's
+# own argument is a complete, well-formed JS string literal on its own (an
+# unescaped double quote always really does close it) - joining every
+# push's raw argument, in document order, reconstructs the original
+# unbroken stream before any key search runs, rather than treating the raw
+# downloaded HTML itself as one continuous string the way a page that
+# happens to fit in a single push would allow.
+_NEXT_F_PUSH_RE = re.compile(r'self\.__next_f\.push\(\[1,"((?:[^"\\]|\\.)*)"\]\)')
+
+
+def _gosu_joined_flight_text(html: str) -> str:
+    parts = [m.group(1) for m in _NEXT_F_PUSH_RE.finditer(html)]
+    return "".join(parts) if parts else html
+
+
 def _extract_json_after_key(html: str, key: str, from_index: int = 0) -> Optional[dict]:
     """gosugamers.net (Next.js App Router) streams its page data as React
     Server Component "flight" payloads - the object needed is embedded as a
@@ -362,7 +382,7 @@ def _gosu_matches_for_slug(game_slug: str) -> list[dict]:
             html = _curl_text(url)
         except EsportsError:
             break
-        data = _extract_json_after_key(html, "defaultMatches")
+        data = _extract_json_after_key(_gosu_joined_flight_text(html), "defaultMatches")
         page_matches = (data or {}).get("matches") or []
         if not page_matches:
             break
@@ -422,14 +442,15 @@ def _gosu_match_detail(game_slug: str, match: dict) -> Optional[dict]:
         html = _curl_text(_gosu_match_page_url(game_slug, match))
     except EsportsError:
         return None
+    joined = _gosu_joined_flight_text(html)
     detail = None
     from_index = 0
     for _ in range(10):
         marker = '\\"match\\":'
-        idx = html.find(marker, from_index)
+        idx = joined.find(marker, from_index)
         if idx == -1:
             break
-        candidate = _extract_json_after_key(html, "match", from_index)
+        candidate = _extract_json_after_key(joined, "match", from_index)
         if candidate and candidate.get("matchId") is not None:
             detail = candidate
             break
