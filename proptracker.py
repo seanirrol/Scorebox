@@ -141,6 +141,10 @@ _RESULT_REACTIONS = {"won": "<:winmark:1532115635071488221>", "lost": "<:lossmar
 _SERVICE_EMOJIS = {TRASH_EMOJI, *_RESULT_REACTIONS.values()}
 
 
+def _footer_text(message_id: Optional[int] = None) -> str:
+    return f"Scorebox ({message_id}) • data via ESPN" if message_id else "Scorebox • data via ESPN"
+
+
 async def build_embed(
     player_name: str,
     entity_id: str,
@@ -155,6 +159,7 @@ async def build_embed(
     line: Optional[float] = None,
     known_team_name: Optional[str] = None,
     force_result: Optional[str] = None,
+    message_id: Optional[int] = None,
 ) -> tuple[discord.Embed, discord.File]:
     """
     Returns (embed, file). Sport/tournament goes in the embed author line and
@@ -283,7 +288,7 @@ async def build_embed(
     embed.set_author(name=sport_tournament)
     embed.description = description
     embed.set_image(url="attachment://score.png")
-    embed.set_footer(text="Scorebox • data via ESPN")
+    embed.set_footer(text=_footer_text(message_id))
     embed.timestamp = discord.utils.utcnow()
     return embed, file
 
@@ -368,12 +373,8 @@ async def _track_loop(
         Voided to its parlay group instead of leaving the summary card
         frozen on whatever pending detail it last reported, forever, once
         this task quietly stops polling."""
-        try:
-            fresh = await message.channel.fetch_message(message.id)
-            marker_emojis = [r.emoji for r in fresh.reactions if str(r.emoji) not in _SERVICE_EMOJIS]
-        except discord.HTTPException:
-            marker_emojis = []
-        if not marker_emojis:
+        group_ids = parlaytracker.groups_for_leg(channel_id, "proptracker", key)
+        if not group_ids:
             return
         pick_desc = (
             f"{player_name} {direction.title()} {line:g} {stat_label}" if direction is not None and line is not None
@@ -388,7 +389,7 @@ async def _track_loop(
         else:
             matchup = f"Event `{event_id}`"
         await parlaytracker.handle_leg_result(
-            message.channel, channel_id, message, "proptracker", key, f"{matchup} - {pick_desc}", "void", marker_emojis,
+            message.channel, channel_id, message, "proptracker", key, f"{matchup} - {pick_desc}", "void", group_ids,
         )
 
     await asyncio.sleep(random.uniform(0, config.UPDATE_INTERVAL_SECONDS))
@@ -435,12 +436,8 @@ async def _track_loop(
                 # kickoff) is too late: a leg with a kickoff hours away
                 # would still never appear on its parlay's summary card
                 # until it was basically already live anyway.
-                try:
-                    fresh = await message.channel.fetch_message(message.id)
-                    marker_emojis = [r.emoji for r in fresh.reactions if str(r.emoji) not in _SERVICE_EMOJIS]
-                except discord.HTTPException:
-                    marker_emojis = []
-                if marker_emojis:
+                group_ids = parlaytracker.groups_for_leg(channel_id, "proptracker", key)
+                if group_ids:
                     pre_comp = (event.get("header", {}).get("competitions") or [{}])[0]
                     pre_competitors = pre_comp.get("competitors", [])
                     pre_home = next((c.get("team", {}).get("displayName", "?") for c in pre_competitors if c.get("homeAway") == "home"), "?")
@@ -452,7 +449,7 @@ async def _track_loop(
                     pre_label = f"{pre_home} v {pre_away} - {pre_pick}"
                     await parlaytracker.report_leg_progress(
                         message.channel, channel_id, message, "proptracker", key, pre_label,
-                        f"NOT STARTED - <t:{int(kickoff)}:f>", marker_emojis,
+                        f"NOT STARTED - <t:{int(kickoff)}:f>", group_ids,
                     )
 
                 log.info("Event %s not starting soon; hibernating %.0fs", event_id, hibernate_for)
@@ -467,7 +464,7 @@ async def _track_loop(
                         team_shown = True
                         refreshed_embed, refreshed_file = await build_embed(
                             player_name, entity_id, photo_url, sport, stat_label, current_value, is_home, team,
-                            event, direction, line, known_team_name,
+                            event, direction, line, known_team_name, message_id=message.id,
                         )
                         try:
                             await throttle.run(
@@ -492,7 +489,7 @@ async def _track_loop(
             current_value, is_home, team = await asyncio.to_thread(espn.get_stat_value, event, entity_id, stat_key)
             embed, file = await build_embed(
                 player_name, entity_id, photo_url, sport, stat_label, current_value, is_home, team, event,
-                direction, line, known_team_name,
+                direction, line, known_team_name, message_id=message.id,
             )
             leg_comp = (event.get("header", {}).get("competitions") or [{}])[0]
             leg_competitors = leg_comp.get("competitors", [])
@@ -537,8 +534,9 @@ async def _track_loop(
                         except discord.HTTPException as e:
                             log.warning("Failed to add result reaction: %s", e)
                 if result:
+                    group_ids = parlaytracker.groups_for_leg(channel_id, "proptracker", key)
                     await parlaytracker.handle_leg_result(
-                        message.channel, channel_id, message, "proptracker", key, leg_label, result, carry_emojis,
+                        message.channel, channel_id, message, "proptracker", key, leg_label, result, group_ids,
                     )
                 pendingdelete.start(channel_id, message, embed.description or "")
                 break
@@ -567,15 +565,16 @@ async def _track_loop(
                 if now >= grace_deadline:
                     void_embed, void_file = await build_embed(
                         player_name, entity_id, photo_url, sport, stat_label, current_value, is_home, team, event,
-                        direction, line, known_team_name, force_result="void",
+                        direction, line, known_team_name, force_result="void", message_id=message.id,
                     )
-                    carry_emojis = await _repost_final(void_embed, void_file)
+                    await _repost_final(void_embed, void_file)
                     try:
                         await message.add_reaction(_RESULT_REACTIONS["void"])
                     except discord.HTTPException as e:
                         log.warning("Failed to add void reaction: %s", e)
+                    group_ids = parlaytracker.groups_for_leg(channel_id, "proptracker", key)
                     await parlaytracker.handle_leg_result(
-                        message.channel, channel_id, message, "proptracker", key, leg_label, "void", carry_emojis,
+                        message.channel, channel_id, message, "proptracker", key, leg_label, "void", group_ids,
                     )
                     pendingdelete.start(channel_id, message, void_embed.description or "")
                     botlog.event(
@@ -601,12 +600,8 @@ async def _track_loop(
                     data[key].pop("postponed_since", None)
                     state.save_props(data)
 
-            try:
-                fresh = await message.channel.fetch_message(message.id)
-                marker_emojis = [r.emoji for r in fresh.reactions if str(r.emoji) not in _SERVICE_EMOJIS]
-            except discord.HTTPException:
-                marker_emojis = []
-            if marker_emojis:
+            group_ids = parlaytracker.groups_for_leg(channel_id, "proptracker", key)
+            if group_ids:
                 comp = (event.get("header", {}).get("competitions") or [{}])[0]
                 if comp.get("status", {}).get("type", {}).get("state") == "pre":
                     try:
@@ -617,7 +612,7 @@ async def _track_loop(
                 else:
                     detail = f"LIVE, {espn.match_status_text(event, sport)}"
                 await parlaytracker.report_leg_progress(
-                    message.channel, channel_id, message, "proptracker", key, leg_label, detail, marker_emojis,
+                    message.channel, channel_id, message, "proptracker", key, leg_label, detail, group_ids,
                 )
 
             try:

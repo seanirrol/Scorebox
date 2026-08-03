@@ -63,6 +63,10 @@ _RESULT_REACTIONS = {"won": "<:winmark:1532115635071488221>", "lost": "<:lossmar
 _SERVICE_EMOJIS = {TRASH_EMOJI, *_RESULT_REACTIONS.values()}
 
 
+def _footer_text(message_id: Optional[int] = None) -> str:
+    return f"Scorebox ({message_id}) • data via 365scores" if message_id else "Scorebox • data via 365scores"
+
+
 def prop_key(channel_id: int, game_id, member_id, stat_name: str) -> str:
     return f"{channel_id}:{game_id}:{member_id}:{stat_name}"
 
@@ -135,6 +139,7 @@ async def build_embed(
     game: dict, member_id, member_competitor_id, player_name: str, photo_url: Optional[str],
     stat_label: str, stat_name: str,
     direction: Optional[str] = None, line: Optional[float] = None, force_result: Optional[str] = None,
+    message_id: Optional[int] = None,
 ) -> tuple[discord.Embed, discord.File]:
     """force_result overrides the color/title as if this were already graded
     that way, regardless of the game's actual live status - used only by
@@ -202,7 +207,7 @@ async def build_embed(
         embed.set_author(name=" • ".join(author_bits))
     embed.description = description
     embed.set_image(url="attachment://score.png")
-    embed.set_footer(text="Scorebox • data via 365scores")
+    embed.set_footer(text=_footer_text(message_id))
     embed.timestamp = discord.utils.utcnow()
     return embed, file
 
@@ -270,12 +275,8 @@ async def _track_loop(
         instead of leaving the summary card frozen on whatever pending
         detail it last reported, forever, once this task quietly stops
         polling."""
-        try:
-            fresh = await message.channel.fetch_message(message.id)
-            marker_emojis = [r.emoji for r in fresh.reactions if str(r.emoji) not in _SERVICE_EMOJIS]
-        except discord.HTTPException:
-            marker_emojis = []
-        if not marker_emojis:
+        group_ids = parlaytracker.groups_for_leg(channel_id, "soccerpropstracker", key)
+        if not group_ids:
             return
         pick_desc = f"{direction.title()} {line:g} {stat_label}" if direction is not None and line is not None else ""
         if game:
@@ -287,7 +288,7 @@ async def _track_loop(
             matchup = f"{player_name} (game `{game_id}`)"
         void_label = matchup + (f" - {pick_desc}" if pick_desc else "")
         await parlaytracker.handle_leg_result(
-            message.channel, channel_id, message, "soccerpropstracker", key, void_label, "void", marker_emojis,
+            message.channel, channel_id, message, "soccerpropstracker", key, void_label, "void", group_ids,
         )
 
     await asyncio.sleep(random.uniform(0, config.UPDATE_INTERVAL_SECONDS))
@@ -319,12 +320,8 @@ async def _track_loop(
                 # (right before kickoff) is too late: a leg with a kickoff
                 # hours away would still never appear on its parlay's
                 # summary card until it was basically already live anyway.
-                try:
-                    fresh = await message.channel.fetch_message(message.id)
-                    marker_emojis = [r.emoji for r in fresh.reactions if str(r.emoji) not in _SERVICE_EMOJIS]
-                except discord.HTTPException:
-                    marker_emojis = []
-                if marker_emojis:
+                group_ids = parlaytracker.groups_for_leg(channel_id, "soccerpropstracker", key)
+                if group_ids:
                     pre_home = game.get("homeCompetitor") or {}
                     pre_away = game.get("awayCompetitor") or {}
                     pre_opponent = pre_away.get("name", "?") if pre_home.get("id") == member_competitor_id else pre_home.get("name", "?")
@@ -334,7 +331,7 @@ async def _track_loop(
                     pre_label = f"{player_name} vs {pre_opponent}" + (f" - {pre_pick}" if pre_pick else "")
                     await parlaytracker.report_leg_progress(
                         message.channel, channel_id, message, "soccerpropstracker", key, pre_label,
-                        f"NOT STARTED - <t:{int(kickoff)}:f>", marker_emojis,
+                        f"NOT STARTED - <t:{int(kickoff)}:f>", group_ids,
                     )
 
                 log.info("Soccer prop game %s not starting soon; hibernating %.0fs", game_id, hibernate_for)
@@ -355,7 +352,8 @@ async def _track_loop(
             consecutive_misses = 0
 
             embed, file = await build_embed(
-                game, member_id, member_competitor_id, player_name, photo_url, stat_label, stat_name, direction, line
+                game, member_id, member_competitor_id, player_name, photo_url, stat_label, stat_name, direction, line,
+                message_id=message.id,
             )
             leg_home = game.get("homeCompetitor") or {}
             leg_away = game.get("awayCompetitor") or {}
@@ -375,7 +373,7 @@ async def _track_loop(
                 continue
 
             if scores365.is_finished(game):
-                carry_emojis = await _repost_final(embed, file)
+                await _repost_final(embed, file)
 
                 if direction is not None and line is not None:
                     current_value = scores365.soccer_player_stat(game, member_id, stat_name)
@@ -387,25 +385,22 @@ async def _track_loop(
                         except discord.HTTPException as e:
                             log.warning("Failed to add result reaction: %s", e)
                     if result:
+                        group_ids = parlaytracker.groups_for_leg(channel_id, "soccerpropstracker", key)
                         await parlaytracker.handle_leg_result(
-                            message.channel, channel_id, message, "soccerpropstracker", key, leg_label, result, carry_emojis,
+                            message.channel, channel_id, message, "soccerpropstracker", key, leg_label, result, group_ids,
                         )
                 pendingdelete.start(channel_id, message, embed.description or "")
                 break
 
-            try:
-                fresh = await message.channel.fetch_message(message.id)
-                marker_emojis = [r.emoji for r in fresh.reactions if str(r.emoji) not in _SERVICE_EMOJIS]
-            except discord.HTTPException:
-                marker_emojis = []
-            if marker_emojis:
+            group_ids = parlaytracker.groups_for_leg(channel_id, "soccerpropstracker", key)
+            if group_ids:
                 kickoff = scores365.start_epoch(game)
                 if scores365.map_status_type(game.get("statusGroup")) == "notstarted":
                     detail = f"NOT STARTED - <t:{int(kickoff)}:f>" if kickoff else "NOT STARTED"
                 else:
                     detail = f"LIVE, {scores365.status_line(game, scores365.SPORT_IDS['soccer'])}"
                 await parlaytracker.report_leg_progress(
-                    message.channel, channel_id, message, "soccerpropstracker", key, leg_label, detail, marker_emojis,
+                    message.channel, channel_id, message, "soccerpropstracker", key, leg_label, detail, group_ids,
                 )
 
             try:
@@ -431,17 +426,18 @@ async def _track_loop(
             if game and scores365.is_interrupted(game):
                 embed, file = await build_embed(
                     game, member_id, member_competitor_id, player_name, photo_url, stat_label, stat_name,
-                    direction, line, force_result="void",
+                    direction, line, force_result="void", message_id=message.id,
                 )
                 embed.title = _RESULT_TITLES["void"]
-                carry_emojis = await _repost_final(embed, file)
+                await _repost_final(embed, file)
                 try:
                     await message.add_reaction(_RESULT_REACTIONS["void"])
                 except discord.HTTPException as e:
                     log.warning("Failed to add void reaction: %s", e)
                 pendingdelete.start(channel_id, message, embed.description or "")
+                group_ids = parlaytracker.groups_for_leg(channel_id, "soccerpropstracker", key)
                 await parlaytracker.handle_leg_result(
-                    message.channel, channel_id, message, "soccerpropstracker", key, leg_label, "void", carry_emojis,
+                    message.channel, channel_id, message, "soccerpropstracker", key, leg_label, "void", group_ids,
                 )
                 botlog.event(f"➖ Voided (soccer prop, interrupted, never resumed): **{player_name}** in <#{channel_id}>")
             else:

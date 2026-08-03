@@ -208,6 +208,8 @@ async def _auto_track(
     picked_team = team if total_direction is None and team_total is None else None
     embed, file = await tracker.build_embed(game, sport_id, picked_team, total_direction, total_line, team_total)
     message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
+    embed.set_footer(text=tracker._footer_text(message.id))
+    await throttle.run(channel.id, lambda: message.edit(embed=embed))
     tracker.register_message(message.id, channel.id, game_id, None)
     await message.add_reaction(TRASH_EMOJI)
 
@@ -250,6 +252,8 @@ async def _auto_f5(
     picked_team = None if combined else team
     embed, file = await f5tracker.build_embed(game, sport_id, picked_team, total_direction, total_line, handicap_line)
     message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
+    embed.set_footer(text=f5tracker._footer_text(message.id))
+    await throttle.run(channel.id, lambda: message.edit(embed=embed))
     f5tracker.register_message(message.id, channel.id, game_id, None)
     await message.add_reaction(TRASH_EMOJI)
 
@@ -316,6 +320,8 @@ async def _auto_playerprops(
         direction, line, entity["team_name"],
     )
     message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
+    embed.set_footer(text=proptracker._footer_text(message.id))
+    await throttle.run(channel.id, lambda: message.edit(embed=embed))
     proptracker.register_message(message.id, channel.id, event_id, entity["id"], stat_key, None)
     await message.add_reaction(TRASH_EMOJI)
 
@@ -367,6 +373,8 @@ async def _auto_tennis_playerprops(
 
     embed, file = await tennispropstracker.build_embed(game, sport_id, competitor_id, resolved_name, stat, stat_name, direction, line)
     message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
+    embed.set_footer(text=tennispropstracker._footer_text(message.id))
+    await throttle.run(channel.id, lambda: message.edit(embed=embed))
     tennispropstracker.register_message(message.id, channel.id, game_id, competitor_id, stat_name, None)
     await message.add_reaction(TRASH_EMOJI)
 
@@ -416,6 +424,8 @@ async def _auto_soccer_playerprops(
         game, member_id, member_competitor_id, resolved_name, photo_url, stat, stat_name, direction, line
     )
     message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
+    embed.set_footer(text=soccerpropstracker._footer_text(message.id))
+    await throttle.run(channel.id, lambda: message.edit(embed=embed))
     soccerpropstracker.register_message(message.id, channel.id, game_id, member_id, stat_name, None)
     await message.add_reaction(TRASH_EMOJI)
 
@@ -458,6 +468,8 @@ async def _auto_inning_runs(channel: discord.abc.Messageable, team: str, pick_ty
 
     embed, file = await inningtracker.build_embed(event, pick_type)
     message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
+    embed.set_footer(text=inningtracker._footer_text(message.id))
+    await throttle.run(channel.id, lambda: message.edit(embed=embed))
     inningtracker.register_message(message.id, channel.id, event_id, pick_type, None)
     await message.add_reaction(TRASH_EMOJI)
 
@@ -491,6 +503,8 @@ async def _auto_inning1_result(channel: discord.abc.Messageable, team: str, pick
 
     embed, file = await inning1tracker.build_embed(game, sport_id, team, pick)
     message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
+    embed.set_footer(text=inning1tracker._footer_text(message.id))
+    await throttle.run(channel.id, lambda: message.edit(embed=embed))
     inning1tracker.register_message(message.id, channel.id, game_id, None)
     await message.add_reaction(TRASH_EMOJI)
 
@@ -531,6 +545,8 @@ async def _auto_tennis_market(
 
     embed, file = await settracker.build_embed(game, sport_id, market, team, direction, line)
     message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
+    embed.set_footer(text=settracker._footer_text(message.id))
+    await throttle.run(channel.id, lambda: message.edit(embed=embed))
     settracker.register_message(message.id, channel.id, game_id, market, None)
     await message.add_reaction(TRASH_EMOJI)
 
@@ -573,6 +589,8 @@ async def _auto_ufc(
     fighter_name = None if total_direction else fighter_competitor["athlete"]["displayName"]
     embed, file = await ufctracker.build_embed(competition, league_slug, event["name"], fighter_id, fighter_name, total_direction, total_line)
     message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
+    embed.set_footer(text=ufctracker._footer_text(message.id))
+    await throttle.run(channel.id, lambda: message.edit(embed=embed))
     ufctracker.register_message(message.id, channel.id, competition_id, None)
     await message.add_reaction(TRASH_EMOJI)
 
@@ -611,6 +629,8 @@ async def _auto_esports(
         series_data, market, picked_team, direction, line, map_number, picked_maps, other_maps
     )
     message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
+    embed.set_footer(text=esportstracker._footer_text(message.id))
+    await throttle.run(channel.id, lambda: message.edit(embed=embed))
     esportstracker.register_message(message.id, channel.id, sport, team_a, team_b, market, None)
     await message.add_reaction(TRASH_EMOJI)
 
@@ -821,6 +841,8 @@ async def track(interaction: discord.Interaction, sport: app_commands.Choice[str
     # after ~15 minutes; re-fetch as a plain channel message so edits keep
     # working for the entire tracking duration.
     message = await interaction.channel.fetch_message(message.id)
+    embed.set_footer(text=tracker._footer_text(message.id))
+    await throttle.run(interaction.channel_id, lambda: message.edit(embed=embed))
     tracker.register_message(message.id, interaction.channel_id, game_id, interaction.user.id)
     await message.add_reaction(TRASH_EMOJI)
 
@@ -878,6 +900,8 @@ async def _playerprops_tennis(interaction: discord.Interaction, player: str, sta
     # after ~15 minutes; re-fetch as a plain channel message so edits keep
     # working for the entire tracking duration.
     message = await interaction.channel.fetch_message(message.id)
+    embed.set_footer(text=tennispropstracker._footer_text(message.id))
+    await throttle.run(interaction.channel_id, lambda: message.edit(embed=embed))
     tennispropstracker.register_message(message.id, interaction.channel_id, game_id, competitor_id, stat_name, interaction.user.id)
     await message.add_reaction(TRASH_EMOJI)
 
@@ -923,6 +947,8 @@ async def _playerprops_soccer(interaction: discord.Interaction, player: str, sta
     # after ~15 minutes; re-fetch as a plain channel message so edits keep
     # working for the entire tracking duration.
     message = await interaction.channel.fetch_message(message.id)
+    embed.set_footer(text=soccerpropstracker._footer_text(message.id))
+    await throttle.run(interaction.channel_id, lambda: message.edit(embed=embed))
     soccerpropstracker.register_message(message.id, interaction.channel_id, game_id, member_id, stat_name, interaction.user.id)
     await message.add_reaction(TRASH_EMOJI)
 
@@ -1000,6 +1026,8 @@ async def playerprops(interaction: discord.Interaction, sport: app_commands.Choi
     # after ~15 minutes; re-fetch as a plain channel message so edits keep
     # working for the entire tracking duration.
     message = await interaction.channel.fetch_message(message.id)
+    embed.set_footer(text=proptracker._footer_text(message.id))
+    await throttle.run(interaction.channel_id, lambda: message.edit(embed=embed))
     proptracker.register_message(message.id, interaction.channel_id, event_id, entity["id"], stat_key, interaction.user.id)
     await message.add_reaction(TRASH_EMOJI)
 
@@ -1381,6 +1409,87 @@ async def pending(interaction: discord.Interaction):
     ]
     view = PendingDeleteView(entries)
     await interaction.followup.send("\n".join(lines), view=view, ephemeral=True)
+
+
+_PARLAY_ACTION_CHOICES = [
+    app_commands.Choice(name="Create", value="create"),
+    app_commands.Choice(name="Add legs", value="add"),
+    app_commands.Choice(name="Remove legs", value="remove"),
+    app_commands.Choice(name="List", value="list"),
+]
+
+
+@tree.command(name="parlay", description="Manually manage a parlay group by pasting each leg's card ID from its footer")
+@app_commands.describe(
+    action="What to do",
+    identifier=f"Parlay name, max {parlaytracker.MAX_IDENTIFIER_LENGTH} characters (used for create/add/remove)",
+    ids="Comma-separated card IDs from each card's footer (used for add/remove)",
+)
+@app_commands.choices(action=_PARLAY_ACTION_CHOICES)
+async def parlay(
+    interaction: discord.Interaction, action: app_commands.Choice[str],
+    identifier: Optional[str] = None, ids: Optional[str] = None,
+):
+    if not _channel_allowed(interaction):
+        await _reject_wrong_channel(interaction)
+        return
+    _log_command(interaction, action=action.name, identifier=identifier, ids=ids)
+    await interaction.response.defer(ephemeral=True)
+
+    if action.value == "list":
+        groups = parlaytracker.list_groups(interaction.channel_id)
+        if not groups:
+            await interaction.followup.send("No active parlays in this channel.", ephemeral=True)
+            return
+        lines = [
+            f"- **{g['identifier']}** — {len(g.get('legs', {}))} leg(s), "
+            f"{g['resolved_legs']}/{g['total_legs'] + g['voided']} resolved"
+            for g in groups
+        ]
+        await interaction.followup.send("\n".join(lines), ephemeral=True)
+        return
+
+    if not identifier:
+        await interaction.followup.send("`identifier` is required for this action.", ephemeral=True)
+        return
+
+    if action.value == "create":
+        error = await parlaytracker.create_group(interaction.channel_id, identifier)
+        if error:
+            await interaction.followup.send(error, ephemeral=True)
+            return
+        await interaction.followup.send(
+            f"Created parlay **{identifier}**. Add legs with "
+            f"`/parlay action:Add legs identifier:{identifier} ids:<card id>, <card id>, ...`",
+            ephemeral=True,
+        )
+        botlog.event(f"🎟️ Parlay **{identifier}** created in <#{interaction.channel_id}> by **{interaction.user}**")
+        return
+
+    if not ids:
+        await interaction.followup.send("`ids` (comma-separated card IDs) is required for this action.", ephemeral=True)
+        return
+    raw_ids = [part.strip() for part in ids.split(",") if part.strip()]
+    message_ids: list[int] = []
+    invalid = []
+    for raw in raw_ids:
+        try:
+            message_ids.append(int(raw))
+        except ValueError:
+            invalid.append(raw)
+    if invalid:
+        await interaction.followup.send(f"Not a valid card ID (must be numeric): {', '.join(invalid)}", ephemeral=True)
+        return
+    if not message_ids:
+        await interaction.followup.send("No valid card IDs given.", ephemeral=True)
+        return
+
+    if action.value == "add":
+        summary = await parlaytracker.add_legs(interaction.channel, interaction.channel_id, identifier, message_ids)
+    else:  # remove
+        summary = await parlaytracker.remove_legs(interaction.channel, interaction.channel_id, identifier, message_ids)
+    botlog.event(f"🎟️ Parlay **{identifier}** ({action.name}) in <#{interaction.channel_id}>: {summary} — by **{interaction.user}**")
+    await interaction.followup.send(summary, ephemeral=True)
 
 
 def main():

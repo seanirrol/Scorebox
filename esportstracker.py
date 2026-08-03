@@ -75,6 +75,10 @@ _RESULT_REACTIONS = {"won": "<:winmark:1532115635071488221>", "lost": "<:lossmar
 _SERVICE_EMOJIS = {TRASH_EMOJI, *_RESULT_REACTIONS.values()}
 
 
+def _footer_text(message_id: Optional[int] = None) -> str:
+    return f"Scorebox ({message_id}) • data via hawk.live/GosuGamers" if message_id else "Scorebox • data via hawk.live/GosuGamers"
+
+
 def track_key(channel_id: int, sport: str, team_a: str, team_b: str, market: str) -> str:
     return f"{channel_id}:{sport}:{team_a}|{team_b}:{market}"
 
@@ -186,7 +190,7 @@ async def build_embed(
     series_data: dict, market: str,
     picked_team: Optional[str] = None, direction: Optional[str] = None, line: Optional[float] = None,
     map_number: Optional[int] = None, picked_maps: Optional[int] = None, other_maps: Optional[int] = None,
-    force_result: Optional[str] = None,
+    force_result: Optional[str] = None, message_id: Optional[int] = None,
 ) -> tuple[discord.Embed, discord.File]:
     """force_result overrides the color/title as if this were already
     graded that way, regardless of the series' actual live status - not
@@ -245,7 +249,7 @@ async def build_embed(
     )
     file = discord.File(io.BytesIO(image_bytes), filename="score.png")
     embed.set_image(url="attachment://score.png")
-    embed.set_footer(text="Scorebox • data via hawk.live/GosuGamers")
+    embed.set_footer(text=_footer_text(message_id))
     embed.timestamp = discord.utils.utcnow()
     return embed, file
 
@@ -316,15 +320,11 @@ async def _track_loop(
         Voided to its parlay group instead of leaving the summary card
         frozen on whatever pending detail ("NOT STARTED"/"LIVE, Game N") it
         last reported, forever, once this task quietly stops polling."""
-        try:
-            fresh = await message.channel.fetch_message(message.id)
-            marker_emojis = [r.emoji for r in fresh.reactions if str(r.emoji) not in _SERVICE_EMOJIS]
-        except discord.HTTPException:
-            marker_emojis = []
-        if marker_emojis:
+        group_ids = parlaytracker.groups_for_leg(channel_id, "esportstracker", key)
+        if group_ids:
             leg_label = f"{team_a} vs {team_b} - {pick_label(market, picked_team, direction, line, map_number, picked_maps, other_maps)}"
             await parlaytracker.handle_leg_result(
-                message.channel, channel_id, message, "esportstracker", key, leg_label, "void", marker_emojis,
+                message.channel, channel_id, message, "esportstracker", key, leg_label, "void", group_ids,
             )
 
     await asyncio.sleep(random.uniform(0, config.UPDATE_INTERVAL_SECONDS))
@@ -356,18 +356,14 @@ async def _track_loop(
                 # (right before kickoff) is too late: a leg with a kickoff
                 # hours away would still never appear on its parlay's
                 # summary card until it was basically already live anyway.
-                try:
-                    fresh = await message.channel.fetch_message(message.id)
-                    marker_emojis = [r.emoji for r in fresh.reactions if str(r.emoji) not in _SERVICE_EMOJIS]
-                except discord.HTTPException:
-                    marker_emojis = []
-                if marker_emojis:
+                group_ids = parlaytracker.groups_for_leg(channel_id, "esportstracker", key)
+                if group_ids:
                     pre_matchup = f"{series_data.get('home_team') or '?'} vs {series_data.get('away_team') or '?'}"
                     pre_pick = pick_label(market, picked_team, direction, line, map_number, picked_maps, other_maps)
                     pre_label = f"{pre_matchup} - {pre_pick}"
                     await parlaytracker.report_leg_progress(
                         message.channel, channel_id, message, "esportstracker", key, pre_label,
-                        f"NOT STARTED - <t:{int(kickoff)}:f>", marker_emojis,
+                        f"NOT STARTED - <t:{int(kickoff)}:f>", group_ids,
                     )
 
                 log.info("Esports match %s v %s (%s) not starting soon; hibernating %.0fs", team_a, team_b, market, hibernate_for)
@@ -391,7 +387,10 @@ async def _track_loop(
             consecutive_misses = 0
             expected_epoch = series_data.get("start_epoch") or expected_epoch
 
-            embed, file = await build_embed(series_data, market, picked_team, direction, line, map_number, picked_maps, other_maps)
+            embed, file = await build_embed(
+                series_data, market, picked_team, direction, line, map_number, picked_maps, other_maps,
+                message_id=message.id,
+            )
 
             if hibernated:
                 # The final wake right before kickoff - bump the card to the
@@ -407,7 +406,7 @@ async def _track_loop(
 
             decided, result = grade_now(series_data, market, picked_team, direction, line, map_number, picked_maps, other_maps)
             if decided:
-                carry_emojis = await _repost_final(embed, file)
+                await _repost_final(embed, file)
 
                 reaction = _RESULT_REACTIONS.get(result)
                 if reaction:
@@ -420,17 +419,14 @@ async def _track_loop(
                     leg_matchup = f"{series_data.get('home_team') or '?'} vs {series_data.get('away_team') or '?'}"
                     leg_pick = pick_label(market, picked_team, direction, line, map_number, picked_maps, other_maps)
                     leg_label = f"{leg_matchup} - {leg_pick}"
+                    group_ids = parlaytracker.groups_for_leg(channel_id, "esportstracker", key)
                     await parlaytracker.handle_leg_result(
-                        message.channel, channel_id, message, "esportstracker", key, leg_label, result, carry_emojis,
+                        message.channel, channel_id, message, "esportstracker", key, leg_label, result, group_ids,
                     )
                 break
 
-            try:
-                fresh = await message.channel.fetch_message(message.id)
-                marker_emojis = [r.emoji for r in fresh.reactions if str(r.emoji) not in _SERVICE_EMOJIS]
-            except discord.HTTPException:
-                marker_emojis = []
-            if marker_emojis:
+            group_ids = parlaytracker.groups_for_leg(channel_id, "esportstracker", key)
+            if group_ids:
                 if series_data["status"] == "notstarted" and series_data.get("start_epoch"):
                     detail = f"NOT STARTED - <t:{int(series_data['start_epoch'])}:f>"
                 elif series_data["status"] == "notstarted":
@@ -441,7 +437,7 @@ async def _track_loop(
                 leg_pick = pick_label(market, picked_team, direction, line, map_number, picked_maps, other_maps)
                 leg_label = f"{leg_matchup} - {leg_pick}"
                 await parlaytracker.report_leg_progress(
-                    message.channel, channel_id, message, "esportstracker", key, leg_label, detail, marker_emojis,
+                    message.channel, channel_id, message, "esportstracker", key, leg_label, detail, group_ids,
                 )
 
             try:

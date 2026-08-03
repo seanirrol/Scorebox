@@ -55,6 +55,10 @@ _RESULT_REACTIONS = {"won": "<:winmark:1532115635071488221>", "lost": "<:lossmar
 _SERVICE_EMOJIS = {TRASH_EMOJI, *_RESULT_REACTIONS.values()}
 
 
+def _footer_text(message_id: Optional[int] = None) -> str:
+    return f"Scorebox ({message_id}) • data via ESPN" if message_id else "Scorebox • data via ESPN"
+
+
 def track_key(channel_id: int, competition_id) -> str:
     return f"{channel_id}:{competition_id}"
 
@@ -121,7 +125,7 @@ def stop_tracking(channel_id: int, competition_id) -> bool:
 
 async def build_embed(
     competition: dict, league_slug: str, event_name: str, fighter_id=None, fighter_name: Optional[str] = None,
-    total_direction: Optional[str] = None, total_line: Optional[float] = None,
+    total_direction: Optional[str] = None, total_line: Optional[float] = None, message_id: Optional[int] = None,
 ) -> tuple[discord.Embed, discord.File]:
     """Exactly one of two modes applies per pick: fighter_id/fighter_name is
     a moneyline pick on that fighter; total_direction/total_line (no
@@ -188,7 +192,7 @@ async def build_embed(
     )
     file = discord.File(io.BytesIO(image_bytes), filename="score.png")
     embed.set_image(url="attachment://score.png")
-    embed.set_footer(text="Scorebox • data via ESPN")
+    embed.set_footer(text=_footer_text(message_id))
     embed.timestamp = discord.utils.utcnow()
     return embed, file
 
@@ -255,12 +259,8 @@ async def _track_loop(
         Voided to its parlay group instead of leaving the summary card
         frozen on whatever pending detail it last reported, forever, once
         this task quietly stops polling."""
-        try:
-            fresh = await message.channel.fetch_message(message.id)
-            marker_emojis = [r.emoji for r in fresh.reactions if str(r.emoji) not in _SERVICE_EMOJIS]
-        except discord.HTTPException:
-            marker_emojis = []
-        if not marker_emojis:
+        group_ids = parlaytracker.groups_for_leg(channel_id, "ufctracker", key)
+        if not group_ids:
             return
         if fighter_id is not None:
             pick_desc = f"{fighter_name} ML"
@@ -280,7 +280,7 @@ async def _track_loop(
             matchup = f"Bout `{competition_id}`"
         void_label = f"{matchup} - {pick_desc}" if pick_desc else matchup
         await parlaytracker.handle_leg_result(
-            message.channel, channel_id, message, "ufctracker", key, void_label, "void", marker_emojis,
+            message.channel, channel_id, message, "ufctracker", key, void_label, "void", group_ids,
         )
 
     await asyncio.sleep(random.uniform(0, config.UPDATE_INTERVAL_SECONDS))
@@ -314,12 +314,8 @@ async def _track_loop(
                 # (right before start) is too late: a leg with a kickoff
                 # hours away would still never appear on its parlay's
                 # summary card until it was basically already live anyway.
-                try:
-                    fresh = await message.channel.fetch_message(message.id)
-                    marker_emojis = [r.emoji for r in fresh.reactions if str(r.emoji) not in _SERVICE_EMOJIS]
-                except discord.HTTPException:
-                    marker_emojis = []
-                if marker_emojis:
+                group_ids = parlaytracker.groups_for_leg(channel_id, "ufctracker", key)
+                if group_ids:
                     pre_competitors = refreshed[0].get("competitors", [])
                     pre_fighter_a = next((c for c in pre_competitors if c.get("order") == 1), pre_competitors[0] if pre_competitors else {})
                     pre_fighter_b = next((c for c in pre_competitors if c.get("order") == 2), pre_competitors[1] if len(pre_competitors) > 1 else {})
@@ -336,7 +332,7 @@ async def _track_loop(
                     pre_label = f"{pre_matchup} - {pre_pick}" if pre_pick else pre_matchup
                     await parlaytracker.report_leg_progress(
                         message.channel, channel_id, message, "ufctracker", key, pre_label,
-                        f"NOT STARTED - <t:{int(kickoff)}:f>", marker_emojis,
+                        f"NOT STARTED - <t:{int(kickoff)}:f>", group_ids,
                     )
 
                 log.info("UFC bout %s not starting soon; hibernating %.0fs", competition_id, hibernate_for)
@@ -359,7 +355,10 @@ async def _track_loop(
             consecutive_misses = 0
             competition, _fighter = refreshed
 
-            embed, file = await build_embed(competition, league_slug, event_name, fighter_id, fighter_name, total_direction, total_line)
+            embed, file = await build_embed(
+                competition, league_slug, event_name, fighter_id, fighter_name, total_direction, total_line,
+                message_id=message.id,
+            )
             leg_competitors = competition.get("competitors", [])
             leg_fighter_a = next((c for c in leg_competitors if c.get("order") == 1), leg_competitors[0] if leg_competitors else {})
             leg_fighter_b = next((c for c in leg_competitors if c.get("order") == 2), leg_competitors[1] if len(leg_competitors) > 1 else {})
@@ -399,7 +398,7 @@ async def _track_loop(
                 # of editing in place - same reasoning as the pre-fight bump
                 # above: a live card can run long enough that the original
                 # card is buried under chat by the time the bout is graded.
-                carry_emojis = await _repost_final(embed, file)
+                await _repost_final(embed, file)
 
                 reaction = _RESULT_REACTIONS.get(result)
                 if reaction:
@@ -408,25 +407,22 @@ async def _track_loop(
                     except discord.HTTPException as e:
                         log.warning("Failed to add result reaction: %s", e)
                 if result:
+                    group_ids = parlaytracker.groups_for_leg(channel_id, "ufctracker", key)
                     await parlaytracker.handle_leg_result(
-                        message.channel, channel_id, message, "ufctracker", key, leg_label, result, carry_emojis,
+                        message.channel, channel_id, message, "ufctracker", key, leg_label, result, group_ids,
                     )
                 pendingdelete.start(channel_id, message, embed.description or "")
                 break
 
-            try:
-                fresh = await message.channel.fetch_message(message.id)
-                marker_emojis = [r.emoji for r in fresh.reactions if str(r.emoji) not in _SERVICE_EMOJIS]
-            except discord.HTTPException:
-                marker_emojis = []
-            if marker_emojis:
+            group_ids = parlaytracker.groups_for_leg(channel_id, "ufctracker", key)
+            if group_ids:
                 kickoff = espn_ufc.start_epoch(competition)
                 if competition.get("status", {}).get("type", {}).get("state") == "pre":
                     detail = f"NOT STARTED - <t:{int(kickoff)}:f>" if kickoff else "NOT STARTED"
                 else:
                     detail = f"LIVE, {espn_ufc.status_text(competition)}"
                 await parlaytracker.report_leg_progress(
-                    message.channel, channel_id, message, "ufctracker", key, leg_label, detail, marker_emojis,
+                    message.channel, channel_id, message, "ufctracker", key, leg_label, detail, group_ids,
                 )
 
             try:

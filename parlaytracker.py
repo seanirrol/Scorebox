@@ -1,41 +1,41 @@
 #!/usr/bin/env python3
 """
-Tracks ad-hoc "parlay groups" - cards a user has manually marked as
-belonging to the same parlay by reacting to each leg with the same custom
-emoji while it's still hibernating. That marker survives every repost a
-leg's card goes through before it's graded (kickoff bump, graded result,
-voided) via the reaction-carry-forward mechanism already built into every
-tracker's own _repost_final - this module is what actually does something
-with it.
+Tracks ad-hoc "parlay groups" - a set of tracked picks the user has
+explicitly grouped together via the /parlay command (create, then add each
+leg by pasting its card's message ID from the footer). Membership is fully
+manual now - there is no reaction-based auto-detection anymore (that
+approach kept producing races and undercounts in practice: duplicate
+summary cards, legs invisible for hours until their own tracker happened to
+re-poll, off-by-one counts from the group-size heuristic). A leg's card
+still reposts/edits exactly as it always has, entirely independent of this
+module - parlaytracker only reacts to (a) explicit /parlay add/remove calls
+and (b) every tracker's own report_leg_progress/handle_leg_result calls,
+which now check membership via groups_for_leg instead of scanning Discord
+reactions.
 
 Not a real parlay betting engine - just a lightweight "how's my parlay
-doing" live summary, with no explicit registration step. A group's total
-leg count is inferred the first time ANY leg in it reports in (live or
-already resolved): at that moment, every other currently-active tracked
-card in the same channel is checked for the same marker emoji, and however
-many are found becomes the group's locked-in total. Fewer than
-MIN_PARLAY_LEGS sharing an emoji is treated as an unrelated personal
-marker, not a parlay - no card gets created for it.
-
-Once a group exists, every tracker reports into it on EVERY poll cycle (not
-just once a leg is finally graded) via report_leg_progress, so the one
-summary card this module maintains always shows each leg's current state -
-WON/LOST/PUSH/VOID once resolved, or LIVE/NOT STARTED with live detail
-while still pending. A live progress update (leg still pending) edits the
-card in place; a leg actually finishing (handle_leg_result) bumps it to
-the bottom of the channel instead, same "something significant happened,
-resurface it" reasoning as every individual tracker's own _repost_final -
-editing in place on every single live tick would be enough noise, but a
-leg's match ending is worth surfacing. Either way every leg's latest known
-status is shown, not just the one that changed. Individual leg cards keep
-posting and updating exactly as they always have, entirely unaffected by
-this.
+doing" live summary. Once a group exists, every tracker reports into it on
+EVERY poll cycle (not just once a leg is finally graded) via
+report_leg_progress, so the one summary card this module maintains always
+shows each leg's current state - WON/LOST/PUSH/VOID once resolved, or
+LIVE/NOT STARTED with live detail while still pending. A live progress
+update (leg still pending) edits the card in place; a leg actually
+finishing (handle_leg_result) bumps it to the bottom of the channel
+instead, same "something significant happened, resurface it" reasoning as
+every individual tracker's own _repost_final - editing in place on every
+single live tick would be enough noise, but a leg's match ending is worth
+surfacing. Either way every leg's latest known status is shown, not just
+the one that changed.
 
 A Push/Void leg doesn't count as a win or a loss - it's removed from the
 total instead (matches how a real sportsbook recalculates a parlay around
 a voided leg). A single loss ends the group's own overall verdict (shown as
 LOST from then on), but the card keeps updating as any still-pending legs
-finish, rather than freezing mid-parlay.
+finish, rather than freezing mid-parlay. Removing a leg via /parlay remove
+does the same thing to the total as a void does - if that empties the
+group down to zero legs, the whole group is deleted outright (its
+identifier becomes free to reuse via a fresh /parlay create) rather than
+left around as an empty shell.
 """
 
 import asyncio
@@ -51,16 +51,14 @@ import throttle
 
 log = logging.getLogger("scorebox.parlaytracker")
 
-# Serializes group-creation/update per (channel, emoji) - several legs'
-# trackers commonly start hibernating within the same moment (e.g. right
-# after a batch of picks all auto-track together), and without this, two
-# concurrent report_leg_progress/handle_leg_result calls could each load
-# state before the other saves, both see "no group yet", and each
-# independently create and post its own separate summary card for the
-# same parlay - confirmed live: a 3-leg group produced 3 separate
-# "0/3 resolved" cards instead of one. Keyed per-group (not one global
-# lock) so unrelated parlays in other channels/emoji aren't serialized
-# against each other.
+# Serializes group creation/update per (channel, identifier) - a manual
+# /parlay add/remove and a tracker's own report_leg_progress/
+# handle_leg_result for a leg in the same group could otherwise race on the
+# same group's legs dict/counters (confirmed this exact class of bug once
+# already with the old reaction-based auto-detection: two concurrent calls
+# each loading state before the other saved produced 3 duplicate summary
+# cards for one parlay). Keyed per-group (not one global lock) so unrelated
+# parlays in other channels/identifiers aren't serialized against each other.
 _group_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
 # Same custom emoji every individual tracker already uses for a graded
@@ -70,10 +68,6 @@ _group_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 _WINMARK = "<:winmark:1532115635071488221>"
 _LOSSMARK = "<:lossmark:1532115600162422894>"
 
-# A real parlay is at least 3 legs - 1-2 cards sharing an emoji is more
-# likely just a personal marker unrelated to a parlay, not worth announcing.
-MIN_PARLAY_LEGS = 3
-
 _RESULT_DETAIL = {"won": "WON", "lost": "LOST", "push": "PUSH", "void": "VOID"}
 # Discord embeds have no per-line/per-field text color, only one color for
 # the whole card's left border - colored squares are the closest thing to
@@ -81,22 +75,18 @@ _RESULT_DETAIL = {"won": "WON", "lost": "LOST", "push": "PUSH", "void": "VOID"}
 # which legs are in which state without reading the words.
 _LEG_SQUARES = {"won": "🟩", "lost": "🟥", "push": "⬜", "void": "⬜"}
 
-
-def _key(channel_id: int, emoji: str) -> str:
-    return f"{channel_id}:{emoji}"
+MAX_IDENTIFIER_LENGTH = 14
 
 
-async def _count_group_size(channel: discord.abc.Messageable, channel_id: int, emoji: str, exclude_message_id: int) -> int:
-    """How many currently-active tracked cards in this channel (besides the
-    one that just reported in, already excluded from every
-    list_tracked_details since it's the one calling this) also carry this
-    same marker emoji right now - used only once, to lock in a fresh
-    group's total leg count.
+def _key(channel_id: int, identifier: str) -> str:
+    return f"{channel_id}:{identifier}"
 
-    Imports every other tracker module lazily (function-local, not at
-    module level) since each of them calls back into this module's
-    report_leg_progress/handle_leg_result - a module-level import here
-    would be circular."""
+
+def _tracker_modules():
+    """Lazily imports every tracker module (function-local, not at module
+    level) since each of them calls back into this module's
+    report_leg_progress/handle_leg_result/groups_for_leg - a module-level
+    import here would be circular."""
     import esportstracker
     import f5tracker
     import inning1tracker
@@ -108,56 +98,120 @@ async def _count_group_size(channel: discord.abc.Messageable, channel_id: int, e
     import tracker
     import ufctracker
 
-    tracker_modules = [
-        tracker, proptracker, inningtracker, f5tracker, inning1tracker,
-        settracker, tennispropstracker, soccerpropstracker, ufctracker, esportstracker,
+    return {
+        "tracker": tracker, "proptracker": proptracker, "inningtracker": inningtracker,
+        "f5tracker": f5tracker, "inning1tracker": inning1tracker, "settracker": settracker,
+        "soccerpropstracker": soccerpropstracker, "tennispropstracker": tennispropstracker,
+        "ufctracker": ufctracker, "esportstracker": esportstracker,
+    }
+
+
+def resolve_leg(message_id: int) -> Optional[tuple[str, str, int]]:
+    """Given a card's Discord message ID (as printed in its own footer),
+    figures out which tracker module owns it and reconstructs that
+    module's own track_key/prop_key string - returns
+    (module_name, track_key_str, owner_channel_id), or None if no currently
+    -tracked card anywhere has this message ID. Every module's own
+    _message_owners tuple has channel_id as its first element, but the
+    rest of the shape (and the track_key/prop_key signature needed to
+    rebuild the key) differs per module - no generic shortcut is possible,
+    so this is an explicit branch per module."""
+    mods = _tracker_modules()
+
+    owner = mods["tracker"].get_message_owner(message_id)
+    if owner:
+        channel_id, game_id, _owner_id = owner
+        return "tracker", mods["tracker"].track_key(channel_id, game_id), channel_id
+
+    owner = mods["proptracker"].get_message_owner(message_id)
+    if owner:
+        channel_id, event_id, entity_id, stat_key, _owner_id = owner
+        key = mods["proptracker"].prop_key(channel_id, event_id, entity_id, tuple(stat_key))
+        return "proptracker", key, channel_id
+
+    owner = mods["inningtracker"].get_message_owner(message_id)
+    if owner:
+        channel_id, event_id, pick_type, _owner_id = owner
+        return "inningtracker", mods["inningtracker"].track_key(channel_id, event_id, pick_type), channel_id
+
+    owner = mods["f5tracker"].get_message_owner(message_id)
+    if owner:
+        channel_id, game_id, _owner_id = owner
+        return "f5tracker", mods["f5tracker"].track_key(channel_id, game_id), channel_id
+
+    owner = mods["inning1tracker"].get_message_owner(message_id)
+    if owner:
+        channel_id, game_id, _owner_id = owner
+        return "inning1tracker", mods["inning1tracker"].track_key(channel_id, game_id), channel_id
+
+    owner = mods["settracker"].get_message_owner(message_id)
+    if owner:
+        channel_id, game_id, market, _owner_id = owner
+        return "settracker", mods["settracker"].track_key(channel_id, game_id, market), channel_id
+
+    owner = mods["soccerpropstracker"].get_message_owner(message_id)
+    if owner:
+        channel_id, game_id, member_id, stat_name, _owner_id = owner
+        key = mods["soccerpropstracker"].prop_key(channel_id, game_id, member_id, stat_name)
+        return "soccerpropstracker", key, channel_id
+
+    owner = mods["tennispropstracker"].get_message_owner(message_id)
+    if owner:
+        channel_id, game_id, competitor_id, stat_name, _owner_id = owner
+        key = mods["tennispropstracker"].prop_key(channel_id, game_id, competitor_id, stat_name)
+        return "tennispropstracker", key, channel_id
+
+    owner = mods["ufctracker"].get_message_owner(message_id)
+    if owner:
+        channel_id, competition_id, _owner_id = owner
+        return "ufctracker", mods["ufctracker"].track_key(channel_id, competition_id), channel_id
+
+    owner = mods["esportstracker"].get_message_owner(message_id)
+    if owner:
+        channel_id, sport, team_a, team_b, market, _owner_id = owner
+        key = mods["esportstracker"].track_key(channel_id, sport, team_a, team_b, market)
+        return "esportstracker", key, channel_id
+
+    return None
+
+
+def groups_for_leg(channel_id: int, module_name: str, track_key_str: str) -> list[str]:
+    """Which of this channel's parlay groups (by identifier) this specific
+    leg currently belongs to - a plain, synchronous read of persisted state
+    (no Discord call needed at all, unlike the old reaction-scanning this
+    replaced), called by every tracker on every poll cycle to decide
+    whether/where to report. A leg can belong to more than one parlay at
+    once (matches the old system's same allowance for multiple marker
+    emoji on one card)."""
+    leg_id = f"{module_name}:{track_key_str}"
+    data = state.load_parlays()
+    return [
+        group["identifier"] for group in data.values()
+        if group.get("channel_id") == channel_id and leg_id in group.get("legs", {})
     ]
 
-    count = 1  # the one that just reported in
-    for mod in tracker_modules:
-        for entry in mod.list_tracked_details(channel_id):
-            message_id = entry.get("message_id")
-            if not message_id or message_id == exclude_message_id:
-                continue
-            try:
-                message = await channel.fetch_message(message_id)
-            except discord.HTTPException:
-                continue
-            if any(str(r.emoji) == emoji for r in message.reactions):
-                count += 1
-    return count
+
+def list_groups(channel_id: int) -> list[dict]:
+    data = state.load_parlays()
+    return [group for group in data.values() if group.get("channel_id") == channel_id]
 
 
-async def _ensure_group(
-    data: dict, key: str, channel: discord.abc.Messageable, channel_id: int, emoji: str,
-    exclude_message_id: int, leg_id: str,
-) -> Optional[dict]:
-    """Returns the existing group record, or - the first time any leg
-    reports in for this emoji - counts how many cards share it and creates
-    one if that's at least MIN_PARLAY_LEGS. Returns None if there's no
-    group and none should be created (not enough cards share this emoji -
-    probably just an unrelated personal marker).
-
-    leg_id is pre-seeded into the fresh group's legs dict (as an empty
-    placeholder, immediately overwritten by the caller right after this
-    returns) purely so report_leg_progress/handle_leg_result's own "is this
-    a never-before-seen leg?" growth check doesn't also count it a second
-    time - _count_group_size's total already includes the very leg that's
-    triggering group creation right now (its own "count = 1 (the one that
-    just reported in)"), so without this a brand new group's total_legs
-    came out one too high every time (confirmed live: a genuine 4-leg
-    parlay's first-ever summary card read "0/5 resolved")."""
-    group = data.get(key)
-    if group is not None:
-        return group
-    total = await _count_group_size(channel, channel_id, emoji, exclude_message_id)
-    if total < MIN_PARLAY_LEGS:
-        return None
-    return {
-        "channel_id": channel_id, "emoji": emoji, "total_legs": total,
-        "resolved_legs": 0, "won": 0, "voided": 0, "lost": False,
-        "summary_message_id": None, "legs": {leg_id: {}},
-    }
+async def create_group(channel_id: int, identifier: str) -> Optional[str]:
+    """Returns an error string, or None on success."""
+    if not identifier or len(identifier) > MAX_IDENTIFIER_LENGTH:
+        return f"Parlay name must be 1-{MAX_IDENTIFIER_LENGTH} characters."
+    key = _key(channel_id, identifier)
+    async with _group_locks[key]:
+        data = state.load_parlays()
+        if key in data:
+            return f"A parlay named **{identifier}** already exists in this channel."
+        data[key] = {
+            "channel_id": channel_id, "identifier": identifier, "total_legs": 0,
+            "resolved_legs": 0, "won": 0, "voided": 0, "lost": False,
+            "summary_message_id": None, "legs": {},
+        }
+        state.save_parlays(data)
+    return None
 
 
 def _leg_square(leg: dict) -> str:
@@ -192,7 +246,7 @@ def _summary_color_status(group: dict) -> str:
 
 
 def _build_summary_embed(group: dict) -> discord.Embed:
-    emoji = group["emoji"]
+    identifier = group["identifier"]
     effective_total = group["total_legs"]
     voided_suffix = f" ({group['voided']} Voided)" if group["voided"] else ""
     all_resolved = group["resolved_legs"] >= group["total_legs"] + group["voided"]
@@ -212,7 +266,7 @@ def _build_summary_embed(group: dict) -> discord.Embed:
     # skimmed at a glance.
     leg_lines = [f"{_leg_square(leg)} {leg['label']} — {leg['detail']}" for leg in group.get("legs", {}).values()]
     embed = discord.Embed(
-        title=f"Parlay {emoji}", description="\n".join([subtitle] + leg_lines),
+        title=f"Parlay {identifier}", description="\n".join([subtitle] + leg_lines),
         color=scoreimage.EMBED_COLOR[_summary_color_status(group)],
     )
     embed.timestamp = discord.utils.utcnow()
@@ -229,11 +283,6 @@ async def _post_or_edit_summary(channel: discord.abc.Messageable, channel_id: in
     if message_id:
         try:
             message = await channel.fetch_message(message_id)
-            # content=None explicitly clears any leftover plain text on a
-            # card that pre-dates the switch to embeds - otherwise a card
-            # first created before that change keeps showing its old
-            # plain-text line permanently above the new embed box, since
-            # .edit() only touches fields it's explicitly given.
             await throttle.run(channel_id, lambda: message.edit(content=None, embed=embed))
             return message_id
         except discord.HTTPException as e:
@@ -316,33 +365,30 @@ async def resume_all(client: discord.Client):
 
 async def report_leg_progress(
     channel: discord.abc.Messageable, channel_id: int, message: discord.Message,
-    module_name: str, track_key_str: str, label: str, detail: str, marker_emojis: list,
+    module_name: str, track_key_str: str, label: str, detail: str, group_ids: list,
 ):
     """Called every poll cycle by every tracker (not just once a leg is
     finally graded) so the summary card can show each still-pending leg's
     live status. detail is a short human-readable status string, e.g.
-    "LIVE, Game 2" or "NOT STARTED - <t:1785744000:f>". No-op if the card
-    carries no marker emoji at all - most tracked picks aren't part of an
-    announced parlay group."""
-    if not marker_emojis:
+    "LIVE, Game 2" or "NOT STARTED - <t:1785744000:f>". group_ids comes
+    from groups_for_leg - a no-op if the leg isn't currently a member of
+    any parlay group."""
+    if not group_ids:
         return
     leg_id = f"{module_name}:{track_key_str}"
-    for emoji_obj in marker_emojis:
-        emoji = str(emoji_obj)
-        key = _key(channel_id, emoji)
+    for identifier in group_ids:
+        key = _key(channel_id, identifier)
         async with _group_locks[key]:
             data = state.load_parlays()
-            group = await _ensure_group(data, key, channel, channel_id, emoji, message.id, leg_id)
+            group = data.get(key)
             if group is None:
-                continue
+                continue  # deleted (e.g. by a concurrent /parlay remove) since groups_for_leg's scan
             legs = group.setdefault("legs", {})
             if leg_id not in legs:
-                # Wasn't part of the original group-size scan (e.g. still
-                # mid-auto-track and not yet reactable at that exact
-                # moment) - grow the total to include it now rather than
-                # leaving the "X/N resolved" count permanently
-                # undercounting a leg that's clearly part of the group.
-                group["total_legs"] += 1
+                # groups_for_leg reads state before this lock is taken - a
+                # concurrent /parlay remove could have dropped this exact
+                # leg in between. Don't resurrect it.
+                continue
             legs[leg_id] = {"label": label, "status": "pending", "detail": detail}
             group["summary_message_id"] = await _post_or_edit_summary(channel, channel_id, group)
             data[key] = group
@@ -351,35 +397,28 @@ async def report_leg_progress(
 
 async def handle_leg_result(
     channel: discord.abc.Messageable, channel_id: int, message: discord.Message,
-    module_name: str, track_key_str: str, label: str, result: str, marker_emojis: list,
+    module_name: str, track_key_str: str, label: str, result: str, group_ids: list,
 ):
     """Called right after a tracked pick is finally graded (won/lost/push/
-    void) - marker_emojis is whatever non-service reactions survived onto
-    the final message (each tracker's _repost_final already computes this
-    for its own carry-forward step, so it's passed in rather than
-    re-fetched here). Does nothing if there's no marker emoji at all - most
-    tracked picks aren't part of an announced parlay group."""
-    if not marker_emojis or result not in ("won", "lost", "push", "void"):
+    void). group_ids comes from groups_for_leg, called separately right
+    before this - never reuse a tracker's own _repost_final carry_emojis
+    return value here, that's an unrelated reaction-carry-forward
+    mechanism with nothing to do with parlay membership anymore."""
+    if not group_ids or result not in ("won", "lost", "push", "void"):
         return
 
     leg_id = f"{module_name}:{track_key_str}"
-    for emoji_obj in marker_emojis:
-        emoji = str(emoji_obj)
-        key = _key(channel_id, emoji)
+    for identifier in group_ids:
+        key = _key(channel_id, identifier)
         async with _group_locks[key]:
             data = state.load_parlays()
-            group = await _ensure_group(data, key, channel, channel_id, emoji, message.id, leg_id)
+            group = data.get(key)
             if group is None:
                 continue
 
             legs = group.setdefault("legs", {})
             if leg_id not in legs:
-                # Same self-correction as report_leg_progress - a leg
-                # resolving without ever having reported pending progress
-                # first (e.g. it settled faster than its own next poll
-                # cycle) still needs to grow the total if it wasn't part
-                # of the original group-size scan.
-                group["total_legs"] += 1
+                continue  # removed out from under us - see report_leg_progress's same guard
 
             group["resolved_legs"] += 1
             if result == "won":
@@ -395,11 +434,141 @@ async def handle_leg_result(
 
             all_resolved = group["resolved_legs"] >= group["total_legs"] + group["voided"]
             if all_resolved:
-                # Every original leg has now produced a result - the
-                # group's done. The summary card message itself stays in
-                # the channel (not deleted) as the final record, just no
-                # longer tracked.
+                # Every leg has now produced a result - the group's done.
+                # The summary card message itself stays in the channel
+                # (not deleted) as the final record, just no longer
+                # tracked.
                 data.pop(key, None)
             else:
                 data[key] = group
             state.save_parlays(data)
+
+
+async def add_legs(
+    channel: discord.abc.Messageable, channel_id: int, identifier: str, message_ids: list[int],
+) -> str:
+    """Adds each message ID (already parsed to int by the caller) as a leg
+    of the named parlay - returns a human-readable summary of what
+    happened for each one. Placeholder label/detail (the target card's own
+    current embed description, "Pending") is used until that leg's own
+    tracker naturally reports in on its next poll cycle - same latency as
+    the old system had for a freshly-tagged card, not a new regression."""
+    key = _key(channel_id, identifier)
+    added, already_in, not_found, wrong_channel = [], [], [], []
+
+    async with _group_locks[key]:
+        data = state.load_parlays()
+        group = data.get(key)
+        if group is None:
+            return f"No parlay named **{identifier}** in this channel. Use /parlay action:Create first."
+
+        legs = group.setdefault("legs", {})
+        for message_id in message_ids:
+            resolved = resolve_leg(message_id)
+            if resolved is None:
+                not_found.append(str(message_id))
+                continue
+            module_name, track_key_str, owner_channel_id = resolved
+            if owner_channel_id != channel_id:
+                wrong_channel.append(str(message_id))
+                continue
+            leg_id = f"{module_name}:{track_key_str}"
+            if leg_id in legs:
+                already_in.append(str(message_id))
+                continue
+            try:
+                target_message = await channel.fetch_message(message_id)
+                label = (target_message.embeds[0].description or "?").splitlines()[0] if target_message.embeds else "?"
+            except discord.HTTPException:
+                label = "?"
+            legs[leg_id] = {"label": label, "status": "pending", "detail": "Pending"}
+            group["total_legs"] += 1
+            added.append(str(message_id))
+
+        if added:
+            group["summary_message_id"] = await _post_or_edit_summary(channel, channel_id, group)
+        data[key] = group
+        state.save_parlays(data)
+
+    parts = []
+    if added:
+        parts.append(f"Added {len(added)} leg(s): {', '.join(added)}")
+    if already_in:
+        parts.append(f"Already in **{identifier}**: {', '.join(already_in)}")
+    if wrong_channel:
+        parts.append(f"Not from this channel: {', '.join(wrong_channel)}")
+    if not_found:
+        parts.append(f"Not a currently-tracked card: {', '.join(not_found)}")
+    return "\n".join(parts) if parts else "Nothing to add."
+
+
+def _recompute_group_counts(group: dict):
+    """Rebuilds won/voided/lost/resolved_legs from scratch by rescanning
+    the remaining legs' status fields - safer than incrementally "undoing"
+    a specific counter on removal (lost in particular is a bool that more
+    than one leg could have independently set)."""
+    won = voided = resolved = 0
+    lost = False
+    for leg in group.get("legs", {}).values():
+        status = leg["status"]
+        if status == "pending":
+            continue
+        resolved += 1
+        if status == "won":
+            won += 1
+        elif status in ("push", "void"):
+            voided += 1
+        elif status == "lost":
+            lost = True
+    group["won"], group["voided"], group["resolved_legs"], group["lost"] = won, voided, resolved, lost
+    group["total_legs"] = len(group.get("legs", {})) - voided
+
+
+async def remove_legs(
+    channel: discord.abc.Messageable, channel_id: int, identifier: str, message_ids: list[int],
+) -> str:
+    """Removes each message ID's leg from the named parlay - if that empties
+    the group down to zero legs, the group is deleted entirely (its
+    identifier becomes free to reuse) rather than left as an empty shell.
+    The last-posted summary message is left alone in Discord (not deleted)
+    as the final record, same treatment as handle_leg_result's own
+    all-resolved cleanup."""
+    key = _key(channel_id, identifier)
+    removed, not_in_group = [], []
+
+    async with _group_locks[key]:
+        data = state.load_parlays()
+        group = data.get(key)
+        if group is None:
+            return f"No parlay named **{identifier}** in this channel."
+
+        legs = group.setdefault("legs", {})
+        for message_id in message_ids:
+            resolved = resolve_leg(message_id)
+            leg_id = f"{resolved[0]}:{resolved[1]}" if resolved else None
+            if leg_id is None or leg_id not in legs:
+                not_in_group.append(str(message_id))
+                continue
+            del legs[leg_id]
+            removed.append(str(message_id))
+
+        if not removed:
+            return f"None of those IDs are currently in **{identifier}**."
+
+        if not legs:
+            data.pop(key, None)
+            state.save_parlays(data)
+            parts = [f"Removed {len(removed)} leg(s): {', '.join(removed)}", f"**{identifier}** is now empty and has been deleted."]
+            if not_in_group:
+                parts.append(f"Not in this parlay: {', '.join(not_in_group)}")
+            return "\n".join(parts)
+
+        _recompute_group_counts(group)
+        group["summary_message_id"] = await _post_or_edit_summary(channel, channel_id, group)
+        data[key] = group
+        state.save_parlays(data)
+
+    parts = [f"Removed {len(removed)} leg(s): {', '.join(removed)}"]
+    if not_in_group:
+        parts.append(f"Not in this parlay: {', '.join(not_in_group)}")
+    return "\n".join(parts)
