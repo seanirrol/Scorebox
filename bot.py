@@ -151,8 +151,8 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
         channel_id, game_id, _ = info
         inning1tracker.stop_tracking(channel_id, game_id)
     elif kind == "set1":
-        channel_id, game_id, market, _ = info
-        settracker.stop_tracking(channel_id, game_id, market)
+        channel_id, game_id, market, team, _ = info
+        settracker.stop_tracking(channel_id, game_id, market, team)
     elif kind == "tennis_prop":
         channel_id, game_id, competitor_id, stat_name, _ = info
         tennispropstracker.stop_tracking(channel_id, game_id, competitor_id, stat_name)
@@ -539,7 +539,7 @@ async def _auto_tennis_market(
         return
     game, sport_id = result
     game_id = game["id"]
-    if settracker.is_tracked(channel.id, game_id, market):
+    if settracker.is_tracked(channel.id, game_id, market, team):
         botlog.event(f"⏭️ Skipped ({market}): **{team}** — game `{game_id}` already being tracked in <#{channel.id}>")
         return
 
@@ -547,7 +547,7 @@ async def _auto_tennis_market(
     message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
     embed.set_footer(text=settracker._footer_text(message.id))
     await throttle.run(channel.id, lambda: message.edit(embed=embed))
-    settracker.register_message(message.id, channel.id, game_id, market, None)
+    settracker.register_message(message.id, channel.id, game_id, market, team, None)
     await message.add_reaction(TRASH_EMOJI)
 
     decided, _ = settracker.grade_now(game, market, team, direction, line)
@@ -1059,7 +1059,7 @@ def _untrack_one(channel_id: int, game_id: str, player: Optional[str]) -> list[s
             continue
         if player and entry.get("team") and player.lower() not in entry["team"].lower():
             continue
-        if settracker.stop_tracking(channel_id, entry["game_id"], entry["market"]):
+        if settracker.stop_tracking(channel_id, entry["game_id"], entry["market"], entry.get("team")):
             stopped.append(f"{entry['market']} pick")
 
     if ufctracker.stop_tracking(channel_id, game_id):
@@ -1233,7 +1233,7 @@ async def _gather_tracked_items(channel_id: int) -> list[dict]:
         items.append({
             "kind": "set1", "label": label, "id_label": entry["game_id"],
             "message_id": entry["message_id"],
-            "stop": lambda cid=channel_id, gid=entry["game_id"], m=entry["market"]: settracker.stop_tracking(cid, gid, m),
+            "stop": lambda cid=channel_id, gid=entry["game_id"], m=entry["market"], t=entry.get("team"): settracker.stop_tracking(cid, gid, m, t),
         })
 
     for entry in tennispropstracker.list_tracked_details(channel_id):

@@ -54,7 +54,7 @@ TRASH_EMOJI = "🗑️"
 
 _active: dict[str, asyncio.Task] = {}
 
-# message_id -> (channel_id, game_id, market, owner_id) - lets the
+# message_id -> (channel_id, game_id, market, team, owner_id) - lets the
 # reaction-based delete handler in bot.py look up who's allowed to delete a
 # given message.
 _message_owners: dict[int, tuple] = {}
@@ -75,12 +75,33 @@ def _footer_text(message_id: Optional[int] = None) -> str:
     return f"Scorebox ({message_id}) • data via 365scores" if message_id else "Scorebox • data via 365scores"
 
 
-def track_key(channel_id: int, game_id, market: str) -> str:
-    return f"{channel_id}:{game_id}:{market}"
+# Markets where team actually identifies WHICH player the pick is graded
+# against - two different players' picks on the same match+market used to
+# collide onto the identical track_key (team wasn't part of the key at
+# all), which made start_tracking's own "already active" dedup check (see
+# start_tracking) silently drop the second one: its card still posted with
+# a real live snapshot (built independently before the collision was ever
+# checked), footer patched, reaction added - everything looked normal - but
+# it never got registered or given a _track_loop, so it sat frozen forever
+# with no error anywhere. Confirmed live: a player_total_games pick absent
+# from its own channel's /tracked list despite its card still showing what
+# looked like a live score.
+#
+# set1_total_games/match_total_games are deliberately excluded - for those,
+# _auto_tennis_market's "team" is just whichever matchup side was used to
+# look the match up, not part of the bet's identity, so including it in the
+# key would wrongly let the same match-total pick get double-tracked if two
+# people referenced it via different anchor names.
+_PER_PLAYER_MARKETS = {"set1_moneyline", "player_total_games", "win_a_set"}
 
 
-def is_tracked(channel_id: int, game_id, market: str) -> bool:
-    return track_key(channel_id, game_id, market) in _active
+def track_key(channel_id: int, game_id, market: str, team: Optional[str] = None) -> str:
+    disambiguator = team if market in _PER_PLAYER_MARKETS else None
+    return f"{channel_id}:{game_id}:{market}:{disambiguator}"
+
+
+def is_tracked(channel_id: int, game_id, market: str, team: Optional[str] = None) -> bool:
+    return track_key(channel_id, game_id, market, team) in _active
 
 
 def list_tracked_details(channel_id: int) -> list[dict]:
@@ -88,13 +109,13 @@ def list_tracked_details(channel_id: int) -> list[dict]:
     active_keys = {k for k in _active if k.startswith(prefix)}
     return [
         entry for entry in state.load_set1().values()
-        if track_key(entry["channel_id"], entry["game_id"], entry["market"]) in active_keys
+        if track_key(entry["channel_id"], entry["game_id"], entry["market"], entry.get("team")) in active_keys
     ]
 
 
-def register_message(message_id: int, channel_id: int, game_id, market: str, owner_id: int):
+def register_message(message_id: int, channel_id: int, game_id, market: str, team: Optional[str], owner_id: int):
     """Lets bot.py's 🗑️-reaction handler know who's allowed to delete this message."""
-    _message_owners[message_id] = (channel_id, game_id, market, owner_id)
+    _message_owners[message_id] = (channel_id, game_id, market, team, owner_id)
 
 
 def get_message_owner(message_id: int) -> Optional[tuple]:
@@ -110,25 +131,25 @@ def _persist(
     team: Optional[str] = None, direction: Optional[str] = None, line: Optional[float] = None,
 ):
     data = state.load_set1()
-    data[track_key(channel_id, game_id, market)] = {
+    data[track_key(channel_id, game_id, market, team)] = {
         "channel_id": channel_id, "game_id": game_id, "market": market, "message_id": message_id,
         "sport_id": sport_id, "owner_id": owner_id, "team": team, "direction": direction, "line": line,
     }
     state.save_set1(data)
 
 
-def _forget(channel_id: int, game_id, market: str):
+def _forget(channel_id: int, game_id, market: str, team: Optional[str] = None):
     data = state.load_set1()
-    data.pop(track_key(channel_id, game_id, market), None)
+    data.pop(track_key(channel_id, game_id, market, team), None)
     state.save_set1(data)
 
 
-def stop_tracking(channel_id: int, game_id, market: str) -> bool:
-    key = track_key(channel_id, game_id, market)
+def stop_tracking(channel_id: int, game_id, market: str, team: Optional[str] = None) -> bool:
+    key = track_key(channel_id, game_id, market, team)
     task = _active.pop(key, None)
-    _forget(channel_id, game_id, market)
-    for message_id, (c_id, g_id, m, _owner) in list(_message_owners.items()):
-        if c_id == channel_id and g_id == game_id and m == market:
+    _forget(channel_id, game_id, market, team)
+    for message_id, (c_id, g_id, m, t, _owner) in list(_message_owners.items()):
+        if c_id == channel_id and g_id == game_id and m == market and t == team:
             _message_owners.pop(message_id, None)
     if task:
         task.cancel()
@@ -292,7 +313,7 @@ async def _track_loop(
     message: discord.Message, sport_id: int, game_id, channel_id: int, market: str, owner_id: int,
     team: Optional[str] = None, direction: Optional[str] = None, line: Optional[float] = None,
 ):
-    key = track_key(channel_id, game_id, market)
+    key = track_key(channel_id, game_id, market, team)
     deadline = time.monotonic() + config.MAX_TRACK_HOURS * 3600
 
     consecutive_misses = 0
@@ -335,7 +356,7 @@ async def _track_loop(
         old_message = message
         message = new_message
         _message_owners.pop(old_message.id, None)
-        register_message(message.id, channel_id, game_id, market, owner_id)
+        register_message(message.id, channel_id, game_id, market, team, owner_id)
         try:
             await old_message.delete()
         except discord.HTTPException as e:
@@ -510,7 +531,7 @@ async def _track_loop(
     finally:
         _active.pop(key, None)
         _message_owners.pop(message.id, None)
-        _forget(channel_id, game_id, market)
+        _forget(channel_id, game_id, market, team)
 
 
 def start_tracking(
@@ -518,14 +539,14 @@ def start_tracking(
     team: Optional[str] = None, direction: Optional[str] = None, line: Optional[float] = None,
 ):
     game_id = game["id"]
-    key = track_key(channel_id, game_id, market)
+    key = track_key(channel_id, game_id, market, team)
     if key in _active:
         return
     task = asyncio.create_task(
         _track_loop(message, sport_id, game_id, channel_id, market, owner_id, team, direction, line)
     )
     _active[key] = task
-    register_message(message.id, channel_id, game_id, market, owner_id)
+    register_message(message.id, channel_id, game_id, market, team, owner_id)
     _persist(channel_id, game_id, market, message.id, sport_id, owner_id, team, direction, line)
 
 
@@ -547,11 +568,12 @@ async def resume_all(client: discord.Client):
             log.warning("Dropping 1st-set entry from an old state schema: %r", entry)
             continue
         owner_id = entry.get("owner_id")
+        team = entry.get("team")
         try:
             channel = await client.fetch_channel(channel_id)
             message = await channel.fetch_message(message_id)
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-            _forget(channel_id, game_id, market)
+            _forget(channel_id, game_id, market, team)
             continue
 
         # A single miss right here at startup used to forget the game
@@ -567,11 +589,11 @@ async def resume_all(client: discord.Client):
             if attempt < MAX_CONSECUTIVE_MISSES - 1:
                 await asyncio.sleep(5)
         if not game:
-            _forget(channel_id, game_id, market)
+            _forget(channel_id, game_id, market, team)
             continue
 
         start_tracking(
             message, sport_id, game, channel_id, market, owner_id,
-            entry.get("team"), entry.get("direction"), entry.get("line"),
+            team, entry.get("direction"), entry.get("line"),
         )
         log.info("Resumed tennis-market (%s) tracking for game %s in channel %s", market, game_id, channel_id)

@@ -146,8 +146,8 @@ def resolve_leg(message_id: int) -> Optional[tuple[str, str, int]]:
 
     owner = mods["settracker"].get_message_owner(message_id)
     if owner:
-        channel_id, game_id, market, _owner_id = owner
-        return "settracker", mods["settracker"].track_key(channel_id, game_id, market), channel_id
+        channel_id, game_id, market, team, _owner_id = owner
+        return "settracker", mods["settracker"].track_key(channel_id, game_id, market, team), channel_id
 
     owner = mods["soccerpropstracker"].get_message_owner(message_id)
     if owner:
