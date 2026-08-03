@@ -154,6 +154,7 @@ async def build_embed(
     direction: Optional[str] = None,
     line: Optional[float] = None,
     known_team_name: Optional[str] = None,
+    force_result: Optional[str] = None,
 ) -> tuple[discord.Embed, discord.File]:
     """
     Returns (embed, file). Sport/tournament goes in the embed author line and
@@ -164,6 +165,12 @@ async def build_embed(
     /playerprops usage, which has no line to grade against) - once the event
     finishes, they're compared against the final stat value to show a
     Won/Lost/Push badge in the embed title.
+
+    force_result overrides the color/title as if this were already graded
+    that way, regardless of the event's actual live status - used only by
+    _track_loop's own postponed-past-its-grace-window branch, where the
+    event itself is still just sitting "postponed" in ESPN's own status but
+    the pick is being voided anyway.
 
     known_team_name is the player's roster team from the original ESPN
     player search (espn.find_player), independent of this specific event's
@@ -213,11 +220,15 @@ async def build_embed(
         except (TypeError, ValueError):
             pass
 
-    if status_type == "postponed":
-        # A postponed/canceled event never produces a graded win/loss -
-        # treated as a voided leg, same as an interrupted-and-never-resumed
-        # match elsewhere in this bot.
-        color_status = "void"
+    if force_result:
+        color_status = force_result
+    elif status_type == "postponed":
+        # Not voided the instant ESPN marks it postponed - _track_loop
+        # gives it up to config.POSTPONED_VOID_HOURS to publish a new
+        # schedule before calling it dead (force_result="void" once that
+        # runs out). Shown the same blue as a not-yet-started pick in the
+        # meantime, since that's genuinely what a postponed event is.
+        color_status = "notstarted"
     elif result:
         color_status = result
     elif early_win:
@@ -263,7 +274,9 @@ async def build_embed(
     file = discord.File(io.BytesIO(image_bytes), filename="score.png")
 
     embed = discord.Embed(color=scoreimage.EMBED_COLOR[color_status])
-    if result:
+    if force_result == "void":
+        embed.title = _RESULT_TITLES["void"]
+    elif result:
         embed.title = _RESULT_TITLES[result]
     elif early_win:
         embed.title = _RESULT_TITLES["won"]
@@ -293,6 +306,13 @@ async def _track_loop(
 ):
     key = prop_key(channel_id, event_id, entity_id, stat_key)
     deadline = time.monotonic() + config.MAX_TRACK_HOURS * 3600
+
+    # When this event was first observed postponed (wall-clock epoch
+    # seconds, not the monotonic deadline above) - loaded back from
+    # persisted state on resume so a bot restart doesn't reset the grace
+    # clock. None means either never postponed, or postponed and already
+    # cleared (a new schedule showed up).
+    postponed_since: Optional[float] = state.load_props().get(key, {}).get("postponed_since")
 
     consecutive_misses = 0
     consecutive_edit_failures = 0
@@ -341,7 +361,38 @@ async def _track_loop(
             log.warning("Failed to delete old prop tracking message after final repost: %s", e)
         return carry_emojis
 
+    async def _void_leg_and_give_up():
+        """Called on every path where this tracker gives up without ever
+        reaching a real result (event never found again, Discord edits
+        failing repeatedly, MAX_TRACK_HOURS exhausted) - reports the leg as
+        Voided to its parlay group instead of leaving the summary card
+        frozen on whatever pending detail it last reported, forever, once
+        this task quietly stops polling."""
+        try:
+            fresh = await message.channel.fetch_message(message.id)
+            marker_emojis = [r.emoji for r in fresh.reactions if str(r.emoji) not in _SERVICE_EMOJIS]
+        except discord.HTTPException:
+            marker_emojis = []
+        if not marker_emojis:
+            return
+        pick_desc = (
+            f"{player_name} {direction.title()} {line:g} {stat_label}" if direction is not None and line is not None
+            else player_name
+        )
+        if event:
+            void_comp = (event.get("header", {}).get("competitions") or [{}])[0]
+            void_competitors = void_comp.get("competitors", [])
+            void_home = next((c.get("team", {}).get("displayName", "?") for c in void_competitors if c.get("homeAway") == "home"), "?")
+            void_away = next((c.get("team", {}).get("displayName", "?") for c in void_competitors if c.get("homeAway") == "away"), "?")
+            matchup = f"{void_home} v {void_away}"
+        else:
+            matchup = f"Event `{event_id}`"
+        await parlaytracker.handle_leg_result(
+            message.channel, channel_id, message, "proptracker", key, f"{matchup} - {pick_desc}", "void", marker_emojis,
+        )
+
     await asyncio.sleep(random.uniform(0, config.UPDATE_INTERVAL_SECONDS))
+    event = None
     try:
         while time.monotonic() < deadline:
             await asyncio.sleep(config.UPDATE_INTERVAL_SECONDS)
@@ -433,6 +484,7 @@ async def _track_loop(
                 )
                 if consecutive_misses >= MAX_CONSECUTIVE_MISSES:
                     botlog.event(f"⚠️ Auto-stopped tracking (prop): **{player_name}** — event `{event_id}` not found {MAX_CONSECUTIVE_MISSES}x in a row, in <#{channel_id}>")
+                    await _void_leg_and_give_up()
                     break
                 continue
             consecutive_misses = 0
@@ -463,7 +515,7 @@ async def _track_loop(
                 )
                 continue
 
-            if espn.is_finished(event) or espn.is_postponed(event):
+            if espn.is_finished(event):
                 # Bump the graded result to the bottom of the channel instead
                 # of editing in place - same reasoning as the pre-kickoff bump
                 # above: a live event can run long enough that the original
@@ -471,7 +523,7 @@ async def _track_loop(
                 carry_emojis = await _repost_final(embed, file)
 
                 result = None
-                if espn.is_finished(event) and direction is not None and line is not None:
+                if direction is not None and line is not None:
                     result = espn.grade_over_under(current_value, direction, line)
                     if result is None:
                         # Player never produced a usable value for this stat
@@ -484,22 +536,70 @@ async def _track_loop(
                             await message.add_reaction(reaction)
                         except discord.HTTPException as e:
                             log.warning("Failed to add result reaction: %s", e)
-                elif espn.is_postponed(event):
-                    # A postponed/canceled event never produces a graded
-                    # win/loss - treated as a voided leg for parlay purposes,
-                    # same as an interrupted-and-never-resumed match
-                    # elsewhere in this bot.
-                    result = "void"
                 if result:
                     await parlaytracker.handle_leg_result(
                         message.channel, channel_id, message, "proptracker", key, leg_label, result, carry_emojis,
                     )
-                # A postponed/canceled event never produces a graded result -
-                # no reaction, but still cleans up after the same 24h window
-                # rather than polling every cycle until MAX_TRACK_HOURS runs
-                # out and leaving the stale card behind forever.
                 pendingdelete.start(channel_id, message, embed.description or "")
                 break
+
+            if espn.is_postponed(event):
+                # Not voided the instant ESPN marks it postponed - a rain
+                # delay/short reschedule shouldn't torch the pick immediately.
+                # Given up to config.POSTPONED_VOID_HOURS (wall-clock, since
+                # this can easily span a bot restart) to either publish a new
+                # schedule (is_postponed simply goes back to False on its
+                # own, no special handling needed - normal tracking, incl.
+                # hibernation toward the new kickoff, just resumes) or
+                # confirm it's genuinely dead.
+                now = time.time()
+                if postponed_since is None:
+                    postponed_since = now
+                    data = state.load_props()
+                    if key in data:
+                        data[key]["postponed_since"] = postponed_since
+                        state.save_props(data)
+                    botlog.event(
+                        f"⏸️ Postponed - waiting up to {config.POSTPONED_VOID_HOURS}h for a new schedule "
+                        f"before voiding: **{player_name}** in <#{channel_id}>"
+                    )
+                grace_deadline = postponed_since + config.POSTPONED_VOID_HOURS * 3600
+                if now >= grace_deadline:
+                    void_embed, void_file = await build_embed(
+                        player_name, entity_id, photo_url, sport, stat_label, current_value, is_home, team, event,
+                        direction, line, known_team_name, force_result="void",
+                    )
+                    carry_emojis = await _repost_final(void_embed, void_file)
+                    try:
+                        await message.add_reaction(_RESULT_REACTIONS["void"])
+                    except discord.HTTPException as e:
+                        log.warning("Failed to add void reaction: %s", e)
+                    await parlaytracker.handle_leg_result(
+                        message.channel, channel_id, message, "proptracker", key, leg_label, "void", carry_emojis,
+                    )
+                    pendingdelete.start(channel_id, message, void_embed.description or "")
+                    botlog.event(
+                        f"➖ Voided (prop, postponed {config.POSTPONED_VOID_HOURS}h+ with no new schedule): "
+                        f"**{player_name}** in <#{channel_id}>"
+                    )
+                    break
+                # Still inside the grace window - keep this pick's overall
+                # deadline alive for the rest of it (otherwise the generic
+                # MAX_TRACK_HOURS timeout would cut the wait short and give
+                # up on the standalone card well before the full window),
+                # then fall through to the normal per-poll update below so
+                # the card and any parlay leg keep showing "Postponed"
+                # instead of freezing.
+                deadline = max(deadline, time.monotonic() + (grace_deadline - now))
+            elif postponed_since is not None:
+                # ESPN cleared the postponed status on its own (a new
+                # schedule got published) - drop the marker and let normal
+                # tracking take back over from here.
+                postponed_since = None
+                data = state.load_props()
+                if key in data:
+                    data[key].pop("postponed_since", None)
+                    state.save_props(data)
 
             try:
                 fresh = await message.channel.fetch_message(message.id)
@@ -531,8 +631,16 @@ async def _track_loop(
                 )
                 if consecutive_edit_failures >= MAX_CONSECUTIVE_MISSES:
                     botlog.event(f"⚠️ Auto-stopped tracking (prop): **{player_name}** — message edit failed {MAX_CONSECUTIVE_MISSES}x in a row, in <#{channel_id}>")
+                    await _void_leg_and_give_up()
                     break
                 continue
+        else:
+            # MAX_TRACK_HOURS ran out without the pick ever settling - no
+            # reliable result to guess at, so the standalone card is left
+            # alone, but a parlay leg still gets Voided so its summary card
+            # isn't stuck forever.
+            botlog.event(f"⚠️ Auto-stopped tracking (prop): **{player_name}** — event `{event_id}` never settled within {config.MAX_TRACK_HOURS}h, in <#{channel_id}>")
+            await _void_leg_and_give_up()
     except asyncio.CancelledError:
         raise
     finally:
@@ -590,7 +698,18 @@ async def resume_all(client: discord.Client):
             _forget(channel_id, event_id, entity_id, stat_key)
             continue
 
-        event = await asyncio.to_thread(espn.get_event, entry["sport"], event_id)
+        # A single miss right here at startup used to forget the event
+        # forever, permanently killing tracking on the unlucky restart that
+        # lands during one transient ESPN hiccup, even though the live loop
+        # itself tolerates MAX_CONSECUTIVE_MISSES misses in a row. Retrying
+        # here closes that gap.
+        event = None
+        for attempt in range(MAX_CONSECUTIVE_MISSES):
+            event = await asyncio.to_thread(espn.get_event, entry["sport"], event_id)
+            if event:
+                break
+            if attempt < MAX_CONSECUTIVE_MISSES - 1:
+                await asyncio.sleep(5)
         if not event:
             _forget(channel_id, event_id, entity_id, stat_key)
             continue

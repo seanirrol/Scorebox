@@ -14,6 +14,13 @@ UPDATE_INTERVAL_SECONDS = int(os.environ.get("UPDATE_INTERVAL_SECONDS", "30"))
 # Safety cap so a match that never reports "finished" doesn't poll forever.
 MAX_TRACK_HOURS = int(os.environ.get("MAX_TRACK_HOURS", "6"))
 
+# How long a postponed/canceled event is given to publish a new schedule
+# before its pick is voided outright - a rain delay or a same-day
+# reschedule shouldn't torch a pick the instant ESPN marks the event
+# postponed, but a game that's still sitting postponed after a full day is
+# reliably dead.
+POSTPONED_VOID_HOURS = int(os.environ.get("POSTPONED_VOID_HOURS", "24"))
+
 # If set, all commands are restricted to these channels only (comma-separated,
 # empty = no restriction).
 _allowed_channel_ids = os.environ.get("ALLOWED_CHANNEL_ID", "").strip()
