@@ -21,9 +21,15 @@ Once a group exists, every tracker reports into it on EVERY poll cycle (not
 just once a leg is finally graded) via report_leg_progress, so the one
 summary card this module maintains always shows each leg's current state -
 WON/LOST/PUSH/VOID once resolved, or LIVE/NOT STARTED with live detail
-while still pending. The card is a single message that gets edited in
-place as things change, not reposted - individual leg cards keep posting
-and updating exactly as they always have, entirely unaffected by this.
+while still pending. A live progress update (leg still pending) edits the
+card in place; a leg actually finishing (handle_leg_result) bumps it to
+the bottom of the channel instead, same "something significant happened,
+resurface it" reasoning as every individual tracker's own _repost_final -
+editing in place on every single live tick would be enough noise, but a
+leg's match ending is worth surfacing. Either way every leg's latest known
+status is shown, not just the one that changed. Individual leg cards keep
+posting and updating exactly as they always have, entirely unaffected by
+this.
 
 A Push/Void leg doesn't count as a win or a loss - it's removed from the
 total instead (matches how a real sportsbook recalculates a parlay around
@@ -170,6 +176,32 @@ async def _post_or_edit_summary(channel: discord.abc.Messageable, channel_id: in
     return message.id
 
 
+async def _repost_summary(channel: discord.abc.Messageable, channel_id: int, group: dict) -> Optional[int]:
+    """Bumps the summary card to the bottom of the channel instead of
+    editing it in place - called only once a leg's match has actually
+    ended (not on every live poll tick, which would spam the channel),
+    same "something significant just happened, resurface it" reasoning as
+    every individual tracker's own _repost_final. Renders every leg's
+    latest known status, not just the one that just resolved - each leg's
+    row in group["legs"] is already kept fresh by its own tracker's
+    report_leg_progress calls, so this reflects all of them, not a stale
+    snapshot."""
+    text = _summary_text(group)
+    old_message_id = group.get("summary_message_id")
+    try:
+        new_message = await throttle.run(channel_id, lambda: channel.send(text))
+    except discord.HTTPException as e:
+        log.warning("Failed to repost parlay summary card: %s", e)
+        return old_message_id
+    if old_message_id:
+        try:
+            old_message = await channel.fetch_message(old_message_id)
+            await old_message.delete()
+        except discord.HTTPException as e:
+            log.warning("Failed to delete old parlay summary card %s: %s", old_message_id, e)
+    return new_message.id
+
+
 async def report_leg_progress(
     channel: discord.abc.Messageable, channel_id: int, message: discord.Message,
     module_name: str, track_key_str: str, label: str, detail: str, marker_emojis: list,
@@ -228,7 +260,7 @@ async def handle_leg_result(
             group["lost"] = True
 
         group.setdefault("legs", {})[leg_id] = {"label": label, "status": result, "detail": _RESULT_DETAIL[result]}
-        group["summary_message_id"] = await _post_or_edit_summary(channel, channel_id, group)
+        group["summary_message_id"] = await _repost_summary(channel, channel_id, group)
 
         all_resolved = group["resolved_legs"] >= group["total_legs"] + group["voided"]
         if all_resolved:
