@@ -348,6 +348,27 @@ async def _track_loop(
                 hibernate_for = wake_at - time.time()
                 deadline += hibernate_for
                 hibernated = True
+
+                # Report in as NOT STARTED right before going to sleep for
+                # potentially hours - reporting only once hibernation ends
+                # (right before kickoff) is too late: a leg with a kickoff
+                # hours away would still never appear on its parlay's
+                # summary card until it was basically already live anyway.
+                try:
+                    fresh = await message.channel.fetch_message(message.id)
+                    marker_emojis = [r.emoji for r in fresh.reactions if str(r.emoji) not in _SERVICE_EMOJIS]
+                except discord.HTTPException:
+                    marker_emojis = []
+                if marker_emojis:
+                    pre_embed, _pre_file = await build_embed(game, sport_id, market, team, direction, line)
+                    pre_label = pre_embed.description.splitlines()[0] if pre_embed.description else (
+                        f"{(game.get('homeCompetitor') or {}).get('name', '?')} vs {(game.get('awayCompetitor') or {}).get('name', '?')}"
+                    )
+                    await parlaytracker.report_leg_progress(
+                        message.channel, channel_id, message, "settracker", key, pre_label,
+                        f"NOT STARTED - <t:{int(kickoff)}:f>", marker_emojis,
+                    )
+
                 log.info("Tennis-market game %s (%s) not starting soon; hibernating %.0fs", game_id, market, hibernate_for)
                 await asyncio.sleep(hibernate_for)
                 game = await asyncio.to_thread(scores365.get_live_update, sport_id, game_id)
@@ -370,21 +391,6 @@ async def _track_loop(
             )
 
             if hibernated:
-                # Report in as NOT STARTED even while still hibernating -
-                # otherwise a leg with a kickoff hours away would never
-                # appear on its parlay's summary card until it woke up
-                # within 90s of starting.
-                try:
-                    fresh = await message.channel.fetch_message(message.id)
-                    marker_emojis = [r.emoji for r in fresh.reactions if str(r.emoji) not in _SERVICE_EMOJIS]
-                except discord.HTTPException:
-                    marker_emojis = []
-                if marker_emojis:
-                    kickoff = scores365.start_epoch(game)
-                    detail = f"NOT STARTED - <t:{int(kickoff)}:f>" if kickoff else "NOT STARTED"
-                    await parlaytracker.report_leg_progress(
-                        message.channel, channel_id, message, "settracker", key, leg_label, detail, marker_emojis,
-                    )
                 # The final wake right before kickoff - bump the card to the
                 # bottom of the channel instead of editing a message that may
                 # be buried under whatever chat happened during the (possibly

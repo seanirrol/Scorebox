@@ -272,6 +272,29 @@ async def _track_loop(
                 hibernate_for = wake_at - time.time()
                 deadline += hibernate_for
                 hibernated = True
+
+                # Report in as NOT STARTED right before going to sleep for
+                # potentially hours - reporting only once hibernation ends
+                # (right before start) is too late: a leg with a kickoff
+                # hours away would still never appear on its parlay's
+                # summary card until it was basically already live anyway.
+                try:
+                    fresh = await message.channel.fetch_message(message.id)
+                    marker_emojis = [r.emoji for r in fresh.reactions if str(r.emoji) not in _SERVICE_EMOJIS]
+                except discord.HTTPException:
+                    marker_emojis = []
+                if marker_emojis:
+                    if fighter_id is not None:
+                        pre_label = f"{fighter_name} ML"
+                    elif total_direction and total_line is not None:
+                        pre_label = f"Fight {total_direction.title()} {total_line:g} Rounds"
+                    else:
+                        pre_label = event_name
+                    await parlaytracker.report_leg_progress(
+                        message.channel, channel_id, message, "ufctracker", key, pre_label,
+                        f"NOT STARTED - <t:{int(kickoff)}:f>", marker_emojis,
+                    )
+
                 log.info("UFC bout %s not starting soon; hibernating %.0fs", competition_id, hibernate_for)
                 await asyncio.sleep(hibernate_for)
                 refreshed = await asyncio.to_thread(
@@ -300,20 +323,6 @@ async def _track_loop(
                 leg_label = event_name
 
             if hibernated:
-                # Report in as NOT STARTED even while still hibernating -
-                # otherwise a leg with a kickoff hours away would never
-                # appear on its parlay's summary card until it woke up.
-                try:
-                    fresh = await message.channel.fetch_message(message.id)
-                    marker_emojis = [r.emoji for r in fresh.reactions if str(r.emoji) not in _SERVICE_EMOJIS]
-                except discord.HTTPException:
-                    marker_emojis = []
-                if marker_emojis:
-                    kickoff = espn_ufc.start_epoch(competition)
-                    detail = f"NOT STARTED - <t:{int(kickoff)}:f>" if kickoff else "NOT STARTED"
-                    await parlaytracker.report_leg_progress(
-                        message.channel, channel_id, message, "ufctracker", key, leg_label, detail, marker_emojis,
-                    )
                 # The final wake right before start - bump the card to the
                 # bottom of the channel instead of editing a message that may
                 # be buried under whatever chat happened during hibernation.

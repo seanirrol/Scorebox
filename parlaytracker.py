@@ -204,7 +204,12 @@ async def _post_or_edit_summary(channel: discord.abc.Messageable, channel_id: in
     if message_id:
         try:
             message = await channel.fetch_message(message_id)
-            await throttle.run(channel_id, lambda: message.edit(embed=embed))
+            # content=None explicitly clears any leftover plain text on a
+            # card that pre-dates the switch to embeds - otherwise a card
+            # first created before that change keeps showing its old
+            # plain-text line permanently above the new embed box, since
+            # .edit() only touches fields it's explicitly given.
+            await throttle.run(channel_id, lambda: message.edit(content=None, embed=embed))
             return message_id
         except discord.HTTPException as e:
             log.warning("Parlay summary card message %s gone, reposting: %s", message_id, e)
