@@ -248,7 +248,43 @@ async def _track_loop(
             log.warning("Failed to delete old UFC tracking message after final repost: %s", e)
         return carry_emojis
 
+    async def _void_leg_and_give_up():
+        """Called on every path where this tracker gives up without ever
+        reaching a real result (bout never found again, Discord edits
+        failing repeatedly, MAX_TRACK_HOURS exhausted) - reports the leg as
+        Voided to its parlay group instead of leaving the summary card
+        frozen on whatever pending detail it last reported, forever, once
+        this task quietly stops polling."""
+        try:
+            fresh = await message.channel.fetch_message(message.id)
+            marker_emojis = [r.emoji for r in fresh.reactions if str(r.emoji) not in _SERVICE_EMOJIS]
+        except discord.HTTPException:
+            marker_emojis = []
+        if not marker_emojis:
+            return
+        if fighter_id is not None:
+            pick_desc = f"{fighter_name} ML"
+        elif total_direction and total_line is not None:
+            pick_desc = f"{total_direction.title()} {total_line:g} Rounds"
+        else:
+            pick_desc = None
+        if refreshed:
+            void_competitors = refreshed[0].get("competitors", [])
+            void_fighter_a = next((c for c in void_competitors if c.get("order") == 1), void_competitors[0] if void_competitors else {})
+            void_fighter_b = next((c for c in void_competitors if c.get("order") == 2), void_competitors[1] if len(void_competitors) > 1 else {})
+            matchup = (
+                f"{(void_fighter_a.get('athlete') or {}).get('displayName', '?')} vs "
+                f"{(void_fighter_b.get('athlete') or {}).get('displayName', '?')}"
+            )
+        else:
+            matchup = f"Bout `{competition_id}`"
+        void_label = f"{matchup} - {pick_desc}" if pick_desc else matchup
+        await parlaytracker.handle_leg_result(
+            message.channel, channel_id, message, "ufctracker", key, void_label, "void", marker_emojis,
+        )
+
     await asyncio.sleep(random.uniform(0, config.UPDATE_INTERVAL_SECONDS))
+    refreshed = None
     try:
         while time.monotonic() < deadline:
             await asyncio.sleep(config.UPDATE_INTERVAL_SECONDS)
@@ -317,6 +353,7 @@ async def _track_loop(
                 )
                 if consecutive_misses >= MAX_CONSECUTIVE_MISSES:
                     botlog.event(f"⚠️ Auto-stopped tracking (UFC): bout `{competition_id}` not found {MAX_CONSECUTIVE_MISSES}x in a row, in <#{channel_id}>")
+                    await _void_leg_and_give_up()
                     break
                 continue
             consecutive_misses = 0
@@ -403,8 +440,17 @@ async def _track_loop(
                 )
                 if consecutive_edit_failures >= MAX_CONSECUTIVE_MISSES:
                     botlog.event(f"⚠️ Auto-stopped tracking (UFC): bout `{competition_id}` message edit failed {MAX_CONSECUTIVE_MISSES}x in a row, in <#{channel_id}>")
+                    await _void_leg_and_give_up()
                     break
                 continue
+        else:
+            # MAX_TRACK_HOURS ran out without the bout ever settling - no
+            # reliable interrupted/never-resumed signal to go on for a
+            # standalone card (same limitation noted in this module's
+            # docstring), so it's left alone, but a parlay leg still gets
+            # Voided so its summary card isn't stuck forever.
+            botlog.event(f"⚠️ Auto-stopped tracking (UFC): bout `{competition_id}` never settled within {config.MAX_TRACK_HOURS}h, in <#{channel_id}>")
+            await _void_leg_and_give_up()
     except asyncio.CancelledError:
         raise
     finally:
@@ -451,9 +497,20 @@ async def resume_all(client: discord.Client):
             _forget(channel_id, competition_id)
             continue
 
-        refreshed = await asyncio.to_thread(
-            espn_ufc.refresh_ufc_fight, league_slug, entry["event_id"], competition_id, entry.get("fighter_id"), entry["competition_date"]
-        )
+        # A single miss right here at startup used to forget the bout
+        # forever, permanently killing tracking on the unlucky restart that
+        # lands during one transient ESPN hiccup, even though the live loop
+        # itself tolerates MAX_CONSECUTIVE_MISSES misses in a row. Retrying
+        # here closes that gap.
+        refreshed = None
+        for attempt in range(MAX_CONSECUTIVE_MISSES):
+            refreshed = await asyncio.to_thread(
+                espn_ufc.refresh_ufc_fight, league_slug, entry["event_id"], competition_id, entry.get("fighter_id"), entry["competition_date"]
+            )
+            if refreshed:
+                break
+            if attempt < MAX_CONSECUTIVE_MISSES - 1:
+                await asyncio.sleep(5)
         if not refreshed:
             _forget(channel_id, competition_id)
             continue

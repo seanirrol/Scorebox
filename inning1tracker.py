@@ -249,6 +249,31 @@ async def _track_loop(
             log.warning("Failed to delete old 1st-inning-result tracking message after final repost: %s", e)
         return carry_emojis
 
+    async def _void_leg_and_give_up():
+        """Called on every path where this tracker gives up without ever
+        reaching a real result (game never found again, Discord edits
+        failing repeatedly, or a MAX_TRACK_HOURS timeout with no interrupted
+        signal to go on) - reports the leg as Voided to its parlay group
+        instead of leaving the summary card frozen on whatever pending
+        detail it last reported, forever, once this task quietly stops
+        polling."""
+        try:
+            fresh = await message.channel.fetch_message(message.id)
+            marker_emojis = [r.emoji for r in fresh.reactions if str(r.emoji) not in _SERVICE_EMOJIS]
+        except discord.HTTPException:
+            marker_emojis = []
+        if not marker_emojis:
+            return
+        if game:
+            matchup = f"{(game.get('homeCompetitor') or {}).get('name', '?')} vs {(game.get('awayCompetitor') or {}).get('name', '?')}"
+        else:
+            matchup = f"Game `{game_id}`"
+        pick_label = "Draw" if pick.upper() == "DRAW" else pick
+        await parlaytracker.handle_leg_result(
+            message.channel, channel_id, message, "inning1tracker", key,
+            f"{matchup} - 1st Inning Result: {pick_label}", "void", marker_emojis,
+        )
+
     await asyncio.sleep(random.uniform(0, config.UPDATE_INTERVAL_SECONDS))
     game = None
     try:
@@ -305,6 +330,7 @@ async def _track_loop(
                 )
                 if consecutive_misses >= MAX_CONSECUTIVE_MISSES:
                     botlog.event(f"⚠️ Auto-stopped tracking (1st inning result): game `{game_id}` not found {MAX_CONSECUTIVE_MISSES}x in a row, in <#{channel_id}>")
+                    await _void_leg_and_give_up()
                     break
                 continue
             consecutive_misses = 0
@@ -368,6 +394,7 @@ async def _track_loop(
                 )
                 if consecutive_edit_failures >= MAX_CONSECUTIVE_MISSES:
                     botlog.event(f"⚠️ Auto-stopped tracking (1st inning result): game `{game_id}` message edit failed {MAX_CONSECUTIVE_MISSES}x in a row, in <#{channel_id}>")
+                    await _void_leg_and_give_up()
                     break
                 continue
         else:
@@ -389,6 +416,13 @@ async def _track_loop(
                     message.channel, channel_id, message, "inning1tracker", key, leg_label, "void", carry_emojis,
                 )
                 botlog.event(f"➖ Voided (1st inning result, interrupted, never resumed): game `{game_id}` in <#{channel_id}>")
+            else:
+                # Timed out without ever settling and without an interrupted
+                # signal to go on either - the standalone card is left alone
+                # (no reliable result to guess at), but a parlay leg still
+                # gets Voided so its summary card isn't stuck forever.
+                botlog.event(f"⚠️ Auto-stopped tracking (1st inning result): game `{game_id}` never settled within {config.MAX_TRACK_HOURS}h, in <#{channel_id}>")
+                await _void_leg_and_give_up()
     except asyncio.CancelledError:
         raise
     finally:
@@ -428,7 +462,18 @@ async def resume_all(client: discord.Client):
             _forget(channel_id, game_id)
             continue
 
-        game = await asyncio.to_thread(scores365.get_live_update, sport_id, game_id)
+        # A single miss right here at startup used to forget the game
+        # forever, permanently killing tracking on the unlucky restart that
+        # lands during one transient 365scores hiccup, even though the live
+        # loop itself tolerates MAX_CONSECUTIVE_MISSES misses in a row.
+        # Retrying here closes that gap.
+        game = None
+        for attempt in range(MAX_CONSECUTIVE_MISSES):
+            game = await asyncio.to_thread(scores365.get_live_update, sport_id, game_id)
+            if game:
+                break
+            if attempt < MAX_CONSECUTIVE_MISSES - 1:
+                await asyncio.sleep(5)
         if not game:
             _forget(channel_id, game_id)
             continue
