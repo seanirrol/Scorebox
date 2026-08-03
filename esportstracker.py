@@ -309,6 +309,24 @@ async def _track_loop(
             log.warning("Failed to delete old esports tracking message after final repost: %s", e)
         return carry_emojis
 
+    async def _void_leg_and_give_up():
+        """Called on every path where this tracker gives up without ever
+        reaching a real result (match never found again, Discord edits
+        failing repeatedly, MAX_TRACK_HOURS exhausted) - reports the leg as
+        Voided to its parlay group instead of leaving the summary card
+        frozen on whatever pending detail ("NOT STARTED"/"LIVE, Game N") it
+        last reported, forever, once this task quietly stops polling."""
+        try:
+            fresh = await message.channel.fetch_message(message.id)
+            marker_emojis = [r.emoji for r in fresh.reactions if str(r.emoji) not in _SERVICE_EMOJIS]
+        except discord.HTTPException:
+            marker_emojis = []
+        if marker_emojis:
+            leg_label = f"{team_a} vs {team_b} - {pick_label(market, picked_team, direction, line, map_number, picked_maps, other_maps)}"
+            await parlaytracker.handle_leg_result(
+                message.channel, channel_id, message, "esportstracker", key, leg_label, "void", marker_emojis,
+            )
+
     await asyncio.sleep(random.uniform(0, config.UPDATE_INTERVAL_SECONDS))
     try:
         while time.monotonic() < deadline:
@@ -367,6 +385,7 @@ async def _track_loop(
                         f"⚠️ Auto-stopped tracking (esports {market}): "
                         f"{team_a} v {team_b} not found {MAX_CONSECUTIVE_MISSES}x in a row, in <#{channel_id}>"
                     )
+                    await _void_leg_and_give_up()
                     break
                 continue
             consecutive_misses = 0
@@ -439,19 +458,25 @@ async def _track_loop(
                         f"⚠️ Auto-stopped tracking (esports {market}): "
                         f"{team_a} v {team_b} message edit failed {MAX_CONSECUTIVE_MISSES}x in a row, in <#{channel_id}>"
                     )
+                    await _void_leg_and_give_up()
                     break
                 continue
         else:
             # MAX_TRACK_HOURS ran out without the pick ever settling. Unlike
             # every 365scores/ESPN-backed tracker in this bot, neither
             # hawk.live nor GosuGamers exposes a reliable "postponed/
-            # interrupted, never resumed" signal to tag this Voided instead
-            # (same limitation as ufctracker.py) - just gives up silently
-            # (logged only) rather than guessing at a result.
+            # interrupted, never resumed" signal to tag the standalone card
+            # Voided instead (same limitation as ufctracker.py) - just gives
+            # up silently (logged only) rather than guessing at a result
+            # there. A parlay leg still gets Voided though - unlike guessing
+            # won/lost, void is the same "can't tell, don't leave it stuck
+            # forever" call already made for an unplayed map in
+            # esports.grade_map_winner.
             botlog.event(
                 f"⚠️ Auto-stopped tracking (esports {market}): "
                 f"{team_a} v {team_b} never settled within {config.MAX_TRACK_HOURS}h, in <#{channel_id}>"
             )
+            await _void_leg_and_give_up()
     except asyncio.CancelledError:
         raise
     finally:
@@ -497,7 +522,22 @@ async def resume_all(client: discord.Client):
             _forget(channel_id, sport, team_a, team_b, market)
             continue
 
-        series_data = await asyncio.to_thread(esports.get_series, sport, team_a, team_b)
+        # hawk.live/GosuGamers are flaky scrapers (bot-challenge pages,
+        # transient fetch errors) - a single miss right here at startup used
+        # to forget the match forever, permanently killing tracking on the
+        # unlucky restart that lands during one bad fetch, even though the
+        # live loop itself tolerates MAX_CONSECUTIVE_MISSES misses in a row.
+        # Confirmed live: a match stuck showing its pre-kickoff "NOT
+        # STARTED" card for hours after actually finishing, with hawk.live
+        # itself resolving it fine once queried fresh - the resumed task had
+        # simply never been recreated. Retrying here closes that gap.
+        series_data = None
+        for attempt in range(MAX_CONSECUTIVE_MISSES):
+            series_data = await asyncio.to_thread(esports.get_series, sport, team_a, team_b)
+            if series_data:
+                break
+            if attempt < MAX_CONSECUTIVE_MISSES - 1:
+                await asyncio.sleep(5)
         if not series_data:
             _forget(channel_id, sport, team_a, team_b, market)
             continue
