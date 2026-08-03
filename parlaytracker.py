@@ -424,7 +424,11 @@ async def report_leg_progress(
                 # concurrent /parlay remove could have dropped this exact
                 # leg in between. Don't resurrect it.
                 continue
-            legs[leg_id] = {"label": label, "status": "pending", "detail": detail}
+            # Preserve message_id across the overwrite - it's how
+            # set_leg_result finds this leg again if its own tracker later
+            # dies before ever reaching a real result.
+            message_id = legs[leg_id].get("message_id")
+            legs[leg_id] = {"label": label, "status": "pending", "detail": detail, "message_id": message_id}
             group["summary_message_id"] = await _post_or_edit_summary(channel, channel_id, group)
             data[key] = group
             state.save_parlays(data)
@@ -464,7 +468,8 @@ async def handle_leg_result(
             elif result == "lost":
                 group["lost"] = True
 
-            legs[leg_id] = {"label": label, "status": result, "detail": _RESULT_DETAIL[result]}
+            message_id = legs[leg_id].get("message_id")
+            legs[leg_id] = {"label": label, "status": result, "detail": _RESULT_DETAIL[result], "message_id": message_id}
             group["summary_message_id"] = await _repost_summary(channel, channel_id, key, group)
 
             all_resolved = group["resolved_legs"] >= group["total_legs"] + group["voided"]
@@ -516,7 +521,7 @@ async def add_legs(
                 label = (target_message.embeds[0].description or "?").splitlines()[0] if target_message.embeds else "?"
             except discord.HTTPException:
                 label = "?"
-            legs[leg_id] = {"label": label, "status": "pending", "detail": "Pending"}
+            legs[leg_id] = {"label": label, "status": "pending", "detail": "Pending", "message_id": message_id}
             group["total_legs"] += 1
             added.append(str(message_id))
 
@@ -579,8 +584,14 @@ async def remove_legs(
 
         legs = group.setdefault("legs", {})
         for message_id in message_ids:
-            resolved = resolve_leg(message_id)
-            leg_id = f"{resolved[0]}:{resolved[1]}" if resolved else None
+            # Prefer matching against each leg's own stored message_id -
+            # works even if the leg's tracker is long gone. Fall back to
+            # resolve_leg only for legs added before message_id started
+            # being stored on them.
+            leg_id = next((lid for lid, leg in legs.items() if leg.get("message_id") == message_id), None)
+            if leg_id is None:
+                resolved = resolve_leg(message_id)
+                leg_id = f"{resolved[0]}:{resolved[1]}" if resolved else None
             if leg_id is None or leg_id not in legs:
                 not_in_group.append(str(message_id))
                 continue
@@ -606,4 +617,61 @@ async def remove_legs(
     parts = [f"Removed {len(removed)} leg(s): {', '.join(removed)}"]
     if not_in_group:
         parts.append(f"Not in this parlay: {', '.join(not_in_group)}")
+    return "\n".join(parts)
+
+
+async def set_leg_result(
+    channel: discord.abc.Messageable, channel_id: int, identifier: str, message_ids: list[int], result: str,
+) -> str:
+    """Manually marks specific legs won/lost/push/void by message ID - the
+    escape hatch for a leg whose own tracker can never finish the job on
+    its own (crashed, got orphaned by a since-fixed bug, or its match
+    already ended and can no longer be re-tracked at all). Matches purely
+    against each leg's own stored message_id (set at /parlay add time, kept
+    sticky across every later report_leg_progress/handle_leg_result
+    overwrite) rather than resolve_leg - a leg needing this is exactly the
+    case where nothing live may remember it anymore, so this can't depend
+    on anything still being tracked.
+
+    Recomputes every counter from scratch afterward via
+    _recompute_group_counts (same helper remove_legs already uses) instead
+    of incrementally updating - safe to call again on an already-resolved
+    leg to correct a mistake, no double-counting risk either way."""
+    if result not in _RESULT_DETAIL:
+        return f"Not a valid result: {result}"
+    key = _key(channel_id, identifier)
+    resolved_ids, not_found = [], []
+
+    async with _group_locks[key]:
+        data = state.load_parlays()
+        group = data.get(key)
+        if group is None:
+            return f"No parlay named **{identifier}** in this channel."
+
+        legs = group.setdefault("legs", {})
+        for message_id in message_ids:
+            leg_id = next((lid for lid, leg in legs.items() if leg.get("message_id") == message_id), None)
+            if leg_id is None:
+                not_found.append(str(message_id))
+                continue
+            legs[leg_id]["status"] = result
+            legs[leg_id]["detail"] = _RESULT_DETAIL[result]
+            resolved_ids.append(str(message_id))
+
+        if not resolved_ids:
+            return f"None of those IDs are legs of **{identifier}** with a known message ID."
+
+        _recompute_group_counts(group)
+        group["summary_message_id"] = await _repost_summary(channel, channel_id, key, group)
+
+        all_resolved = group["resolved_legs"] >= group["total_legs"] + group["voided"]
+        if all_resolved:
+            data.pop(key, None)
+        else:
+            data[key] = group
+        state.save_parlays(data)
+
+    parts = [f"Marked {len(resolved_ids)} leg(s) as {_RESULT_DETAIL[result]}: {', '.join(resolved_ids)}"]
+    if not_found:
+        parts.append(f"Not a leg of **{identifier}** (or added before manual-resolve support): {', '.join(not_found)}")
     return "\n".join(parts)

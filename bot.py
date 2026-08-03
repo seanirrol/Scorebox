@@ -1415,26 +1415,34 @@ _PARLAY_ACTION_CHOICES = [
     app_commands.Choice(name="Create", value="create"),
     app_commands.Choice(name="Add legs", value="add"),
     app_commands.Choice(name="Remove legs", value="remove"),
+    app_commands.Choice(name="Resolve legs", value="resolve"),
     app_commands.Choice(name="Delete", value="delete"),
     app_commands.Choice(name="List", value="list"),
+]
+_PARLAY_RESULT_CHOICES = [
+    app_commands.Choice(name="Won", value="won"),
+    app_commands.Choice(name="Lost", value="lost"),
+    app_commands.Choice(name="Push", value="push"),
+    app_commands.Choice(name="Void", value="void"),
 ]
 
 
 @tree.command(name="parlay", description="Manually manage a parlay group by pasting each leg's card ID from its footer")
 @app_commands.describe(
     action="What to do",
-    identifier=f"Parlay name, max {parlaytracker.MAX_IDENTIFIER_LENGTH} characters (used for create/add/remove)",
-    ids="Comma-separated card IDs from each card's footer (used for add/remove)",
+    identifier=f"Parlay name, max {parlaytracker.MAX_IDENTIFIER_LENGTH} characters (used for create/add/remove/resolve)",
+    ids="Comma-separated card IDs from each card's footer (used for add/remove/resolve)",
+    result="What each leg resulted in - only used for Resolve legs, e.g. when a leg's own tracker can't finish grading it",
 )
-@app_commands.choices(action=_PARLAY_ACTION_CHOICES)
+@app_commands.choices(action=_PARLAY_ACTION_CHOICES, result=_PARLAY_RESULT_CHOICES)
 async def parlay(
     interaction: discord.Interaction, action: app_commands.Choice[str],
-    identifier: Optional[str] = None, ids: Optional[str] = None,
+    identifier: Optional[str] = None, ids: Optional[str] = None, result: Optional[app_commands.Choice[str]] = None,
 ):
     if not _channel_allowed(interaction):
         await _reject_wrong_channel(interaction)
         return
-    _log_command(interaction, action=action.name, identifier=identifier, ids=ids)
+    _log_command(interaction, action=action.name, identifier=identifier, ids=ids, result=result.name if result else None)
     await interaction.response.defer(ephemeral=True)
 
     if action.value == "list":
@@ -1491,7 +1499,12 @@ async def parlay(
         await interaction.followup.send("No valid card IDs given.", ephemeral=True)
         return
 
-    if action.value == "add":
+    if action.value == "resolve":
+        if not result:
+            await interaction.followup.send("`result` is required for this action.", ephemeral=True)
+            return
+        summary = await parlaytracker.set_leg_result(interaction.channel, interaction.channel_id, identifier, message_ids, result.value)
+    elif action.value == "add":
         summary = await parlaytracker.add_legs(interaction.channel, interaction.channel_id, identifier, message_ids)
     else:  # remove
         summary = await parlaytracker.remove_legs(interaction.channel, interaction.channel_id, identifier, message_ids)
