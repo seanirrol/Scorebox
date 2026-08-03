@@ -416,6 +416,10 @@ async def _track_loop(
                 player_name, entity_id, photo_url, sport, stat_label, current_value, is_home, team, event,
                 direction, line, known_team_name,
             )
+            leg_label = (
+                f"{player_name} {direction.title()} {line:g} {stat_label}" if direction is not None and line is not None
+                else player_name
+            )
 
             if hibernated:
                 # The final wake right before start - bump the card to the
@@ -456,13 +460,34 @@ async def _track_loop(
                     # elsewhere in this bot.
                     result = "void"
                 if result:
-                    await parlaytracker.handle_leg_result(message.channel, channel_id, message, result, carry_emojis)
+                    await parlaytracker.handle_leg_result(
+                        message.channel, channel_id, message, "proptracker", key, leg_label, result, carry_emojis,
+                    )
                 # A postponed/canceled event never produces a graded result -
                 # no reaction, but still cleans up after the same 24h window
                 # rather than polling every cycle until MAX_TRACK_HOURS runs
                 # out and leaving the stale card behind forever.
                 pendingdelete.start(channel_id, message, embed.description or "")
                 break
+
+            try:
+                fresh = await message.channel.fetch_message(message.id)
+                marker_emojis = [r.emoji for r in fresh.reactions if str(r.emoji) not in _SERVICE_EMOJIS]
+            except discord.HTTPException:
+                marker_emojis = []
+            if marker_emojis:
+                comp = (event.get("header", {}).get("competitions") or [{}])[0]
+                if comp.get("status", {}).get("type", {}).get("state") == "pre":
+                    try:
+                        kickoff = int(datetime.datetime.fromisoformat(comp["date"].replace("Z", "+00:00")).timestamp())
+                        detail = f"NOT STARTED - <t:{kickoff}:f>"
+                    except (KeyError, ValueError):
+                        detail = "NOT STARTED"
+                else:
+                    detail = f"LIVE, {espn.match_status_text(event, sport)}"
+                await parlaytracker.report_leg_progress(
+                    message.channel, channel_id, message, "proptracker", key, leg_label, detail, marker_emojis,
+                )
 
             try:
                 await throttle.run(channel_id, lambda: message.edit(embed=embed, attachments=[file]))

@@ -373,6 +373,12 @@ async def _track_loop(
             consecutive_misses = 0
 
             embed, file = await build_embed(game, sport_id, picked_team, total_direction, total_line, team_total)
+            # Used for a parlay leg's own label if this card carries a marker
+            # emoji - the pick line when there is one (auto-tracked), else a
+            # plain matchup (manual /track has no pick to describe).
+            leg_label = embed.description.splitlines()[0] if embed.description else (
+                f"{(game.get('homeCompetitor') or {}).get('name', '?')} vs {(game.get('awayCompetitor') or {}).get('name', '?')}"
+            )
 
             if hibernated:
                 # The final wake right before kickoff - bump the card to the
@@ -399,9 +405,26 @@ async def _track_loop(
                         except discord.HTTPException as e:
                             log.warning("Failed to add result reaction: %s", e)
                     if result:
-                        await parlaytracker.handle_leg_result(message.channel, channel_id, message, result, carry_emojis)
+                        await parlaytracker.handle_leg_result(
+                            message.channel, channel_id, message, "tracker", key, leg_label, result, carry_emojis,
+                        )
                 pendingdelete.start(channel_id, message, embed.description or "")
                 break
+
+            try:
+                fresh = await message.channel.fetch_message(message.id)
+                marker_emojis = [r.emoji for r in fresh.reactions if str(r.emoji) not in _SERVICE_EMOJIS]
+            except discord.HTTPException:
+                marker_emojis = []
+            if marker_emojis:
+                kickoff = scores365.start_epoch(game)
+                if scores365.map_status_type(game.get("statusGroup")) == "notstarted":
+                    detail = f"NOT STARTED - <t:{int(kickoff)}:f>" if kickoff else "NOT STARTED"
+                else:
+                    detail = f"LIVE, {scores365.status_line(game, sport_id)}"
+                await parlaytracker.report_leg_progress(
+                    message.channel, channel_id, message, "tracker", key, leg_label, detail, marker_emojis,
+                )
 
             try:
                 await throttle.run(channel_id, lambda: message.edit(embed=embed, attachments=[file]))
@@ -434,7 +457,9 @@ async def _track_loop(
                 except discord.HTTPException as e:
                     log.warning("Failed to add void reaction: %s", e)
                 pendingdelete.start(channel_id, message, embed.description or "")
-                await parlaytracker.handle_leg_result(message.channel, channel_id, message, "void", carry_emojis)
+                await parlaytracker.handle_leg_result(
+                    message.channel, channel_id, message, "tracker", key, leg_label, "void", carry_emojis,
+                )
                 botlog.event(f"➖ Voided (interrupted, never resumed): game `{game_id}` in <#{channel_id}>")
     except asyncio.CancelledError:
         raise

@@ -311,13 +311,34 @@ async def _track_loop(message: discord.Message, channel_id: int, event_id, pick_
                     # purposes, same as an interrupted-and-never-resumed
                     # match elsewhere in this bot.
                     result = "void"
-                await parlaytracker.handle_leg_result(message.channel, channel_id, message, result, carry_emojis)
+                await parlaytracker.handle_leg_result(
+                    message.channel, channel_id, message, "inningtracker", key, _PICK_LABELS[pick_type], result, carry_emojis,
+                )
                 # A postponed/canceled event never produces a graded result -
                 # no reaction, but still cleans up after the same 24h window
                 # rather than polling every cycle until MAX_TRACK_HOURS runs
                 # out and leaving the stale card behind forever.
                 pendingdelete.start(channel_id, message, embed.description or "")
                 break
+
+            try:
+                fresh = await message.channel.fetch_message(message.id)
+                marker_emojis = [r.emoji for r in fresh.reactions if str(r.emoji) not in _SERVICE_EMOJIS]
+            except discord.HTTPException:
+                marker_emojis = []
+            if marker_emojis:
+                comp = (event.get("header", {}).get("competitions") or [{}])[0]
+                if comp.get("status", {}).get("type", {}).get("state") == "pre":
+                    try:
+                        kickoff = int(datetime.datetime.fromisoformat(comp["date"].replace("Z", "+00:00")).timestamp())
+                        detail = f"NOT STARTED - <t:{kickoff}:f>"
+                    except (KeyError, ValueError):
+                        detail = "NOT STARTED"
+                else:
+                    detail = f"LIVE, {comp.get('status', {}).get('type', {}).get('detail') or 'Live'}"
+                await parlaytracker.report_leg_progress(
+                    message.channel, channel_id, message, "inningtracker", key, _PICK_LABELS[pick_type], detail, marker_emojis,
+                )
 
             try:
                 await throttle.run(channel_id, lambda: message.edit(embed=embed, attachments=[file]))

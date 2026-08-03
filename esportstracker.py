@@ -364,8 +364,28 @@ async def _track_loop(
                         log.warning("Failed to add result reaction: %s", e)
                 pendingdelete.start(channel_id, message, embed.description or "")
                 if result:
-                    await parlaytracker.handle_leg_result(message.channel, channel_id, message, result, carry_emojis)
+                    leg_label = pick_label(market, picked_team, direction, line, map_number, picked_maps, other_maps)
+                    await parlaytracker.handle_leg_result(
+                        message.channel, channel_id, message, "esportstracker", key, leg_label, result, carry_emojis,
+                    )
                 break
+
+            try:
+                fresh = await message.channel.fetch_message(message.id)
+                marker_emojis = [r.emoji for r in fresh.reactions if str(r.emoji) not in _SERVICE_EMOJIS]
+            except discord.HTTPException:
+                marker_emojis = []
+            if marker_emojis:
+                if series_data["status"] == "notstarted" and series_data.get("start_epoch"):
+                    detail = f"NOT STARTED - <t:{int(series_data['start_epoch'])}:f>"
+                elif series_data["status"] == "notstarted":
+                    detail = "NOT STARTED"
+                else:
+                    detail = f"LIVE, Game {series_data['current_game_number']}"
+                leg_label = pick_label(market, picked_team, direction, line, map_number, picked_maps, other_maps)
+                await parlaytracker.report_leg_progress(
+                    message.channel, channel_id, message, "esportstracker", key, leg_label, detail, marker_emojis,
+                )
 
             try:
                 await throttle.run(channel_id, lambda: message.edit(embed=embed, attachments=[file]))

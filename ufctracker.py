@@ -292,6 +292,12 @@ async def _track_loop(
             competition, _fighter = refreshed
 
             embed, file = await build_embed(competition, league_slug, event_name, fighter_id, fighter_name, total_direction, total_line)
+            if fighter_id is not None:
+                leg_label = f"{fighter_name} ML"
+            elif total_direction and total_line is not None:
+                leg_label = f"Fight {total_direction.title()} {total_line:g} Rounds"
+            else:
+                leg_label = event_name
 
             if hibernated:
                 # The final wake right before start - bump the card to the
@@ -326,9 +332,26 @@ async def _track_loop(
                     except discord.HTTPException as e:
                         log.warning("Failed to add result reaction: %s", e)
                 if result:
-                    await parlaytracker.handle_leg_result(message.channel, channel_id, message, result, carry_emojis)
+                    await parlaytracker.handle_leg_result(
+                        message.channel, channel_id, message, "ufctracker", key, leg_label, result, carry_emojis,
+                    )
                 pendingdelete.start(channel_id, message, embed.description or "")
                 break
+
+            try:
+                fresh = await message.channel.fetch_message(message.id)
+                marker_emojis = [r.emoji for r in fresh.reactions if str(r.emoji) not in _SERVICE_EMOJIS]
+            except discord.HTTPException:
+                marker_emojis = []
+            if marker_emojis:
+                kickoff = espn_ufc.start_epoch(competition)
+                if competition.get("status", {}).get("type", {}).get("state") == "pre":
+                    detail = f"NOT STARTED - <t:{int(kickoff)}:f>" if kickoff else "NOT STARTED"
+                else:
+                    detail = f"LIVE, {espn_ufc.status_text(competition)}"
+                await parlaytracker.report_leg_progress(
+                    message.channel, channel_id, message, "ufctracker", key, leg_label, detail, marker_emojis,
+                )
 
             try:
                 await throttle.run(channel_id, lambda: message.edit(embed=embed, attachments=[file]))
