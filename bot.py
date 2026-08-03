@@ -1415,6 +1415,7 @@ _PARLAY_ACTION_CHOICES = [
     app_commands.Choice(name="Create", value="create"),
     app_commands.Choice(name="Add legs", value="add"),
     app_commands.Choice(name="Remove legs", value="remove"),
+    app_commands.Choice(name="Delete", value="delete"),
     app_commands.Choice(name="List", value="list"),
 ]
 
@@ -1464,6 +1465,12 @@ async def parlay(
             ephemeral=True,
         )
         botlog.event(f"🎟️ Parlay **{identifier}** created in <#{interaction.channel_id}> by **{interaction.user}**")
+        return
+
+    if action.value == "delete":
+        summary = await parlaytracker.delete_group(interaction.channel_id, identifier)
+        botlog.event(f"🎟️ Parlay **{identifier}** (Delete) in <#{interaction.channel_id}>: {summary} — by **{interaction.user}**")
+        await interaction.followup.send(summary, ephemeral=True)
         return
 
     if not ids:

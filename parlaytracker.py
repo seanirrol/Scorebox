@@ -223,6 +223,23 @@ async def create_group(channel_id: int, identifier: str) -> Optional[str]:
     return None
 
 
+async def delete_group(channel_id: int, identifier: str) -> str:
+    """Drops the named group outright, regardless of how many legs it still
+    has - the manual counterpart to remove_legs emptying a group down to
+    zero one leg at a time. Same "leave the last-posted summary card alone
+    in Discord" treatment as every other retired-group path in this module;
+    only the persisted tracking entry goes away, so no tracker reports into
+    it again and the identifier becomes free to reuse."""
+    key = _key(channel_id, identifier)
+    async with _group_locks[key]:
+        data = state.load_parlays()
+        if key not in data:
+            return f"No parlay named **{identifier}** in this channel."
+        data.pop(key, None)
+        state.save_parlays(data)
+    return f"Deleted parlay **{identifier}**."
+
+
 def _leg_square(leg: dict) -> str:
     square = _LEG_SQUARES.get(leg["status"])
     if square:
