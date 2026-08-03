@@ -43,6 +43,7 @@ from typing import Optional
 
 import discord
 
+import scoreimage
 import state
 import throttle
 
@@ -60,7 +61,11 @@ _LOSSMARK = "<:lossmark:1532115600162422894>"
 MIN_PARLAY_LEGS = 3
 
 _RESULT_DETAIL = {"won": "WON", "lost": "LOST", "push": "PUSH", "void": "VOID"}
-_LEG_ICONS = {"won": _WINMARK, "lost": _LOSSMARK, "push": "➖", "void": "➖"}
+# Discord embeds have no per-line/per-field text color, only one color for
+# the whole card's left border - colored squares are the closest thing to
+# an actual per-leg color scheme achievable here, one glance tells you
+# which legs are in which state without reading the words.
+_LEG_SQUARES = {"won": "🟩", "lost": "🟥", "push": "⬜", "void": "⬜"}
 
 
 def _key(channel_id: int, emoji: str) -> str:
@@ -130,28 +135,60 @@ async def _ensure_group(
     }
 
 
-def _format_leg_line(leg: dict) -> str:
-    icon = _LEG_ICONS.get(leg["status"], "⏳")
-    return f"{icon} {leg['label']} — {leg['detail']}"
+def _leg_square(leg: dict) -> str:
+    square = _LEG_SQUARES.get(leg["status"])
+    if square:
+        return square
+    # Still pending - yellow while that leg's own match is actually live,
+    # black while it hasn't started yet, distinguishable at a glance from
+    # each other and from every resolved state's color.
+    return "🟨" if "LIVE" in leg.get("detail", "") else "⬛"
 
 
-def _summary_text(group: dict) -> str:
+def _summary_color_status(group: dict) -> str:
+    """Maps this group's overall state onto the same won/lost/push/void/
+    inprogress/notstarted palette every score card in this bot already
+    uses (scoreimage.EMBED_COLOR), so the summary card's left border
+    reads the same way - green once it's a confirmed win, red the moment
+    it busts, purple if voided out entirely, yellow/blue while still
+    live/pending."""
+    effective_total = group["total_legs"]
+    all_resolved = group["resolved_legs"] >= group["total_legs"] + group["voided"]
+    if group["lost"]:
+        return "lost"
+    if effective_total <= 0:
+        return "void"
+    if all_resolved and group["won"] >= effective_total:
+        return "won"
+    legs = group.get("legs", {}).values()
+    if any(leg["status"] == "pending" and "LIVE" in leg.get("detail", "") for leg in legs):
+        return "inprogress"
+    return "notstarted"
+
+
+def _build_summary_embed(group: dict) -> discord.Embed:
     emoji = group["emoji"]
     effective_total = group["total_legs"]
     voided_suffix = f" ({group['voided']} Voided)" if group["voided"] else ""
     all_resolved = group["resolved_legs"] >= group["total_legs"] + group["voided"]
 
     if group["lost"]:
-        header = f"{_LOSSMARK} Parlay {emoji} — LOST{voided_suffix}"
+        subtitle = f"{_LOSSMARK} LOST{voided_suffix}"
     elif effective_total <= 0:
-        header = f"➖ Parlay {emoji} — every leg voided, no result{voided_suffix}"
+        subtitle = f"➖ Every leg voided, no result{voided_suffix}"
     elif all_resolved and group["won"] >= effective_total:
-        header = f"{_WINMARK} Parlay {emoji} — {group['won']}/{effective_total} wins — HIT!{voided_suffix}"
+        subtitle = f"{_WINMARK} {group['won']}/{effective_total} wins — HIT!{voided_suffix}"
     else:
-        header = f"Parlay {emoji} — {group['resolved_legs']}/{group['total_legs'] + group['voided']} resolved{voided_suffix}"
+        subtitle = f"{group['resolved_legs']}/{group['total_legs'] + group['voided']} resolved{voided_suffix}"
 
-    lines = [header] + [_format_leg_line(leg) for leg in group.get("legs", {}).values()]
-    return "\n".join(lines)
+    embed = discord.Embed(
+        title=f"Parlay {emoji}", description=subtitle,
+        color=scoreimage.EMBED_COLOR[_summary_color_status(group)],
+    )
+    for leg in group.get("legs", {}).values():
+        embed.add_field(name=f"{_leg_square(leg)} {leg['label']}", value=leg["detail"], inline=False)
+    embed.timestamp = discord.utils.utcnow()
+    return embed
 
 
 async def _post_or_edit_summary(channel: discord.abc.Messageable, channel_id: int, group: dict) -> Optional[int]:
@@ -159,17 +196,17 @@ async def _post_or_edit_summary(channel: discord.abc.Messageable, channel_id: in
     show, edits it in place on every later update - returns the message id
     to persist (unchanged on a successful edit), or whatever was already
     there if even a fresh send fails."""
-    text = _summary_text(group)
+    embed = _build_summary_embed(group)
     message_id = group.get("summary_message_id")
     if message_id:
         try:
             message = await channel.fetch_message(message_id)
-            await throttle.run(channel_id, lambda: message.edit(content=text))
+            await throttle.run(channel_id, lambda: message.edit(embed=embed))
             return message_id
         except discord.HTTPException as e:
             log.warning("Parlay summary card message %s gone, reposting: %s", message_id, e)
     try:
-        message = await throttle.run(channel_id, lambda: channel.send(text))
+        message = await throttle.run(channel_id, lambda: channel.send(embed=embed))
     except discord.HTTPException as e:
         log.warning("Failed to post parlay summary card: %s", e)
         return message_id
@@ -193,7 +230,7 @@ async def _repost_summary(channel: discord.abc.Messageable, channel_id: int, key
     message actually being deleted would otherwise orphan it in the
     channel forever, with nothing left anywhere that remembers it needs
     cleaning up. resume_all sweeps this on startup."""
-    text = _summary_text(group)
+    embed = _build_summary_embed(group)
     old_message_id = group.get("summary_message_id")
 
     if old_message_id:
@@ -203,7 +240,7 @@ async def _repost_summary(channel: discord.abc.Messageable, channel_id: int, key
         state.save_parlays(data)
 
     try:
-        new_message = await throttle.run(channel_id, lambda: channel.send(text))
+        new_message = await throttle.run(channel_id, lambda: channel.send(embed=embed))
     except discord.HTTPException as e:
         log.warning("Failed to repost parlay summary card: %s", e)
         return old_message_id
