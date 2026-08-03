@@ -39,6 +39,12 @@ _SPORT_MAP = {
     "ufc": "mma",
     "mma": "mma",
     "combat": "mma",
+    "dota 2": "dota2",
+    "dota2": "dota2",
+    "cs2": "cs2",
+    "cs 2": "cs2",
+    "counter-strike": "cs2",
+    "counter strike": "cs2",
 }
 
 # Bare section headers can use the sport's full name ("Basketball") instead
@@ -690,6 +696,155 @@ def _parse_ufc_round_total_pick(description: str) -> Optional[dict]:
     }
 
 
+# Dota 2 / CS2 esports markets (see esports.py/esportstracker.py). Unlike
+# every other sport in this module, hawk.live/GosuGamers can only resolve a
+# match by BOTH team names together - there's no "find any match for this
+# one team" lookup the way 365scores/ESPN support - so every one of these
+# six requires an explicit "Team A vs Team B" matchup; a bare single-name
+# pick (no opponent) genuinely can't be resolved and isn't supported here.
+
+# "Team A vs Team B - Team X (-1.5) Map Handicap" / "... - Team X -1.5 Map
+# Handicap" (parens optional either way).
+_ESPORTS_MAP_HANDICAP_RE = re.compile(
+    r"^(.+?)\s*(?:@|vs\.?|v\.?)\s*(.+?)\s*-\s*(.+?)\s*\(?([+-]\d+(?:\.\d+)?)\)?\s*map\s*handicap\b",
+    re.IGNORECASE,
+)
+
+# "Team A vs Team B - Total Maps Over 2.5" (marker before the number) / "...
+# - Over 2.5 Total Maps" or "... Over 2.5 Maps" (marker after) - same
+# before/after split as tennis's total-games markers elsewhere in this file.
+_ESPORTS_TOTAL_MAPS_BEFORE_RE = re.compile(
+    r"^(.+?)\s*(?:@|vs\.?|v\.?)\s*(.+?)\s*-\s*(?:total\s+)?maps\s+(Over|Under)\s+([\d.]+)", re.IGNORECASE,
+)
+_ESPORTS_TOTAL_MAPS_AFTER_RE = re.compile(
+    r"^(.+?)\s*(?:@|vs\.?|v\.?)\s*(.+?)\s*-?\s*(Over|Under)\s+([\d.]+)\s*(?:total\s+)?maps\b", re.IGNORECASE,
+)
+
+# "Team A vs Team B - Team X Map 2 Winner" - the individual-map flavor, not
+# the overall series (see _parse_esports_match_winner below for that).
+_ESPORTS_MAP_WINNER_RE = re.compile(
+    r"^(.+?)\s*(?:@|vs\.?|v\.?)\s*(.+?)\s*-\s*(.+?)\s+map\s*(\d+)\s+winner\b", re.IGNORECASE,
+)
+
+# "Team A vs Team B - Team X to Win at Least One Map" / "... - Team X Wins
+# at Least One Map" - whether the named team avoids being swept, not who
+# wins the series outright.
+_ESPORTS_WIN_AT_LEAST_ONE_MAP_RE = re.compile(
+    r"^(.+?)\s*(?:@|vs\.?|v\.?)\s*(.+?)\s*-\s*(.+?)\s+(?:to\s+win|wins?)\s+(?:at\s+least\s+)?(?:one|1)\s+maps?\b",
+    re.IGNORECASE,
+)
+
+# "Team A vs Team B - Team X to Win 2-0" - the exact series score. Requires
+# the explicit "to win" phrasing (rather than a bare trailing "N-N") since
+# without it there's no reliable marker distinguishing this from arbitrary
+# trailing text.
+_ESPORTS_CORRECT_SCORE_RE = re.compile(
+    r"^(.+?)\s*(?:@|vs\.?|v\.?)\s*(.+?)\s*-\s*(.+?)\s+to\s+win\s+(\d+)\s*-\s*(\d+)\b",
+    re.IGNORECASE,
+)
+
+
+def _parse_esports_map_handicap(text: str) -> Optional[dict]:
+    m = _ESPORTS_MAP_HANDICAP_RE.match(text)
+    if not m:
+        return None
+    team_a, team_b, named = m.group(1).strip(), m.group(2).strip(), m.group(3).strip()
+    if not team_a or not team_b or not named:
+        return None
+    if not (scores365.names_match(named, team_a) or scores365.names_match(named, team_b)):
+        return None  # doesn't look like either matchup side - don't guess
+    return {"kind": "esports_map_handicap", "team_a": team_a, "team_b": team_b, "team": named, "line": float(m.group(4))}
+
+
+def _parse_esports_total_maps(text: str) -> Optional[dict]:
+    m = _ESPORTS_TOTAL_MAPS_BEFORE_RE.match(text) or _ESPORTS_TOTAL_MAPS_AFTER_RE.match(text)
+    if not m:
+        return None
+    team_a, team_b = m.group(1).strip(), m.group(2).strip()
+    if not team_a or not team_b:
+        return None
+    return {
+        "kind": "esports_total_maps", "team_a": team_a, "team_b": team_b,
+        "direction": m.group(3).lower(), "line": float(m.group(4)),
+    }
+
+
+def _parse_esports_map_winner(text: str) -> Optional[dict]:
+    m = _ESPORTS_MAP_WINNER_RE.match(text)
+    if not m:
+        return None
+    team_a, team_b, named = m.group(1).strip(), m.group(2).strip(), m.group(3).strip()
+    if not team_a or not team_b or not named:
+        return None
+    if not (scores365.names_match(named, team_a) or scores365.names_match(named, team_b)):
+        return None
+    return {
+        "kind": "esports_map_winner", "team_a": team_a, "team_b": team_b,
+        "team": named, "map_number": int(m.group(4)),
+    }
+
+
+def _parse_esports_win_at_least_one_map(text: str) -> Optional[dict]:
+    m = _ESPORTS_WIN_AT_LEAST_ONE_MAP_RE.match(text)
+    if not m:
+        return None
+    team_a, team_b, named = m.group(1).strip(), m.group(2).strip(), m.group(3).strip()
+    if not team_a or not team_b or not named:
+        return None
+    if not (scores365.names_match(named, team_a) or scores365.names_match(named, team_b)):
+        return None
+    return {"kind": "esports_win_at_least_one_map", "team_a": team_a, "team_b": team_b, "team": named}
+
+
+def _parse_esports_correct_score(text: str) -> Optional[dict]:
+    m = _ESPORTS_CORRECT_SCORE_RE.match(text)
+    if not m:
+        return None
+    team_a, team_b, named = m.group(1).strip(), m.group(2).strip(), m.group(3).strip()
+    if not team_a or not team_b or not named:
+        return None
+    if not (scores365.names_match(named, team_a) or scores365.names_match(named, team_b)):
+        return None
+    return {
+        "kind": "esports_correct_score", "team_a": team_a, "team_b": team_b, "team": named,
+        "picked_maps": int(m.group(4)), "other_maps": int(m.group(5)),
+    }
+
+
+def _parse_esports_match_winner(text: str) -> Optional[dict]:
+    """Series (overall) moneyline - same "- Team X ML" trailer convention
+    already used for every other sport's moneyline in this module. No bare
+    single-team fallback (unlike _parse_team_pick) - a name with no
+    opponent can't be resolved against hawk.live/GosuGamers at all."""
+    for sep in (" vs. ", " vs ", " v. ", " v "):
+        if sep not in text:
+            continue
+        team_a, rest = (p.strip() for p in text.split(sep, 1))
+        m = _MATCHUP_ML_TRAILER_RE.match(rest)
+        if not m:
+            return None
+        team_b, named = m.group(1).strip(), m.group(2).strip()
+        if scores365.names_match(named, team_a):
+            return {"kind": "esports_match_winner", "team_a": team_a, "team_b": team_b, "team": team_a}
+        if scores365.names_match(named, team_b):
+            return {"kind": "esports_match_winner", "team_a": team_a, "team_b": team_b, "team": team_b}
+        return None  # explicit pick doesn't match either side - don't guess
+    return None
+
+
+def _parse_esports_pick(description: str, sport: str) -> Optional[dict]:
+    text = _clean_line(description)
+    for parser in (
+        _parse_esports_map_handicap, _parse_esports_total_maps, _parse_esports_map_winner,
+        _parse_esports_win_at_least_one_map, _parse_esports_correct_score, _parse_esports_match_winner,
+    ):
+        pick = parser(text)
+        if pick:
+            pick["sport"] = sport
+            return pick
+    return None
+
+
 def _parse_total_pick(sport: str, description: str) -> Optional[dict]:
     text = _clean_line(description)
     m = _TOTAL_LINE_RE.match(text)
@@ -721,6 +876,13 @@ def _parse_named_team_total_pick(sport: str, description: str) -> Optional[dict]
 
 
 def _parse_description(sport: str, sport_key: str, description: str, is_prop_category: bool) -> Optional[dict]:
+    if sport in ("dota2", "cs2"):
+        # None of the generic total/player-prop/track fallback logic below
+        # applies to esports at all (see _parse_esports_pick's own
+        # docstring) - returns unconditionally, same as mma's own
+        # dedicated block at the bottom of this function.
+        return _parse_esports_pick(description, sport)
+
     if sport == "baseball":
         inning_total = _parse_inning_run_total(description)
         if inning_total:

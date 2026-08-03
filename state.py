@@ -26,6 +26,7 @@ PENDING_DELETE_FILE = os.path.join(_DIR, "pending_delete_state.json")
 UFC_FILE = os.path.join(_DIR, "ufc_state.json")
 SOCCER_PROPS_FILE = os.path.join(_DIR, "soccer_props_state.json")
 PARLAY_FILE = os.path.join(_DIR, "parlay_state.json")
+ESPORTS_FILE = os.path.join(_DIR, "esports_state.json")
 
 
 def _load(path: str) -> dict[str, Any]:
@@ -129,3 +130,11 @@ def load_parlays() -> dict[str, Any]:
 
 def save_parlays(data: dict[str, Any]):
     _save(PARLAY_FILE, data)
+
+
+def load_esports() -> dict[str, Any]:
+    return _load(ESPORTS_FILE)
+
+
+def save_esports(data: dict[str, Any]):
+    _save(ESPORTS_FILE, data)

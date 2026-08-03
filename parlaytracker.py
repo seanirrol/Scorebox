@@ -58,6 +58,7 @@ async def _count_group_size(channel: discord.abc.Messageable, channel_id: int, e
     module level) since each of them calls back into this module's
     handle_leg_result once a leg is graded - a module-level import here
     would be circular."""
+    import esportstracker
     import f5tracker
     import inning1tracker
     import inningtracker
@@ -70,7 +71,7 @@ async def _count_group_size(channel: discord.abc.Messageable, channel_id: int, e
 
     tracker_modules = [
         tracker, proptracker, inningtracker, f5tracker, inning1tracker,
-        settracker, tennispropstracker, soccerpropstracker, ufctracker,
+        settracker, tennispropstracker, soccerpropstracker, ufctracker, esportstracker,
     ]
 
     count = 1  # the leg that just resolved

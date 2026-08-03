@@ -24,6 +24,8 @@ import botlog
 import config
 import espn
 import espn_ufc
+import esports
+import esportstracker
 import f5tracker
 import inning1tracker
 import inningtracker
@@ -74,6 +76,7 @@ async def on_ready():
     await tennispropstracker.resume_all(client)
     await soccerpropstracker.resume_all(client)
     await ufctracker.resume_all(client)
+    await esportstracker.resume_all(client)
     await pendingdelete.resume_all(client)
 
 
@@ -108,6 +111,9 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     if not info:
         info = soccerpropstracker.get_message_owner(payload.message_id)
         kind = "soccer_prop"
+    if not info:
+        info = esportstracker.get_message_owner(payload.message_id)
+        kind = "esports"
     if not info:
         return
 
@@ -151,6 +157,9 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     elif kind == "ufc":
         channel_id, competition_id, _ = info
         ufctracker.stop_tracking(channel_id, competition_id)
+    elif kind == "esports":
+        channel_id, sport, team_a, team_b, market, _ = info
+        esportstracker.stop_tracking(channel_id, sport, team_a, team_b, market)
     else:
         channel_id, game_id, member_id, stat_name, _ = info
         soccerpropstracker.stop_tracking(channel_id, game_id, member_id, stat_name)
@@ -576,6 +585,45 @@ async def _auto_ufc(
     botlog.event(f"✅ Tracked ({label}): **{fighter}** — bout `{competition_id}` in <#{channel.id}>")
 
 
+async def _auto_esports(
+    channel: discord.abc.Messageable, sport: str, team_a: str, team_b: str, market: str,
+    picked_team: Optional[str] = None, direction: Optional[str] = None, line: Optional[float] = None,
+    map_number: Optional[int] = None, picked_maps: Optional[int] = None, other_maps: Optional[int] = None,
+):
+    """Dota 2 / CS2 picks - six markets, all settling on the overall series
+    or one specific map within it - see esports.py/esportstracker.py.
+    Unlike every other sport in this bot, both team_a and team_b (not just
+    one) are needed to resolve the match at all - hawk.live/GosuGamers have
+    no "find any match for this one team" lookup the way 365scores/ESPN do."""
+    label = f"esports {market}"
+    series_data = await asyncio.to_thread(esports.get_series, sport, team_a, team_b)
+    if not series_data:
+        log.info("Auto-esports (%s): no match found for '%s v %s'", market, team_a, team_b)
+        botlog.event(f"❌ Not tracked ({label}): **{team_a} v {team_b}** — no match found")
+        return
+    if esportstracker.is_tracked(channel.id, sport, team_a, team_b, market):
+        botlog.event(f"⏭️ Skipped ({label}): **{team_a} v {team_b}** — already being tracked in <#{channel.id}>")
+        return
+
+    embed, file = await esportstracker.build_embed(
+        series_data, market, picked_team, direction, line, map_number, picked_maps, other_maps
+    )
+    message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
+    esportstracker.register_message(message.id, channel.id, sport, team_a, team_b, market, None)
+    await message.add_reaction(TRASH_EMOJI)
+
+    decided, _ = esportstracker.grade_now(series_data, market, picked_team, direction, line, map_number, picked_maps, other_maps)
+    if decided:
+        botlog.event(f"⏭️ Not tracked ({label}): **{team_a} v {team_b}** — already decided, posted final result only")
+        return
+    esportstracker.start_tracking(
+        message, sport, team_a, team_b, channel.id, market, None,
+        picked_team, direction, line, map_number, picked_maps, other_maps,
+    )
+    log.info("Auto-tracked esports (%s) pick '%s v %s' -> %s", market, team_a, team_b, sport)
+    botlog.event(f"✅ Tracked ({label}): **{team_a} v {team_b}** in <#{channel.id}>")
+
+
 @client.event
 async def on_message(message: discord.Message):
     target_channel_id = config.PICKS_CHANNEL_MAP.get(message.channel.id)
@@ -646,6 +694,36 @@ async def on_message(message: discord.Message):
                 await _auto_ufc(target_channel, pick["team"])
             elif pick["kind"] == "ufc_round_total":
                 await _auto_ufc(target_channel, pick["team"], pick["direction"], pick["line"])
+            elif pick["kind"] == "esports_match_winner":
+                await _auto_esports(
+                    target_channel, pick["sport"], pick["team_a"], pick["team_b"], "match_winner",
+                    picked_team=pick["team"],
+                )
+            elif pick["kind"] == "esports_map_handicap":
+                await _auto_esports(
+                    target_channel, pick["sport"], pick["team_a"], pick["team_b"], "map_handicap",
+                    picked_team=pick["team"], line=pick["line"],
+                )
+            elif pick["kind"] == "esports_total_maps":
+                await _auto_esports(
+                    target_channel, pick["sport"], pick["team_a"], pick["team_b"], "total_maps",
+                    direction=pick["direction"], line=pick["line"],
+                )
+            elif pick["kind"] == "esports_map_winner":
+                await _auto_esports(
+                    target_channel, pick["sport"], pick["team_a"], pick["team_b"], "map_winner",
+                    picked_team=pick["team"], map_number=pick["map_number"],
+                )
+            elif pick["kind"] == "esports_win_at_least_one_map":
+                await _auto_esports(
+                    target_channel, pick["sport"], pick["team_a"], pick["team_b"], "win_at_least_one_map",
+                    picked_team=pick["team"],
+                )
+            elif pick["kind"] == "esports_correct_score":
+                await _auto_esports(
+                    target_channel, pick["sport"], pick["team_a"], pick["team_b"], "correct_score",
+                    picked_team=pick["team"], picked_maps=pick["picked_maps"], other_maps=pick["other_maps"],
+                )
             else:
                 await _auto_playerprops(
                     target_channel, pick["sport"], pick["player"], pick["stat"],
@@ -979,6 +1057,19 @@ def _untrack_one(channel_id: int, game_id: str, player: Optional[str]) -> list[s
         if soccerpropstracker.stop_tracking(channel_id, entry["game_id"], entry["member_id"], entry["stat_name"]):
             stopped.append(f"{entry['player_name']} ({entry['stat_label']})")
 
+    # No numeric game_id exists for esports (hawk.live/GosuGamers have none
+    # to give one) - matched against the "TeamA v TeamB" id_label shown by
+    # /tracked instead (see _gather_tracked_items), substring/case-
+    # insensitive same as the player-name matching above.
+    for entry in esportstracker.list_tracked_details(channel_id):
+        id_label = f"{entry['team_a']} v {entry['team_b']}"
+        if game_id.lower() not in id_label.lower():
+            continue
+        if player and entry.get("picked_team") and player.lower() not in entry["picked_team"].lower():
+            continue
+        if esportstracker.stop_tracking(channel_id, entry["sport"], entry["team_a"], entry["team_b"], entry["market"]):
+            stopped.append(f"{entry['market']} pick")
+
     return stopped
 
 
@@ -1135,6 +1226,19 @@ async def _gather_tracked_items(channel_id: int) -> list[dict]:
             "stop": lambda cid=channel_id, compid=entry["competition_id"]: ufctracker.stop_tracking(cid, compid),
         })
 
+    for entry in esportstracker.list_tracked_details(channel_id):
+        label = esportstracker.pick_label(
+            entry["market"], entry.get("picked_team"), entry.get("direction"), entry.get("line"),
+            entry.get("map_number"), entry.get("picked_maps"), entry.get("other_maps"),
+        )
+        items.append({
+            "kind": "esports", "label": f"{entry['team_a']} v {entry['team_b']} — {label}",
+            "id_label": f"{entry['team_a']} v {entry['team_b']}",
+            "message_id": entry["message_id"],
+            "stop": lambda cid=channel_id, sp=entry["sport"], ta=entry["team_a"], tb=entry["team_b"], m=entry["market"]:
+                esportstracker.stop_tracking(cid, sp, ta, tb, m),
+        })
+
     return items
 
 
@@ -1176,6 +1280,7 @@ _SECTION_TITLES = {
     "tennis_prop": "Tracked tennis player props",
     "soccer_prop": "Tracked soccer player props",
     "ufc": "Tracked UFC picks",
+    "esports": "Tracked Dota 2 / CS2 picks",
 }
 
 
