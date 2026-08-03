@@ -129,8 +129,11 @@ def _fmt_value(v) -> str:
     return "-" if v is None else str(v)
 
 
-_RESULT_TITLES = {"won": "<:winmark:1532115635071488221> Pick Won", "lost": "<:lossmark:1532115600162422894> Pick Lost", "push": "➖ Push"}
-_RESULT_REACTIONS = {"won": "<:winmark:1532115635071488221>", "lost": "<:lossmark:1532115600162422894>"}
+_RESULT_TITLES = {
+    "won": "<:winmark:1532115635071488221> Pick Won", "lost": "<:lossmark:1532115600162422894> Pick Lost",
+    "push": "➖ Push", "void": "🚫 Voided (No Action)",
+}
+_RESULT_REACTIONS = {"won": "<:winmark:1532115635071488221>", "lost": "<:lossmark:1532115600162422894>", "void": "🚫"}
 
 # Reactions the bot itself ever adds - excluded when carrying reactions
 # forward across a repost (see _repost_final) so a manually-added marker
@@ -187,6 +190,13 @@ async def build_embed(
     result = None
     if status_type == "finished" and direction is not None and line is not None:
         result = espn.grade_over_under(current_value, direction, line)
+        if result is None:
+            # The event finished but the player never produced a usable
+            # value for this stat (DNP, coach's decision, never appeared in
+            # the boxscore group, etc.) - the pick can never be graded, so
+            # void it rather than silently sitting there forever looking
+            # like a plain, unresolved "Final".
+            result = "void"
 
     early_win = False
     if not result and status_type == "inprogress" and direction == "over" and line is not None:
@@ -428,6 +438,11 @@ async def _track_loop(
                 result = None
                 if espn.is_finished(event) and direction is not None and line is not None:
                     result = espn.grade_over_under(current_value, direction, line)
+                    if result is None:
+                        # Player never produced a usable value for this stat
+                        # (DNP, etc.) - same reasoning as build_embed's.
+                        result = "void"
+                        botlog.event(f"➖ Voided (prop, player didn't record a usable value): **{player_name}** in <#{channel_id}>")
                     reaction = _RESULT_REACTIONS.get(result)
                     if reaction:
                         try:

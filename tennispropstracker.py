@@ -150,6 +150,12 @@ async def build_embed(
     result = None
     if status == "finished" and direction is not None and line is not None:
         result = scores365.grade_over_under(current_value, direction, line)
+        if result is None:
+            # The match finished but 365scores never published this stat for
+            # this player (retired without playing, data gap, etc.) - the
+            # pick can never be graded, so void it rather than silently
+            # sitting there forever looking like a plain, unresolved "Final".
+            result = "void"
 
     early_win = False
     if not result and status == "inprogress" and direction == "over" and line is not None:
@@ -316,6 +322,11 @@ async def _track_loop(
                 if direction is not None and line is not None:
                     current_value = await asyncio.to_thread(scores365.tennis_player_stat, game_id, competitor_id, stat_name)
                     result = scores365.grade_over_under(current_value, direction, line)
+                    if result is None:
+                        # Stat never published for this player - same
+                        # reasoning as build_embed's.
+                        result = "void"
+                        botlog.event(f"➖ Voided (tennis prop, no published value): **{player_name}** in <#{channel_id}>")
                     reaction = _RESULT_REACTIONS.get(result)
                     if reaction:
                         try:
