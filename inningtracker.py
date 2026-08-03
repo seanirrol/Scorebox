@@ -43,8 +43,14 @@ _active: dict[str, asyncio.Task] = {}
 # reaction-based delete handler in bot.py look up who can delete a message.
 _message_owners: dict[int, tuple] = {}
 
-_RESULT_TITLES = {"won": "<:winmark:1532115635071488221> Pick Won", "lost": "<:lossmark:1532115600162422894> Pick Lost"}
-_RESULT_REACTIONS = {"won": "<:winmark:1532115635071488221>", "lost": "<:lossmark:1532115600162422894>"}
+_RESULT_TITLES = {
+    "won": "<:winmark:1532115635071488221> Pick Won", "lost": "<:lossmark:1532115600162422894> Pick Lost",
+    "void": "<:cashback:1533844020839841832> Pick Voided",
+}
+_RESULT_REACTIONS = {
+    "won": "<:winmark:1532115635071488221>", "lost": "<:lossmark:1532115600162422894>",
+    "void": "<:cashback:1533844020839841832>",
+}
 
 # Reactions the bot itself ever adds - excluded when carrying reactions
 # forward across a repost (see _repost_final) so a manually-added marker
@@ -147,6 +153,8 @@ async def build_embed(event: dict, pick_type: str) -> tuple[discord.Embed, disco
     embed = discord.Embed(color=scoreimage.EMBED_COLOR[color_status])
     if result:
         embed.title = _RESULT_TITLES[result]
+    elif postponed:
+        embed.title = _RESULT_TITLES["void"]
     embed.set_author(name=f"MLB • {league_name}" if league_name != "MLB" else "MLB")
 
     description_lines = [f"{away_name} v {home_name}", _PICK_LABELS[pick_type]]
@@ -336,6 +344,10 @@ async def _track_loop(message: discord.Message, channel_id: int, event_id, pick_
                     # purposes, same as an interrupted-and-never-resumed
                     # match elsewhere in this bot.
                     result = "void"
+                    try:
+                        await message.add_reaction(_RESULT_REACTIONS["void"])
+                    except discord.HTTPException as e:
+                        log.warning("Failed to add void reaction: %s", e)
                 await parlaytracker.handle_leg_result(
                     message.channel, channel_id, message, "inningtracker", key, leg_label, result, carry_emojis,
                 )
