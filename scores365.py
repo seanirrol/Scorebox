@@ -87,6 +87,17 @@ _STATUS_RANK = {"inprogress": 0, "notstarted": 1, "finished": 2}
 
 GAMES_CACHE_SECONDS = 8
 EXTRA_PAGES = 4
+# A match that started before "now" and is still not finished (e.g.
+# suspended for rain/darkness and never resumed) would otherwise be
+# invisible here forever - forward pagination only ever extends further
+# into the future from "now", never backward. Confirmed live: a real
+# tennis match interrupted the previous day and still unresolved could
+# not be found by find_match_for_team no matter how many forward pages
+# were walked, but appeared on the very first page back. Smaller than
+# EXTRA_PAGES since this is specifically for catching stale
+# still-in-progress stragglers, not for general list coverage - most of
+# what a backward page turns up is long-finished games nobody needs.
+EXTRA_PAGES_BACK = 2
 _games_cache: dict[int, dict] = {}  # sport_id -> {"games": [...], "fetched_at": monotonic ts}
 
 
@@ -112,9 +123,11 @@ def _fetch_games_for_sport(sport_id: int) -> list[dict]:
     data = _get(f"{BASE_URL}/games/current/", langId=1, timezoneName="UTC", userCountryId=1, sports=sport_id)
     games = list(data.get("games") or [])
 
+    paging = data.get("paging") or {}
+
     # The bulk endpoint is paginated; follow the cursor a few pages forward so
     # a high-volume sport (e.g. football) isn't limited to the next ~3 hours.
-    next_page = (data.get("paging") or {}).get("nextPage")
+    next_page = paging.get("nextPage")
     for _ in range(EXTRA_PAGES):
         if not next_page:
             break
@@ -124,6 +137,18 @@ def _fetch_games_for_sport(sport_id: int) -> list[dict]:
             break
         games.extend(page.get("games") or [])
         next_page = (page.get("paging") or {}).get("nextPage")
+
+    # Also walk a couple pages backward - see EXTRA_PAGES_BACK's own comment.
+    previous_page = paging.get("previousPage")
+    for _ in range(EXTRA_PAGES_BACK):
+        if not previous_page:
+            break
+        try:
+            page = _get(f"https://webws.365scores.com{previous_page}", sports=sport_id)
+        except ScoresError:
+            break
+        games.extend(page.get("games") or [])
+        previous_page = (page.get("paging") or {}).get("previousPage")
 
     _games_cache[sport_id] = {"games": games, "fetched_at": time.monotonic()}
     return games
