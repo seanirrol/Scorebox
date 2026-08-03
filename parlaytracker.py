@@ -182,18 +182,27 @@ def groups_for_leg(channel_id: int, module_name: str, track_key_str: str) -> lis
     replaced), called by every tracker on every poll cycle to decide
     whether/where to report. A leg can belong to more than one parlay at
     once (matches the old system's same allowance for multiple marker
-    emoji on one card)."""
+    emoji on one card).
+
+    Deliberately skips any entry with no "identifier" key - a leftover
+    group from the old reaction-based system (keyed by "emoji" instead),
+    still sitting in persisted state from before this module dropped that
+    mechanism entirely. Confirmed live: this crashed every tracker whose
+    leg was still listed in one of those old groups on its very next poll
+    (group["identifier"] raising KeyError, uncaught, silently killing the
+    whole _track_loop task) - explains matches that stopped updating or
+    never woke from hibernation right after this shipped."""
     leg_id = f"{module_name}:{track_key_str}"
     data = state.load_parlays()
     return [
         group["identifier"] for group in data.values()
-        if group.get("channel_id") == channel_id and leg_id in group.get("legs", {})
+        if "identifier" in group and group.get("channel_id") == channel_id and leg_id in group.get("legs", {})
     ]
 
 
 def list_groups(channel_id: int) -> list[dict]:
     data = state.load_parlays()
-    return [group for group in data.values() if group.get("channel_id") == channel_id]
+    return [group for group in data.values() if "identifier" in group and group.get("channel_id") == channel_id]
 
 
 async def create_group(channel_id: int, identifier: str) -> Optional[str]:
@@ -342,10 +351,19 @@ async def resume_all(client: discord.Client):
     """Called once from on_ready - finishes cleaning up any parlay summary
     card repost that was interrupted mid-flight by a bot restart (killed
     or redeployed between sending the replacement card and deleting the
-    old one)."""
+    old one), and drops any leftover group from the old reaction-based
+    system (no "identifier" key - that mechanism was removed entirely).
+    Those groups' own summary cards are left alone in Discord (not
+    deleted, same "leave the last known record" treatment as any other
+    retired group) - only the dead internal tracking entry goes away, so
+    nothing (e.g. groups_for_leg) ever has to see it again."""
     data = state.load_parlays()
     changed = False
     for key, group in list(data.items()):
+        if "identifier" not in group:
+            data.pop(key, None)
+            changed = True
+            continue
         old_id = group.get("pending_delete_message_id")
         if not old_id:
             continue
