@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Manages background tasks for Dota 2 / CS2 esports picks - six markets, all
+Manages background tasks for Dota 2 / CS2 esports picks - eight markets, all
 settling on the overall best-of-N series or one specific map within it (see
 esports.py's own docstring for where the underlying data comes from):
 
@@ -13,6 +13,11 @@ esports.py's own docstring for where the underlying data comes from):
   the series (not swept) - can resolve the moment it happens, since a map
   win can't be undone.
 - "correct_score": the exact series score (e.g. "Team X to win 2-0").
+- "total_kills": combined kills across every map played in the series vs. a
+  line - Dota 2 only, CS2 has no kill data anywhere (see
+  esports.live_kill_count's own docstring).
+- "team_total_kills": one named team's own kill total across every map
+  played - same Dota 2-only restriction.
 
 Mirrors settracker.py's multi-mode design (one tracker module, several
 distinct grading shapes selected by `market`) rather than a file per market.
@@ -159,7 +164,11 @@ def pick_label(
         return f"{picked_team} ML + Map {map_number} Winner"
     if market == "win_at_least_one_map":
         return f"{picked_team} to {'Not ' if direction == 'no' else ''}Win at Least One Map"
-    return f"{picked_team} to Win {picked_maps}-{other_maps}"  # correct_score
+    if market == "correct_score":
+        return f"{picked_team} to Win {picked_maps}-{other_maps}"
+    if market == "total_kills":
+        return f"{direction.title()} {line:g} Total Kills"
+    return f"{picked_team} {direction.title()} {line:g} Total Kills"  # team_total_kills
 
 
 def grade_now(
@@ -181,8 +190,12 @@ def grade_now(
         result = esports.grade_match_and_map_winner(series_data, map_number, picked_team)
     elif market == "win_at_least_one_map":
         result = esports.grade_win_at_least_one_map(series_data, picked_team, direction or "yes")
-    else:  # correct_score
+    elif market == "correct_score":
         result = esports.grade_correct_score(series_data, picked_team, picked_maps, other_maps)
+    elif market == "total_kills":
+        result = esports.grade_total_kills(series_data, direction, line)
+    else:  # team_total_kills
+        result = esports.grade_team_total_kills(series_data, picked_team, direction, line)
     return result is not None, result
 
 

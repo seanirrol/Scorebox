@@ -755,6 +755,16 @@ async def on_message(message: discord.Message):
                     target_channel, pick["sport"], pick["team_a"], pick["team_b"], "correct_score",
                     picked_team=pick["team"], picked_maps=pick["picked_maps"], other_maps=pick["other_maps"],
                 )
+            elif pick["kind"] == "esports_total_kills":
+                await _auto_esports(
+                    target_channel, pick["sport"], pick["team_a"], pick["team_b"], "total_kills",
+                    direction=pick["direction"], line=pick["line"],
+                )
+            elif pick["kind"] == "esports_team_total_kills":
+                await _auto_esports(
+                    target_channel, pick["sport"], pick["team_a"], pick["team_b"], "team_total_kills",
+                    picked_team=pick["team"], direction=pick["direction"], line=pick["line"],
+                )
             else:
                 await _auto_playerprops(
                     target_channel, pick["sport"], pick["player"], pick["stat"],

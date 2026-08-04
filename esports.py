@@ -290,6 +290,40 @@ def _hawk_live_kill_count(series_data: dict) -> Optional[tuple[int, int]]:
     return (team1_kills, team2_kills) if home_is_team1 else (team2_kills, team1_kills)
 
 
+def _hawk_total_kills(series_data: dict) -> Optional[tuple[int, int]]:
+    """(home, away) kill count summed across every map played so far in the
+    series - a finished map's last recorded state holds its final tally,
+    the in-progress map's (if any) holds its live-running one, so this is
+    itself live-updating right up until the series ends. Distinct from
+    _hawk_live_kill_count, which only reports the current map's own count.
+    None if no map has any state data yet."""
+    ref = series_data["_ref"]
+    games = _hawk_series_games(ref["series"])
+    if not games:
+        return None
+    home_is_team1 = ref["home_is_team1"]
+    team1_total = team2_total = 0
+    found_any = False
+    for g in games:
+        states = g.get("states") or []
+        if not states:
+            continue
+        last_state = states[-1]
+        radiant_kills, dire_kills = last_state.get("radiantScore"), last_state.get("direScore")
+        if radiant_kills is None or dire_kills is None:
+            continue
+        found_any = True
+        if g.get("isTeam1Radiant"):
+            team1_total += radiant_kills
+            team2_total += dire_kills
+        else:
+            team1_total += dire_kills
+            team2_total += radiant_kills
+    if not found_any:
+        return None
+    return (team1_total, team2_total) if home_is_team1 else (team2_total, team1_total)
+
+
 # --- GosuGamers (CS2 primary, Dota 2 fallback) ------------------------------
 
 _GOSU_GAME_SLUGS = {"dota2": "dota2", "cs2": "counterstrike"}
@@ -709,6 +743,18 @@ def live_kill_count(series_data: dict) -> Optional[tuple[int, int]]:
     return _strafe_live_round_score(series_data["home_team"], series_data["away_team"])
 
 
+def total_kills(series_data: dict) -> Optional[tuple[int, int]]:
+    """(home, away) kill count summed across every map played so far in the
+    series - Dota 2 only (hawk.live; CS2 exposes no kill data anywhere, see
+    live_kill_count). Unlike live_kill_count this isn't gated on "inprogress"
+    - it's meaningful (and needed for grading) once the series is finished
+    too. None for CS2, or if a Dota 2 series was only ever resolved via the
+    GosuGamers fallback (no hawk.live coverage, no per-map state data to sum)."""
+    if series_data["sport"] != "dota2":
+        return None
+    return _hawk_total_kills(series_data)
+
+
 # --- grading -----------------------------------------------------------
 
 def _oriented_scores(series_data: dict, picked_team: str) -> Optional[tuple[int, int]]:
@@ -760,6 +806,47 @@ def grade_total_maps(series_data: dict, direction: str, line: float) -> Optional
     if direction == "over":
         return "won" if total > line else "lost"
     return "won" if total < line else "lost"
+
+
+def grade_total_kills(series_data: dict, direction: str, line: float) -> Optional[str]:
+    """Match-combined kill total summed across every map played in the
+    series - Dota 2 only (see total_kills). Graded only once the series
+    itself is decided, not the moment the running total mathematically
+    clears the line - unlike a single map's live score, kills keep
+    accumulating for as long as more maps get played, so an early "Over"
+    can't be locked in the way tracker.py's own early-win Over tagging
+    does elsewhere in this bot. Returns None (never resolves) if kill data
+    was never available for this series at all - see total_kills."""
+    if not is_decided(series_data):
+        return None
+    kills = total_kills(series_data)
+    if kills is None:
+        return None
+    total = kills[0] + kills[1]
+    if total == line:
+        return "push"
+    return "won" if (total > line) == (direction == "over") else "lost"
+
+
+def grade_team_total_kills(series_data: dict, picked_team: str, direction: str, line: float) -> Optional[str]:
+    """One named team's own kill total summed across every map played -
+    Dota 2 only. Same "wait for the series to end" reasoning as
+    grade_total_kills."""
+    if not is_decided(series_data):
+        return None
+    kills = total_kills(series_data)
+    if kills is None:
+        return None
+    home, away = series_data["home_team"], series_data["away_team"]
+    if names_match(home, picked_team):
+        picked_kills = kills[0]
+    elif names_match(away, picked_team):
+        picked_kills = kills[1]
+    else:
+        return None
+    if picked_kills == line:
+        return "push"
+    return "won" if (picked_kills > line) == (direction == "over") else "lost"
 
 
 def grade_win_at_least_one_map(series_data: dict, picked_team: str, direction: str = "yes") -> Optional[str]:

@@ -843,6 +843,29 @@ _ESPORTS_CORRECT_SCORE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# "Team A vs Team B - Total Kills Over 112.5" (marker before) / "... - Over
+# 112.5 Total Kills" (marker after) - combined kills across every map played
+# in the series, Dota 2 only (see esports.grade_total_kills - CS2 has no
+# kill data anywhere).
+_ESPORTS_TOTAL_KILLS_BEFORE_RE = re.compile(
+    r"^(.+?)\s*(?:@|vs\.?|v\.?)\s*(.+?)\s*-\s*(?:total\s+)?kills\s+(Over|Under)\s+([\d.]+)", re.IGNORECASE,
+)
+_ESPORTS_TOTAL_KILLS_AFTER_RE = re.compile(
+    r"^(.+?)\s*(?:@|vs\.?|v\.?)\s*(.+?)\s*-?\s*(Over|Under)\s+([\d.]+)\s*(?:total\s+)?kills\b", re.IGNORECASE,
+)
+
+# "Team A vs Team B - Team X Over 60.5 Total Kills" - one named team's own
+# kill total across every map played, not the combined series total above.
+# The named team between the dash and Over/Under is what distinguishes this
+# from the combined-total shape (which has no name there at all) - checked
+# first, same convention as tennis's _PLAYER_TOTAL_GAMES_BEFORE/AFTER_RE.
+_ESPORTS_TEAM_TOTAL_KILLS_BEFORE_RE = re.compile(
+    r"^(.+?)\s*(?:@|vs\.?|v\.?)\s*(.+?)\s*-\s*(.+?)\s+(?:total\s+)?kills\s+(Over|Under)\s+([\d.]+)", re.IGNORECASE,
+)
+_ESPORTS_TEAM_TOTAL_KILLS_AFTER_RE = re.compile(
+    r"^(.+?)\s*(?:@|vs\.?|v\.?)\s*(.+?)\s*-\s*(.+?)\s+(Over|Under)\s+([\d.]+)\s*(?:total\s+)?kills\b", re.IGNORECASE,
+)
+
 
 def _parse_esports_map_handicap(text: str) -> Optional[dict]:
     m = _ESPORTS_MAP_HANDICAP_RE.match(text)
@@ -935,6 +958,34 @@ def _parse_esports_correct_score(text: str) -> Optional[dict]:
     }
 
 
+def _parse_esports_team_total_kills(text: str) -> Optional[dict]:
+    m = _ESPORTS_TEAM_TOTAL_KILLS_BEFORE_RE.match(text) or _ESPORTS_TEAM_TOTAL_KILLS_AFTER_RE.match(text)
+    if not m:
+        return None
+    team_a, team_b, named = m.group(1).strip(), m.group(2).strip(), m.group(3).strip()
+    if not team_a or not team_b or not named:
+        return None
+    if not (scores365.names_match(named, team_a) or scores365.names_match(named, team_b)):
+        return None  # doesn't look like either matchup side - let the combined-total parser try instead
+    return {
+        "kind": "esports_team_total_kills", "team_a": team_a, "team_b": team_b, "team": named,
+        "direction": m.group(4).lower(), "line": float(m.group(5)),
+    }
+
+
+def _parse_esports_total_kills(text: str) -> Optional[dict]:
+    m = _ESPORTS_TOTAL_KILLS_BEFORE_RE.match(text) or _ESPORTS_TOTAL_KILLS_AFTER_RE.match(text)
+    if not m:
+        return None
+    team_a, team_b = m.group(1).strip(), m.group(2).strip()
+    if not team_a or not team_b:
+        return None
+    return {
+        "kind": "esports_total_kills", "team_a": team_a, "team_b": team_b,
+        "direction": m.group(3).lower(), "line": float(m.group(4)),
+    }
+
+
 def _parse_esports_match_winner(text: str) -> Optional[dict]:
     """Series (overall) moneyline - same "- Team X ML" trailer convention
     already used for every other sport's moneyline in this module. No bare
@@ -958,11 +1009,21 @@ def _parse_esports_match_winner(text: str) -> Optional[dict]:
 
 def _parse_esports_pick(description: str, sport: str) -> Optional[dict]:
     text = _clean_line(description)
-    for parser in (
+    parsers = [
         _parse_esports_map_handicap, _parse_esports_total_maps,
         _parse_esports_match_and_map_winner, _parse_esports_map_winner,
         _parse_esports_win_at_least_one_map, _parse_esports_correct_score, _parse_esports_match_winner,
-    ):
+    ]
+    if sport == "dota2":
+        # Kill totals are Dota 2-only - CS2 has no kill data anywhere (see
+        # esports.live_kill_count's own docstring) - so a "Total Kills"
+        # phrasing on a CS2 pick is left unrecognized rather than tracked
+        # as a market that could never actually grade. team_total_kills is
+        # checked first, same "named team distinguishes from the combined
+        # shape" ordering used for every other sport's own team-vs-combined
+        # total pair in this module.
+        parsers = [_parse_esports_team_total_kills, _parse_esports_total_kills] + parsers
+    for parser in parsers:
         pick = parser(text)
         if pick:
             pick["sport"] = sport
