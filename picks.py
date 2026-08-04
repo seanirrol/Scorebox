@@ -96,9 +96,14 @@ _INNING1_RESULT_MARKER_RE = re.compile(r"\b1st\s+inning\b", re.IGNORECASE)
 # Set winner" / "Naomi Osaka ML 1st Set" - a tennis set-winner pick (settles
 # once Set 1 finishes, not the whole match - see settracker.py). Two-way, no
 # Draw side to worry about (unlike the 1st-inning-result market above), so a
-# single marker regex covers every phrasing.
+# single marker regex covers every phrasing. Also covers the reversed word
+# order "To Win Set 1" / "Set 1 ML/Moneyline/Winner" / "ML Set 1" - confirmed
+# live, a real slate of picks used "Set 1" exclusively and none of them
+# parsed at all.
 _SET1_MARKER_RE = re.compile(
-    r"\bto\s+win\s+1st\s+set\b|\b1st\s+set\s+(?:ml|moneyline|winner)\b|\bml\s+1st\s+set\b",
+    r"\bto\s+win\s+1st\s+set\b|\bto\s+win\s+set\s*1\b"
+    r"|\b1st\s+set\s+(?:ml|moneyline|winner)\b|\bset\s*1\s+(?:ml|moneyline|winner)\b"
+    r"|\bml\s+1st\s+set\b|\bml\s+set\s*1\b",
     re.IGNORECASE,
 )
 
@@ -154,6 +159,22 @@ _PLAYER_TOTAL_GAMES_BEFORE_RE = re.compile(
 _PLAYER_TOTAL_GAMES_AFTER_RE = re.compile(
     r"^(.+?)\s*(?:@|vs\.?|v\.?)\s*(.+?)\s*-\s*(.+?)\s+(Over|Under)\s+([\d.]+)\s*(?:total\s+)?games\b",
     re.IGNORECASE,
+)
+
+# Same market, no matchup at all - just "Player - Over/Under N Games"
+# (confirmed live, a real slate of picks used this shape exclusively; the
+# opponent isn't actually needed, find_match_for_team only needs the one
+# name). Without an opposing name there's nothing to validate the player
+# against, unlike _PLAYER_TOTAL_GAMES_BEFORE/AFTER_RE above - the dash
+# prefix is taken as the player's name directly. Checked ahead of the
+# generic player-prop parser (see the "if sport == tennis" no-matchup
+# block) so "Games" doesn't get silently rejected as an unrecognized stat
+# the way "Breaks" was before _TENNIS_STAT_ALIASES.
+_PLAYER_TOTAL_GAMES_NOMATCHUP_BEFORE_RE = re.compile(
+    r"^(.+?)\s*-\s*(?:total\s+)?games\s+(Over|Under)\s+([\d.]+)", re.IGNORECASE,
+)
+_PLAYER_TOTAL_GAMES_NOMATCHUP_AFTER_RE = re.compile(
+    r"^(.+?)\s*-\s*(Over|Under)\s+([\d.]+)\s*(?:total\s+)?games\b", re.IGNORECASE,
 )
 
 # "Team A vs Team B - Venus Williams to Win a Set" (Yes) / "... - Venus
@@ -337,11 +358,23 @@ def _match_stat_label(sport: str, raw_stat: str) -> Optional[str]:
     return None
 
 
+# "Breaks" (a player's own count of games broken on the opponent's serve)
+# is the same underlying number 365scores reports as the leading X in
+# "Break Points Won" ("X/Y (Z%)" - see scores365._parse_tennis_stat_value),
+# just under a different name bettors commonly use - confirmed live, a real
+# "Over 3.5 Breaks" pick didn't fuzzy-match "Break Points Won" via substring
+# (neither word contains the other) and was silently rejected as an
+# unsupported stat.
+_TENNIS_STAT_ALIASES = {"breaks": "Break Points Won", "break": "Break Points Won"}
+
+
 def _match_tennis_stat_label(raw_stat: str) -> Optional[str]:
     """Tennis-only equivalent of _match_stat_label - ESPN doesn't support
     tennis at all (see espn.py's module docstring), so tennis props are
     backed by scores365.TENNIS_STAT_CATALOG instead."""
     raw = raw_stat.strip().lower()
+    if raw in _TENNIS_STAT_ALIASES:
+        return _TENNIS_STAT_ALIASES[raw]
     catalog = scores365.TENNIS_STAT_CATALOG
     for label in catalog:
         if label.lower() == raw:
@@ -573,6 +606,12 @@ def _parse_set1_pick(description: str) -> Optional[str]:
     if not _SET1_MARKER_RE.search(text):
         return None
     text = _SET1_MARKER_RE.sub("", text)
+    # The originally-supported phrasings (e.g. "Naomi Osaka to win 1st Set")
+    # never had a dash separator before the marker, but "Player - To Win Set
+    # 1" does - strip whatever trailing " -" is left over, same as
+    # _parse_tennis_player_prop/_parse_soccer_player_prop already do for
+    # their own dash-prefixed player name.
+    text = re.sub(r"[\s-]+$", "", text)
     return _parse_team_pick(text)
 
 
@@ -604,6 +643,19 @@ def _parse_player_total_games_pick(description: str) -> Optional[dict]:
         "kind": "tennis_player_total_games", "team": named,
         "direction": m.group(4).lower(), "line": float(m.group(5)),
     }
+
+
+def _parse_player_total_games_nomatchup_pick(description: str) -> Optional[dict]:
+    """No-matchup counterpart to _parse_player_total_games_pick - same
+    market, "Player - Over/Under N Games" with no opponent named at all."""
+    text = _clean_line(description)
+    m = _PLAYER_TOTAL_GAMES_NOMATCHUP_BEFORE_RE.match(text) or _PLAYER_TOTAL_GAMES_NOMATCHUP_AFTER_RE.match(text)
+    if not m:
+        return None
+    player = m.group(1).strip()
+    if not player:
+        return None
+    return {"kind": "tennis_player_total_games", "team": player, "direction": m.group(2).lower(), "line": float(m.group(3))}
 
 
 def _parse_match_total_games_pick(description: str) -> Optional[dict]:
@@ -1048,6 +1100,10 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
             set1_team = _parse_set1_pick(description)
             if set1_team:
                 return {"kind": "set1_moneyline", "sport": sport, "team": set1_team}
+
+            player_total_games_nomatchup = _parse_player_total_games_nomatchup_pick(description)
+            if player_total_games_nomatchup:
+                return player_total_games_nomatchup
 
             tennis_prop = _parse_tennis_player_prop(description)
             if tennis_prop:
