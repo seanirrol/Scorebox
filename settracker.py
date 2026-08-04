@@ -195,7 +195,7 @@ async def build_embed(
         decided = breakdown is not None
         if decided:
             result = scores365.grade_tennis_set(game, breakdown[0], breakdown[1], team)
-            frozen_cols = (str(breakdown[0]), str(breakdown[1]))
+            frozen_cols = (scores365.fmt_score(breakdown[0]), scores365.fmt_score(breakdown[1]))
         final_period_text = "1st Set Final"
 
     elif market == "set1_total_games":
@@ -203,7 +203,7 @@ async def build_embed(
         decided = breakdown is not None
         if decided:
             result = scores365.grade_over_under(breakdown[0] + breakdown[1], direction, line)
-            frozen_cols = (str(breakdown[0]), str(breakdown[1]))
+            frozen_cols = (scores365.fmt_score(breakdown[0]), scores365.fmt_score(breakdown[1]))
         final_period_text = "1st Set Final"
 
     elif market == "match_total_games":
@@ -211,7 +211,7 @@ async def build_embed(
         home_games, away_games = scores365.tennis_match_games(game)
         if decided:
             result = scores365.grade_over_under(home_games + away_games, direction, line)
-        frozen_cols = (str(home_games), str(away_games))  # live-running, shown whether decided or not
+        frozen_cols = (scores365.fmt_score(home_games), scores365.fmt_score(away_games))  # live-running, shown whether decided or not
 
     elif market == "player_total_games":
         # Unlike match_total_games (both sides summed), this is one named
@@ -222,7 +222,7 @@ async def build_embed(
         player_games = home_games if scores365.names_match(home_competitor.get("name", ""), team) else away_games
         if decided:
             result = scores365.grade_over_under(player_games, direction, line)
-        frozen_cols = (str(home_games), str(away_games))  # live-running, shown whether decided or not
+        frozen_cols = (scores365.fmt_score(home_games), scores365.fmt_score(away_games))  # live-running, shown whether decided or not
 
     else:  # win_a_set
         decided_result = scores365.grade_win_a_set(game, team, direction)
