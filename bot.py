@@ -1699,8 +1699,54 @@ class SummaryPostView(discord.ui.View):
         self.stop()
 
 
+async def _send_summary_preview(interaction: discord.Interaction, channel_id: int, date_str: str, *, edit: bool):
+    """Shared by the direct-date path and the date-picker dropdown's
+    callback - the only difference is whether the response is a fresh
+    followup or an edit of the picker message already on screen."""
+    picks_list = dailylog.picks_for_date(channel_id, date_str)
+    if not picks_list:
+        content, embed, view = f"No picks logged for **{date_str}** in this channel.", None, None
+    else:
+        content = "Preview only - not posted yet. Click below to publish it to this channel."
+        embed = _build_summary_embed(date_str, picks_list)
+        view = SummaryPostView(channel_id, date_str, interaction.user.id)
+    if edit:
+        await interaction.response.edit_message(content=content, embed=embed, view=view)
+    else:
+        await interaction.followup.send(content=content, embed=embed, view=view, ephemeral=True)
+
+
+class _SummaryDateSelect(discord.ui.Select):
+    """One option per date that still has unreported picks logged in this
+    channel - the closest Discord components get to an actual calendar
+    widget (there's no native date-picker component for bots)."""
+
+    def __init__(self, channel_id: int, dates: list[str], requester_id: int):
+        options = [
+            discord.SelectOption(
+                label=d, description=f"{len(dailylog.picks_for_date(channel_id, d))} pick(s) not yet reported",
+            )
+            for d in dates
+        ]
+        super().__init__(placeholder="Pick a date to preview...", min_values=1, max_values=1, options=options)
+        self.channel_id = channel_id
+        self.requester_id = requester_id
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.requester_id:
+            await interaction.response.send_message("Only the person who ran /summary can use this.", ephemeral=True)
+            return
+        await _send_summary_preview(interaction, self.channel_id, self.values[0], edit=True)
+
+
+class SummaryDatePickView(discord.ui.View):
+    def __init__(self, channel_id: int, dates: list[str], requester_id: int):
+        super().__init__(timeout=300)
+        self.add_item(_SummaryDateSelect(channel_id, dates, requester_id))
+
+
 @tree.command(name="summary", description="Preview an end-of-day picks report for a date, then optionally post it")
-@app_commands.describe(date="Date to report on (defaults to today) - pick from the autocomplete list")
+@app_commands.describe(date="Date to report on - type to filter, or leave blank to pick from a dropdown")
 @app_commands.autocomplete(date=summary_date_autocomplete)
 async def summary(interaction: discord.Interaction, date: Optional[str] = None):
     if not _channel_allowed(interaction):
@@ -1710,18 +1756,17 @@ async def summary(interaction: discord.Interaction, date: Optional[str] = None):
     await interaction.response.defer(ephemeral=True)
 
     channel_id = _summary_dailylog_channel_id(interaction.channel_id)
-    date_str = date or dailylog.today_str()
-    picks_list = dailylog.picks_for_date(channel_id, date_str)
-    if not picks_list:
-        await interaction.followup.send(f"No picks logged for **{date_str}** in this channel.", ephemeral=True)
+
+    if date is None:
+        dates = dailylog.available_dates(channel_id, limit=25)
+        if not dates:
+            await interaction.followup.send("No picks logged for any date in this channel yet.", ephemeral=True)
+            return
+        view = SummaryDatePickView(channel_id, dates, interaction.user.id)
+        await interaction.followup.send("Pick a date to preview:", view=view, ephemeral=True)
         return
 
-    embed = _build_summary_embed(date_str, picks_list)
-    view = SummaryPostView(channel_id, date_str, interaction.user.id)
-    await interaction.followup.send(
-        content="Preview only - not posted yet. Click below to publish it to this channel.",
-        embed=embed, view=view, ephemeral=True,
-    )
+    await _send_summary_preview(interaction, channel_id, date, edit=False)
 
 
 def main():
