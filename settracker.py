@@ -288,7 +288,17 @@ async def build_embed(
 def grade_now(game: dict, market: str, team: Optional[str], direction: Optional[str], line: Optional[float]) -> tuple[bool, Optional[str]]:
     """Returns (decided, result) for the current game state - shared by
     _track_loop's polling and its final grading step so the two can't drift
-    apart on what counts as "decided" for a given market."""
+    apart on what counts as "decided" for a given market.
+
+    player_total_games previously had no branch here at all and silently
+    fell through to the win_a_set fallback below - confirmed live this made
+    _track_loop treat the pick as "decided" the moment the picked player won
+    their first set (win_a_set's own, much earlier decision point), grading
+    it via direction="yes"/"no" logic against an actual "under"/"over" pick,
+    which flips the result backwards on top of being premature. The embed
+    itself (built separately by build_embed, which already had the correct
+    is_finished gate) never visibly changed, so the card was left frozen
+    mid-match while a wrong result reaction still got added underneath it."""
     if market == "set1_moneyline":
         breakdown = scores365.tennis_first_set_result(game)
         if breakdown is None:
@@ -304,6 +314,13 @@ def grade_now(game: dict, market: str, team: Optional[str], direction: Optional[
             return False, None
         home_games, away_games = scores365.tennis_match_games(game)
         return True, scores365.grade_over_under(home_games + away_games, direction, line)
+    if market == "player_total_games":
+        if not scores365.is_finished(game):
+            return False, None
+        home_competitor = game.get("homeCompetitor") or {}
+        home_games, away_games = scores365.tennis_match_games(game)
+        player_games = home_games if scores365.names_match(home_competitor.get("name", ""), team) else away_games
+        return True, scores365.grade_over_under(player_games, direction, line)
     # win_a_set
     result = scores365.grade_win_a_set(game, team, direction)
     return result is not None, result

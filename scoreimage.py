@@ -78,7 +78,7 @@ _SCORE_DISPLAY_FONT_PATHS = [os.path.join(_FONTS_DIR, "Anton-Regular.ttf")] + _B
 _CARD_BG_COLOR = (45, 47, 51, 255)  # dark gray
 _CARD_BORDER_COLOR = (255, 255, 255, 25)
 _NAME_COLOR = (220, 221, 222, 255)  # discord's default light text
-_PILL_TEXT_COLOR = (255, 255, 255, 255)
+_PILL_TEXT_COLOR = (60, 60, 60, 255)  # dark gray - same regardless of the pill's own status color
 
 # A card's pill/score-digit color reflects its current lifecycle state -
 # hibernating before kickoff, live once it starts, then whichever of
