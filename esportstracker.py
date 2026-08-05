@@ -47,6 +47,7 @@ import discord
 
 import botlog
 import config
+import dailylog
 import esports
 import parlaytracker
 import pendingdelete
@@ -139,6 +140,7 @@ def stop_tracking(channel_id: int, sport: str, team_a: str, team_b: str, market:
     key = track_key(channel_id, sport, team_a, team_b, market)
     task = _active.pop(key, None)
     _forget(channel_id, sport, team_a, team_b, market)
+    dailylog.record_result(channel_id, "esportstracker", key, "void")
     for message_id, (c_id, s, a, b, m, _owner) in list(_message_owners.items()):
         if c_id == channel_id and s == sport and a == team_a and b == team_b and m == market:
             _message_owners.pop(message_id, None)
@@ -333,6 +335,7 @@ async def _track_loop(
         Voided to its parlay group instead of leaving the summary card
         frozen on whatever pending detail ("NOT STARTED"/"LIVE, Game N") it
         last reported, forever, once this task quietly stops polling."""
+        dailylog.record_result(channel_id, "esportstracker", key, "void")
         group_ids = parlaytracker.groups_for_leg(channel_id, "esportstracker", key)
         if group_ids:
             leg_label = f"{team_a} vs {team_b} - {pick_label(market, picked_team, direction, line, map_number, picked_maps, other_maps)}"
@@ -369,6 +372,7 @@ async def _track_loop(
                 # (right before kickoff) is too late: a leg with a kickoff
                 # hours away would still never appear on its parlay's
                 # summary card until it was basically already live anyway.
+                dailylog.touch(channel_id, "esportstracker", key, f"NOT STARTED - <t:{int(kickoff)}:f>")
                 group_ids = parlaytracker.groups_for_leg(channel_id, "esportstracker", key)
                 if group_ids:
                     pre_matchup = f"{series_data.get('home_team') or '?'} vs {series_data.get('away_team') or '?'}"
@@ -432,20 +436,22 @@ async def _track_loop(
                     leg_matchup = f"{series_data.get('home_team') or '?'} vs {series_data.get('away_team') or '?'}"
                     leg_pick = pick_label(market, picked_team, direction, line, map_number, picked_maps, other_maps)
                     leg_label = f"{leg_matchup} - {leg_pick}"
+                    dailylog.record_result(channel_id, "esportstracker", key, result)
                     group_ids = parlaytracker.groups_for_leg(channel_id, "esportstracker", key)
                     await parlaytracker.handle_leg_result(
                         message.channel, channel_id, message, "esportstracker", key, leg_label, result, group_ids,
                     )
                 break
 
+            if series_data["status"] == "notstarted" and series_data.get("start_epoch"):
+                detail = f"NOT STARTED - <t:{int(series_data['start_epoch'])}:f>"
+            elif series_data["status"] == "notstarted":
+                detail = "NOT STARTED"
+            else:
+                detail = f"LIVE, Game {series_data['current_game_number']}"
+            dailylog.touch(channel_id, "esportstracker", key, detail)
             group_ids = parlaytracker.groups_for_leg(channel_id, "esportstracker", key)
             if group_ids:
-                if series_data["status"] == "notstarted" and series_data.get("start_epoch"):
-                    detail = f"NOT STARTED - <t:{int(series_data['start_epoch'])}:f>"
-                elif series_data["status"] == "notstarted":
-                    detail = "NOT STARTED"
-                else:
-                    detail = f"LIVE, Game {series_data['current_game_number']}"
                 leg_matchup = f"{series_data.get('home_team') or '?'} vs {series_data.get('away_team') or '?'}"
                 leg_pick = pick_label(market, picked_team, direction, line, map_number, picked_maps, other_maps)
                 leg_label = f"{leg_matchup} - {leg_pick}"
@@ -498,6 +504,7 @@ def start_tracking(
     message: discord.Message, sport: str, team_a: str, team_b: str, channel_id: int, market: str, owner_id: int,
     picked_team: Optional[str] = None, direction: Optional[str] = None, line: Optional[float] = None,
     map_number: Optional[int] = None, picked_maps: Optional[int] = None, other_maps: Optional[int] = None,
+    section: Optional[str] = None, label: Optional[str] = None,
 ):
     key = track_key(channel_id, sport, team_a, team_b, market)
     if key in _active:
@@ -511,6 +518,10 @@ def start_tracking(
     _active[key] = task
     register_message(message.id, channel_id, sport, team_a, team_b, market, owner_id)
     _persist(channel_id, sport, team_a, team_b, market, message.id, owner_id, picked_team, direction, line, map_number, picked_maps, other_maps)
+    dailylog.record_pick(
+        channel_id, "esportstracker", key, section,
+        label or pick_label(market, picked_team, direction, line, map_number, picked_maps, other_maps), message.id,
+    )
 
 
 async def resume_all(client: discord.Client):

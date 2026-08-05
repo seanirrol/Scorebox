@@ -22,6 +22,7 @@ from discord import app_commands
 
 import botlog
 import config
+import dailylog
 import espn
 import espn_ufc
 import esports
@@ -179,7 +180,7 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
 async def _auto_track(
     channel: discord.abc.Messageable, sport_value: str, team: str,
     total_direction: Optional[str] = None, total_line: Optional[float] = None,
-    team_total: Optional[str] = None,
+    team_total: Optional[str] = None, section: Optional[str] = None, label: Optional[str] = None,
 ):
     """Mirrors /track's core logic for an auto-detected pick - posts via
     channel.send() since there's no interaction to reply to, and has no
@@ -218,7 +219,8 @@ async def _auto_track(
         botlog.event(f"⏭️ Not tracked: **{team}** — game `{game_id}` already finished, posted final score only")
         return
     tracker.start_tracking(
-        message, sport_id, game, channel.id, None, picked_team, total_direction, total_line, team_total
+        message, sport_id, game, channel.id, None, picked_team, total_direction, total_line, team_total,
+        section, label,
     )
     log.info("Auto-tracked pick '%s' -> game %s", team, game_id)
     botlog.event(f"✅ Tracked: **{team}** ({sport_value}) — game `{game_id}` in <#{channel.id}>")
@@ -228,6 +230,7 @@ async def _auto_f5(
     channel: discord.abc.Messageable, sport_value: str, team: str,
     total_direction: Optional[str] = None, total_line: Optional[float] = None,
     combined: bool = False, handicap_line: Optional[float] = None,
+    section: Optional[str] = None, label: Optional[str] = None,
 ):
     """F5 (First 5 Innings) picks - moneyline, team total, combined total, or
     handicap/run-line - settle after the 5th inning, not the whole game - see
@@ -262,7 +265,8 @@ async def _auto_f5(
         botlog.event(f"⏭️ Not tracked (F5): **{team}** — game `{game_id}` F5 already decided, posted final score only")
         return  # F5 was already decided by the time this pick was posted
     f5tracker.start_tracking(
-        message, sport_id, game, channel.id, None, picked_team, total_direction, total_line, handicap_line
+        message, sport_id, game, channel.id, None, picked_team, total_direction, total_line, handicap_line,
+        section, label,
     )
     log.info("Auto-tracked F5 pick '%s' -> game %s", team, game_id)
     botlog.event(f"✅ Tracked (F5): **{team}** ({sport_value}) — game `{game_id}` in <#{channel.id}>")
@@ -271,6 +275,7 @@ async def _auto_f5(
 async def _auto_playerprops(
     channel: discord.abc.Messageable, sport_value: str, player: str, stat: str,
     direction: Optional[str] = None, line: Optional[float] = None,
+    section: Optional[str] = None, label: Optional[str] = None,
 ):
     """Mirrors /playerprops' core logic for an auto-detected pick."""
     stat_key = espn.STAT_CATALOG.get(sport_value, {}).get(stat)
@@ -332,6 +337,7 @@ async def _auto_playerprops(
     proptracker.start_tracking(
         message, channel.id, event_id, entity["id"], entity["team_id"], entity["photo_url"],
         sport_value, stat_key, stat, entity["name"], None, direction, line, entity["team_name"],
+        section, label,
     )
     log.info("Auto-tracked player prop pick: %s - %s", player, stat)
     botlog.event(f"✅ Tracked (prop): **{player}** {stat} ({sport_value}) in <#{channel.id}>")
@@ -340,6 +346,7 @@ async def _auto_playerprops(
 async def _auto_tennis_playerprops(
     channel: discord.abc.Messageable, player: str, stat: str,
     direction: Optional[str] = None, line: Optional[float] = None,
+    section: Optional[str] = None, label: Optional[str] = None,
 ):
     """Tennis-only equivalent of _auto_playerprops, backed by 365scores
     instead of ESPN (which doesn't support tennis at all) - see
@@ -384,6 +391,7 @@ async def _auto_tennis_playerprops(
         return
     tennispropstracker.start_tracking(
         message, sport_id, game_id, channel.id, competitor_id, stat_name, stat, resolved_name, None, direction, line,
+        section, label,
     )
     log.info("Auto-tracked tennis player prop pick: %s - %s", player, stat)
     botlog.event(f"✅ Tracked (tennis prop): **{player}** {stat} in <#{channel.id}>")
@@ -411,6 +419,7 @@ async def _resolve_soccer_psf_match(game: dict, stat_name: str) -> tuple[Optiona
 async def _auto_soccer_playerprops(
     channel: discord.abc.Messageable, player: str, stat: str,
     direction: Optional[str] = None, line: Optional[float] = None,
+    section: Optional[str] = None, label: Optional[str] = None,
 ):
     """Soccer-only equivalent of _auto_playerprops, backed by 365scores
     instead of ESPN (which doesn't support soccer at all) - see
@@ -463,13 +472,16 @@ async def _auto_soccer_playerprops(
         return
     soccerpropstracker.start_tracking(
         message, game_id, channel.id, member_id, member_competitor_id, stat_name, photo_url,
-        stat, resolved_name, None, direction, line, fixture_path,
+        stat, resolved_name, None, direction, line, fixture_path, section, label,
     )
     log.info("Auto-tracked soccer player prop pick: %s - %s", player, stat)
     botlog.event(f"✅ Tracked (soccer prop): **{player}** {stat} in <#{channel.id}>")
 
 
-async def _auto_inning_runs(channel: discord.abc.Messageable, team: str, pick_type: str):
+async def _auto_inning_runs(
+    channel: discord.abc.Messageable, team: str, pick_type: str,
+    section: Optional[str] = None, label: Optional[str] = None,
+):
     """YRFI/NRFI picks settle after just the 1st inning, not the whole game
     - see inningtracker.py. Always baseball, so no sport param needed."""
     try:
@@ -505,12 +517,15 @@ async def _auto_inning_runs(channel: discord.abc.Messageable, team: str, pick_ty
     if espn.get_first_inning_breakdown(event) is not None:
         botlog.event(f"⏭️ Not tracked ({pick_type}): **{team}** — 1st inning already decided, posted final result only")
         return  # 1st inning was already decided by the time this pick was posted
-    inningtracker.start_tracking(message, channel.id, event_id, pick_type, entity["id"], None)
+    inningtracker.start_tracking(message, channel.id, event_id, pick_type, entity["id"], None, section, label)
     log.info("Auto-tracked inning-runs pick '%s' (%s) -> event %s", team, pick_type, event_id)
     botlog.event(f"✅ Tracked ({pick_type}): **{team}** — event `{event_id}` in <#{channel.id}>")
 
 
-async def _auto_inning1_result(channel: discord.abc.Messageable, team: str, pick: str):
+async def _auto_inning1_result(
+    channel: discord.abc.Messageable, team: str, pick: str,
+    section: Optional[str] = None, label: Optional[str] = None,
+):
     """1st Inning Result (3-way: team or Draw) picks settle after the 1st
     inning, not the whole game - see inning1tracker.py. Backed by 365scores
     (like f5tracker.py), not ESPN - always baseball."""
@@ -540,7 +555,7 @@ async def _auto_inning1_result(channel: discord.abc.Messageable, team: str, pick
     if await asyncio.to_thread(scores365.innings_breakdown, game_id, inning1tracker.THROUGH_INNING) is not None:
         botlog.event(f"⏭️ Not tracked (1st inning result): **{team}** — game `{game_id}` already decided, posted final result only")
         return  # already decided by the time this pick was posted
-    inning1tracker.start_tracking(message, sport_id, game, channel.id, None, team, pick)
+    inning1tracker.start_tracking(message, sport_id, game, channel.id, None, team, pick, section, label)
     log.info("Auto-tracked 1st-inning-result pick '%s' (%s) -> game %s", team, pick, game_id)
     botlog.event(f"✅ Tracked (1st inning result): **{team}** ({pick}) — game `{game_id}` in <#{channel.id}>")
 
@@ -548,6 +563,7 @@ async def _auto_inning1_result(channel: discord.abc.Messageable, team: str, pick
 async def _auto_tennis_market(
     channel: discord.abc.Messageable, team: str, market: str,
     direction: Optional[str] = None, line: Optional[float] = None,
+    section: Optional[str] = None, label: Optional[str] = None,
 ):
     """Tennis "extra market" picks (1st Set ML/Total Games, Match Total
     Games, Win a Set) all settle on some part of the match rather than the
@@ -583,7 +599,7 @@ async def _auto_tennis_market(
     if decided:
         botlog.event(f"⏭️ Not tracked ({market}): **{team}** — game `{game_id}` already decided, posted final result only")
         return  # already decided by the time this pick was posted
-    settracker.start_tracking(message, sport_id, game, channel.id, market, None, team, direction, line)
+    settracker.start_tracking(message, sport_id, game, channel.id, market, None, team, direction, line, section, label)
     log.info("Auto-tracked tennis-market (%s) pick '%s' -> game %s", market, team, game_id)
     botlog.event(f"✅ Tracked ({market}): **{team}** — game `{game_id}` in <#{channel.id}>")
 
@@ -591,27 +607,28 @@ async def _auto_tennis_market(
 async def _auto_ufc(
     channel: discord.abc.Messageable, fighter: str,
     total_direction: Optional[str] = None, total_line: Optional[float] = None,
+    section: Optional[str] = None, label: Optional[str] = None,
 ):
     """UFC picks - fight moneyline or round total - settle once the bout
     itself finishes, not tied to any wider game clock. Backed by
     espn_ufc.py (365scores has no MMA coverage at all). fighter is only
     used to look the bout up; round-total picks aren't graded on either
     fighter specifically (see ufctracker.py's combined-total-style mode)."""
-    label = "UFC round total" if total_direction else "UFC"
+    category_label = "UFC round total" if total_direction else "UFC"
     try:
         result = await asyncio.to_thread(espn_ufc.find_ufc_fight, fighter)
     except espn_ufc.EspnUfcError as e:
         log.info("Auto-UFC: couldn't reach ESPN for '%s': %s", fighter, e)
-        botlog.event(f"❌ Not tracked ({label}): **{fighter}** — couldn't reach ESPN: {e}")
+        botlog.event(f"❌ Not tracked ({category_label}): **{fighter}** — couldn't reach ESPN: {e}")
         return
     if not result:
         log.info("Auto-UFC: no bout found for '%s'", fighter)
-        botlog.event(f"❌ Not tracked ({label}): **{fighter}** — no bout found")
+        botlog.event(f"❌ Not tracked ({category_label}): **{fighter}** — no bout found")
         return
     event, competition, fighter_competitor, league_slug = result
     competition_id = competition["id"]
     if ufctracker.is_tracked(channel.id, competition_id):
-        botlog.event(f"⏭️ Skipped ({label}): **{fighter}** — bout `{competition_id}` already being tracked in <#{channel.id}>")
+        botlog.event(f"⏭️ Skipped ({category_label}): **{fighter}** — bout `{competition_id}` already being tracked in <#{channel.id}>")
         return
 
     fighter_id = None if total_direction else fighter_competitor["id"]
@@ -624,34 +641,35 @@ async def _auto_ufc(
     await message.add_reaction(TRASH_EMOJI)
 
     if espn_ufc.is_finished(competition):
-        botlog.event(f"⏭️ Not tracked ({label}): **{fighter}** — bout `{competition_id}` already finished, posted final result only")
+        botlog.event(f"⏭️ Not tracked ({category_label}): **{fighter}** — bout `{competition_id}` already finished, posted final result only")
         return
     ufctracker.start_tracking(
         message, channel.id, league_slug, event["id"], competition_id, competition["date"], None, event["name"],
-        fighter_id, fighter_name, total_direction, total_line,
+        fighter_id, fighter_name, total_direction, total_line, section, label,
     )
     log.info("Auto-tracked UFC pick '%s' -> bout %s", fighter, competition_id)
-    botlog.event(f"✅ Tracked ({label}): **{fighter}** — bout `{competition_id}` in <#{channel.id}>")
+    botlog.event(f"✅ Tracked ({category_label}): **{fighter}** — bout `{competition_id}` in <#{channel.id}>")
 
 
 async def _auto_esports(
     channel: discord.abc.Messageable, sport: str, team_a: str, team_b: str, market: str,
     picked_team: Optional[str] = None, direction: Optional[str] = None, line: Optional[float] = None,
     map_number: Optional[int] = None, picked_maps: Optional[int] = None, other_maps: Optional[int] = None,
+    section: Optional[str] = None, label: Optional[str] = None,
 ):
     """Dota 2 / CS2 picks - six markets, all settling on the overall series
     or one specific map within it - see esports.py/esportstracker.py.
     Unlike every other sport in this bot, both team_a and team_b (not just
     one) are needed to resolve the match at all - hawk.live/GosuGamers have
     no "find any match for this one team" lookup the way 365scores/ESPN do."""
-    label = f"esports {market}"
+    category_label = f"esports {market}"
     series_data = await asyncio.to_thread(esports.get_series, sport, team_a, team_b)
     if not series_data:
         log.info("Auto-esports (%s): no match found for '%s v %s'", market, team_a, team_b)
-        botlog.event(f"❌ Not tracked ({label}): **{team_a} v {team_b}** — no match found")
+        botlog.event(f"❌ Not tracked ({category_label}): **{team_a} v {team_b}** — no match found")
         return
     if esportstracker.is_tracked(channel.id, sport, team_a, team_b, market):
-        botlog.event(f"⏭️ Skipped ({label}): **{team_a} v {team_b}** — already being tracked in <#{channel.id}>")
+        botlog.event(f"⏭️ Skipped ({category_label}): **{team_a} v {team_b}** — already being tracked in <#{channel.id}>")
         return
 
     embed, file = await esportstracker.build_embed(
@@ -665,14 +683,14 @@ async def _auto_esports(
 
     decided, _ = esportstracker.grade_now(series_data, market, picked_team, direction, line, map_number, picked_maps, other_maps)
     if decided:
-        botlog.event(f"⏭️ Not tracked ({label}): **{team_a} v {team_b}** — already decided, posted final result only")
+        botlog.event(f"⏭️ Not tracked ({category_label}): **{team_a} v {team_b}** — already decided, posted final result only")
         return
     esportstracker.start_tracking(
         message, sport, team_a, team_b, channel.id, market, None,
-        picked_team, direction, line, map_number, picked_maps, other_maps,
+        picked_team, direction, line, map_number, picked_maps, other_maps, section, label,
     )
     log.info("Auto-tracked esports (%s) pick '%s v %s' -> %s", market, team_a, team_b, sport)
-    botlog.event(f"✅ Tracked ({label}): **{team_a} v {team_b}** in <#{channel.id}>")
+    botlog.event(f"✅ Tracked ({category_label}): **{team_a} v {team_b}** in <#{channel.id}>")
 
 
 @client.event
@@ -698,106 +716,134 @@ async def on_message(message: discord.Message):
         return
 
     for pick in parsed:
+        # section/label are the verbatim picks-channel header ("MLB", "WNBA",
+        # ...) and raw pick line text (see picks.py's parse_picks_message) -
+        # threaded into every start_tracking call below purely so /summary
+        # can later report on this pick; None for anything picks.py couldn't
+        # attribute to a header (dailylog.record_pick no-ops in that case).
+        section, label = pick.get("section"), pick.get("raw")
         try:
             if pick["kind"] == "track":
-                await _auto_track(target_channel, pick["sport"], pick["team"])
+                await _auto_track(target_channel, pick["sport"], pick["team"], section=section, label=label)
             elif pick["kind"] == "total":
-                await _auto_track(target_channel, pick["sport"], pick["team"], pick["direction"], pick["line"])
+                await _auto_track(
+                    target_channel, pick["sport"], pick["team"], pick["direction"], pick["line"],
+                    section=section, label=label,
+                )
             elif pick["kind"] == "team_total":
                 await _auto_track(
-                    target_channel, pick["sport"], pick["team"], pick["direction"], pick["line"], pick["team"]
+                    target_channel, pick["sport"], pick["team"], pick["direction"], pick["line"], pick["team"],
+                    section=section, label=label,
                 )
             elif pick["kind"] == "f5_moneyline":
-                await _auto_f5(target_channel, pick["sport"], pick["team"])
+                await _auto_f5(target_channel, pick["sport"], pick["team"], section=section, label=label)
             elif pick["kind"] == "f5_total":
-                await _auto_f5(target_channel, pick["sport"], pick["team"], pick["direction"], pick["line"])
+                await _auto_f5(
+                    target_channel, pick["sport"], pick["team"], pick["direction"], pick["line"],
+                    section=section, label=label,
+                )
             elif pick["kind"] == "f5_combined_total":
                 await _auto_f5(
-                    target_channel, pick["sport"], pick["team"], pick["direction"], pick["line"], combined=True
+                    target_channel, pick["sport"], pick["team"], pick["direction"], pick["line"], combined=True,
+                    section=section, label=label,
                 )
             elif pick["kind"] == "f5_handicap":
-                await _auto_f5(target_channel, pick["sport"], pick["team"], handicap_line=pick["line"])
+                await _auto_f5(
+                    target_channel, pick["sport"], pick["team"], handicap_line=pick["line"],
+                    section=section, label=label,
+                )
             elif pick["kind"] == "inning_runs":
-                await _auto_inning_runs(target_channel, pick["team"], pick["pick_type"])
+                await _auto_inning_runs(target_channel, pick["team"], pick["pick_type"], section=section, label=label)
             elif pick["kind"] == "inning1_result":
-                await _auto_inning1_result(target_channel, pick["team"], pick["pick"])
+                await _auto_inning1_result(target_channel, pick["team"], pick["pick"], section=section, label=label)
             elif pick["kind"] == "set1_moneyline":
-                await _auto_tennis_market(target_channel, pick["team"], "set1_moneyline")
+                await _auto_tennis_market(target_channel, pick["team"], "set1_moneyline", section=section, label=label)
             elif pick["kind"] == "tennis_set1_total_games":
                 await _auto_tennis_market(
-                    target_channel, pick["team"], "set1_total_games", pick["direction"], pick["line"]
+                    target_channel, pick["team"], "set1_total_games", pick["direction"], pick["line"],
+                    section=section, label=label,
                 )
             elif pick["kind"] == "tennis_match_total_games":
                 await _auto_tennis_market(
-                    target_channel, pick["team"], "match_total_games", pick["direction"], pick["line"]
+                    target_channel, pick["team"], "match_total_games", pick["direction"], pick["line"],
+                    section=section, label=label,
                 )
             elif pick["kind"] == "tennis_player_total_games":
                 await _auto_tennis_market(
-                    target_channel, pick["team"], "player_total_games", pick["direction"], pick["line"]
+                    target_channel, pick["team"], "player_total_games", pick["direction"], pick["line"],
+                    section=section, label=label,
                 )
             elif pick["kind"] == "tennis_win_a_set":
-                await _auto_tennis_market(target_channel, pick["team"], "win_a_set", pick["direction"])
+                await _auto_tennis_market(
+                    target_channel, pick["team"], "win_a_set", pick["direction"], section=section, label=label,
+                )
             elif pick["kind"] == "tennis_playerprops":
                 await _auto_tennis_playerprops(
-                    target_channel, pick["player"], pick["stat"], pick.get("direction"), pick.get("line")
+                    target_channel, pick["player"], pick["stat"], pick.get("direction"), pick.get("line"),
+                    section=section, label=label,
                 )
             elif pick["kind"] == "soccer_playerprops":
                 await _auto_soccer_playerprops(
-                    target_channel, pick["player"], pick["stat"], pick.get("direction"), pick.get("line")
+                    target_channel, pick["player"], pick["stat"], pick.get("direction"), pick.get("line"),
+                    section=section, label=label,
                 )
             elif pick["kind"] == "ufc_moneyline":
-                await _auto_ufc(target_channel, pick["team"])
+                await _auto_ufc(target_channel, pick["team"], section=section, label=label)
             elif pick["kind"] == "ufc_round_total":
-                await _auto_ufc(target_channel, pick["team"], pick["direction"], pick["line"])
+                await _auto_ufc(
+                    target_channel, pick["team"], pick["direction"], pick["line"], section=section, label=label,
+                )
             elif pick["kind"] == "esports_match_winner":
                 await _auto_esports(
                     target_channel, pick["sport"], pick["team_a"], pick["team_b"], "match_winner",
-                    picked_team=pick["team"],
+                    picked_team=pick["team"], section=section, label=label,
                 )
             elif pick["kind"] == "esports_map_handicap":
                 await _auto_esports(
                     target_channel, pick["sport"], pick["team_a"], pick["team_b"], "map_handicap",
-                    picked_team=pick["team"], line=pick["line"],
+                    picked_team=pick["team"], line=pick["line"], section=section, label=label,
                 )
             elif pick["kind"] == "esports_total_maps":
                 await _auto_esports(
                     target_channel, pick["sport"], pick["team_a"], pick["team_b"], "total_maps",
-                    direction=pick["direction"], line=pick["line"],
+                    direction=pick["direction"], line=pick["line"], section=section, label=label,
                 )
             elif pick["kind"] == "esports_map_winner":
                 await _auto_esports(
                     target_channel, pick["sport"], pick["team_a"], pick["team_b"], "map_winner",
-                    picked_team=pick["team"], map_number=pick["map_number"],
+                    picked_team=pick["team"], map_number=pick["map_number"], section=section, label=label,
                 )
             elif pick["kind"] == "esports_match_and_map_winner":
                 await _auto_esports(
                     target_channel, pick["sport"], pick["team_a"], pick["team_b"], "match_and_map_winner",
-                    picked_team=pick["team"], map_number=pick["map_number"],
+                    picked_team=pick["team"], map_number=pick["map_number"], section=section, label=label,
                 )
             elif pick["kind"] == "esports_win_at_least_one_map":
                 await _auto_esports(
                     target_channel, pick["sport"], pick["team_a"], pick["team_b"], "win_at_least_one_map",
-                    picked_team=pick["team"], direction=pick["direction"],
+                    picked_team=pick["team"], direction=pick["direction"], section=section, label=label,
                 )
             elif pick["kind"] == "esports_correct_score":
                 await _auto_esports(
                     target_channel, pick["sport"], pick["team_a"], pick["team_b"], "correct_score",
                     picked_team=pick["team"], picked_maps=pick["picked_maps"], other_maps=pick["other_maps"],
+                    section=section, label=label,
                 )
             elif pick["kind"] == "esports_total_kills":
                 await _auto_esports(
                     target_channel, pick["sport"], pick["team_a"], pick["team_b"], "total_kills",
-                    direction=pick["direction"], line=pick["line"],
+                    direction=pick["direction"], line=pick["line"], section=section, label=label,
                 )
             elif pick["kind"] == "esports_team_total_kills":
                 await _auto_esports(
                     target_channel, pick["sport"], pick["team_a"], pick["team_b"], "team_total_kills",
                     picked_team=pick["team"], direction=pick["direction"], line=pick["line"],
+                    section=section, label=label,
                 )
             else:
                 await _auto_playerprops(
                     target_channel, pick["sport"], pick["player"], pick["stat"],
-                    pick.get("direction"), pick.get("line"),
+                    pick.get("direction"), pick.get("line"), section=section, label=label,
                 )
         except Exception as e:
             log.warning("Failed to auto-track pick %s: %s", pick, e)
@@ -1557,6 +1603,125 @@ async def parlay(
         summary = await parlaytracker.remove_legs(interaction.channel, interaction.channel_id, identifier, message_ids)
     botlog.event(f"🎟️ Parlay **{identifier}** ({action.name}) in <#{interaction.channel_id}>: {summary} — by **{interaction.user}**")
     await interaction.followup.send(summary, ephemeral=True)
+
+
+def _summary_dailylog_channel_id(interaction_channel_id: int) -> int:
+    """Picks are parsed in a picks-source channel but tracked (and logged)
+    under its mapped target scores channel (see config.PICKS_CHANNEL_MAP) -
+    /summary needs to read dailylog under that target id even when run from
+    the picks channel itself. Falls back to the invoking channel id
+    unchanged if it isn't a mapped picks channel (e.g. run directly in the
+    scores channel)."""
+    return config.PICKS_CHANNEL_MAP.get(interaction_channel_id, interaction_channel_id)
+
+
+def _summary_status_line(entry: dict) -> str:
+    """Never blank, per the report's whole point: a resolved pick gets its
+    win/loss/push/void mark; anything still pending gets a neutral mark plus
+    whatever live detail its tracker last reported (NOT STARTED/LIVE/
+    Postponed), so a reader can see *why* it has no result yet instead of
+    the line just vanishing or looking unfinished."""
+    if dailylog.is_final(entry["status"]):
+        return f"{dailylog.result_mark(entry['status'])} {entry['label']}"
+    detail = entry["detail"]
+    if detail.startswith("LIVE"):
+        mark = "🟡"
+    elif detail.startswith("⏸️"):
+        mark, detail = "⏸️", detail[2:].strip()
+    else:
+        mark = "⏳"
+    return f"{mark} {entry['label']} — {detail}"
+
+
+def _build_summary_embed(date_str: str, picks_list: list[dict]) -> discord.Embed:
+    sections: dict[str, list[dict]] = {}
+    for entry in picks_list:
+        sections.setdefault(entry["section"], []).append(entry)
+
+    blocks = []
+    for section, entries in sections.items():
+        lines = [_summary_status_line(e) for e in entries]
+        blocks.append(f"**{section}**\n" + "\n".join(lines))
+
+    return discord.Embed(
+        title=f"Summary Report ({date_str})",
+        description="\n\n".join(blocks)[:4096],
+        color=0x2B2D31,
+    )
+
+
+async def summary_date_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+    channel_id = _summary_dailylog_channel_id(interaction.channel_id)
+    dates = dailylog.available_dates(channel_id)
+    matches = [d for d in dates if current in d]
+    return [app_commands.Choice(name=d, value=d) for d in matches[:25]]
+
+
+class SummaryPostView(discord.ui.View):
+    """Lets /summary's ephemeral preview actually get posted, or dropped,
+    without a second command invocation. Re-reads dailylog at click time
+    (not the preview-time snapshot) since a pending pick can resolve, or
+    someone else can post/re-preview the same date, in the time between
+    preview and click - stale data here would either double-post already-
+    reported picks or show a result that's since gone final."""
+
+    def __init__(self, channel_id: int, date_str: str, requester_id: int):
+        super().__init__(timeout=900)
+        self.channel_id = channel_id
+        self.date_str = date_str
+        self.requester_id = requester_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.requester_id:
+            await interaction.response.send_message("Only the person who ran /summary can use this.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="Post to channel", style=discord.ButtonStyle.success)
+    async def post(self, interaction: discord.Interaction, button: discord.ui.Button):
+        picks_list = dailylog.picks_for_date(self.channel_id, self.date_str)
+        if not picks_list:
+            await interaction.response.edit_message(
+                content=f"Nothing left to post for **{self.date_str}** — already posted or empty.", embed=None, view=None,
+            )
+            self.stop()
+            return
+        embed = _build_summary_embed(self.date_str, picks_list)
+        await interaction.channel.send(embed=embed)
+        dailylog.mark_reported(self.channel_id, self.date_str)
+        botlog.event(f"📋 Summary report ({self.date_str}) posted in <#{interaction.channel_id}> by **{interaction.user}**")
+        await interaction.response.edit_message(content="Posted.", embed=None, view=None)
+        self.stop()
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content="Cancelled - nothing posted.", embed=None, view=None)
+        self.stop()
+
+
+@tree.command(name="summary", description="Preview an end-of-day picks report for a date, then optionally post it")
+@app_commands.describe(date="Date to report on (defaults to today) - pick from the autocomplete list")
+@app_commands.autocomplete(date=summary_date_autocomplete)
+async def summary(interaction: discord.Interaction, date: Optional[str] = None):
+    if not _channel_allowed(interaction):
+        await _reject_wrong_channel(interaction)
+        return
+    _log_command(interaction, date=date)
+    await interaction.response.defer(ephemeral=True)
+
+    channel_id = _summary_dailylog_channel_id(interaction.channel_id)
+    date_str = date or dailylog.today_str()
+    picks_list = dailylog.picks_for_date(channel_id, date_str)
+    if not picks_list:
+        await interaction.followup.send(f"No picks logged for **{date_str}** in this channel.", ephemeral=True)
+        return
+
+    embed = _build_summary_embed(date_str, picks_list)
+    view = SummaryPostView(channel_id, date_str, interaction.user.id)
+    await interaction.followup.send(
+        content="Preview only - not posted yet. Click below to publish it to this channel.",
+        embed=embed, view=view, ephemeral=True,
+    )
 
 
 def main():

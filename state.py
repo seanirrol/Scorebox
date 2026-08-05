@@ -27,6 +27,7 @@ UFC_FILE = os.path.join(_DIR, "ufc_state.json")
 SOCCER_PROPS_FILE = os.path.join(_DIR, "soccer_props_state.json")
 PARLAY_FILE = os.path.join(_DIR, "parlay_state.json")
 ESPORTS_FILE = os.path.join(_DIR, "esports_state.json")
+DAILY_LOG_FILE = os.path.join(_DIR, "daily_log_state.json")
 
 
 def _load(path: str) -> dict[str, Any]:
@@ -138,3 +139,11 @@ def load_esports() -> dict[str, Any]:
 
 def save_esports(data: dict[str, Any]):
     _save(ESPORTS_FILE, data)
+
+
+def load_daily_log() -> dict[str, Any]:
+    return _load(DAILY_LOG_FILE)
+
+
+def save_daily_log(data: dict[str, Any]):
+    _save(DAILY_LOG_FILE, data)

@@ -1308,6 +1308,7 @@ def parse_picks_message(content: str) -> list[dict]:
             current_category, description = m.group(1).strip(), m.group(2).strip()
             pick = _parse_with_category(current_category, description)
             if pick:
+                pick["section"], pick["raw"] = current_category, description
                 results.append(pick)
             continue
 
@@ -1360,6 +1361,7 @@ def parse_picks_message(content: str) -> list[dict]:
         # case still falls through to the stricter _is_simple_pick_name check.
         pick = _parse_description(sport, current_category.lower(), _clean_line(bare), is_prop_category=False)
         if pick and pick["kind"] != "track":
+            pick["section"], pick["raw"] = current_category, bare
             results.append(pick)
             continue
 
@@ -1372,11 +1374,12 @@ def parse_picks_message(content: str) -> list[dict]:
         # previously dropped entirely, since only a bare name/ML (no
         # matchup) was ever recognized here.
         if pick and pick["kind"] == "track" and any(sep in bare for sep in (" vs. ", " vs ", " v. ", " v ")):
+            pick["section"], pick["raw"] = current_category, bare
             results.append(pick)
             continue
 
         name = _is_simple_pick_name(_clean_line(bare))
         if not name:
             continue
-        results.append({"kind": "track", "sport": sport, "team": name})
+        results.append({"kind": "track", "sport": sport, "team": name, "section": current_category, "raw": bare})
     return results

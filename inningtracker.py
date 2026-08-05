@@ -24,6 +24,7 @@ import discord
 
 import botlog
 import config
+import dailylog
 import espn
 import parlaytracker
 import pendingdelete
@@ -113,6 +114,7 @@ def stop_tracking(channel_id: int, event_id, pick_type: str) -> bool:
     key = track_key(channel_id, event_id, pick_type)
     task = _active.pop(key, None)
     _forget(channel_id, event_id, pick_type)
+    dailylog.record_result(channel_id, "inningtracker", key, "void")
     for message_id, (c_id, e_id, p_type, _owner) in list(_message_owners.items()):
         if c_id == channel_id and e_id == event_id and p_type == pick_type:
             _message_owners.pop(message_id, None)
@@ -266,6 +268,7 @@ async def _track_loop(message: discord.Message, channel_id: int, event_id, pick_
         Voided to its parlay group instead of leaving the summary card
         frozen on whatever pending detail it last reported, forever, once
         this task quietly stops polling."""
+        dailylog.record_result(channel_id, "inningtracker", key, "void")
         group_ids = parlaytracker.groups_for_leg(channel_id, "inningtracker", key)
         if not group_ids:
             return
@@ -317,6 +320,7 @@ async def _track_loop(message: discord.Message, channel_id: int, event_id, pick_
                 # (right before kickoff) is too late: a leg with a kickoff
                 # hours away would still never appear on its parlay's
                 # summary card until it was basically already live anyway.
+                dailylog.touch(channel_id, "inningtracker", key, f"NOT STARTED - <t:{int(kickoff)}:f>")
                 group_ids = parlaytracker.groups_for_leg(channel_id, "inningtracker", key)
                 if group_ids:
                     pre_competitors = comp.get("competitors", [])
@@ -375,6 +379,7 @@ async def _track_loop(message: discord.Message, channel_id: int, event_id, pick_
                         await message.add_reaction(reaction)
                     except discord.HTTPException as e:
                         log.warning("Failed to add result reaction: %s", e)
+                dailylog.record_result(channel_id, "inningtracker", key, result)
                 group_ids = parlaytracker.groups_for_leg(channel_id, "inningtracker", key)
                 await parlaytracker.handle_leg_result(
                     message.channel, channel_id, message, "inningtracker", key, leg_label, result, group_ids,
@@ -410,6 +415,7 @@ async def _track_loop(message: discord.Message, channel_id: int, event_id, pick_
                         await message.add_reaction(_RESULT_REACTIONS["void"])
                     except discord.HTTPException as e:
                         log.warning("Failed to add void reaction: %s", e)
+                    dailylog.record_result(channel_id, "inningtracker", key, "void")
                     group_ids = parlaytracker.groups_for_leg(channel_id, "inningtracker", key)
                     await parlaytracker.handle_leg_result(
                         message.channel, channel_id, message, "inningtracker", key, leg_label, "void", group_ids,
@@ -425,6 +431,7 @@ async def _track_loop(message: discord.Message, channel_id: int, event_id, pick_
                 # the normal per-poll update below so the card and any
                 # parlay leg keep showing "Postponed" instead of freezing.
                 deadline = max(deadline, time.monotonic() + (grace_deadline - now))
+                dailylog.touch(channel_id, "inningtracker", key, "⏸️ Postponed - waiting for a new schedule")
             elif postponed_since is not None:
                 # ESPN cleared the postponed status on its own (a new
                 # schedule got published) - drop the marker and let normal
@@ -435,17 +442,19 @@ async def _track_loop(message: discord.Message, channel_id: int, event_id, pick_
                     data[key].pop("postponed_since", None)
                     state.save_innings(data)
 
+            comp = (event.get("header", {}).get("competitions") or [{}])[0]
+            if comp.get("status", {}).get("type", {}).get("state") == "pre":
+                try:
+                    kickoff = int(datetime.datetime.fromisoformat(comp["date"].replace("Z", "+00:00")).timestamp())
+                    detail = f"NOT STARTED - <t:{kickoff}:f>"
+                except (KeyError, ValueError):
+                    detail = "NOT STARTED"
+            else:
+                detail = f"LIVE, {comp.get('status', {}).get('type', {}).get('detail') or 'Live'}"
+            if not espn.is_postponed(event):
+                dailylog.touch(channel_id, "inningtracker", key, detail)
             group_ids = parlaytracker.groups_for_leg(channel_id, "inningtracker", key)
             if group_ids:
-                comp = (event.get("header", {}).get("competitions") or [{}])[0]
-                if comp.get("status", {}).get("type", {}).get("state") == "pre":
-                    try:
-                        kickoff = int(datetime.datetime.fromisoformat(comp["date"].replace("Z", "+00:00")).timestamp())
-                        detail = f"NOT STARTED - <t:{kickoff}:f>"
-                    except (KeyError, ValueError):
-                        detail = "NOT STARTED"
-                else:
-                    detail = f"LIVE, {comp.get('status', {}).get('type', {}).get('detail') or 'Live'}"
                 await parlaytracker.report_leg_progress(
                     message.channel, channel_id, message, "inningtracker", key, leg_label, detail, group_ids,
                 )
@@ -479,7 +488,10 @@ async def _track_loop(message: discord.Message, channel_id: int, event_id, pick_
         _forget(channel_id, event_id, pick_type)
 
 
-def start_tracking(message: discord.Message, channel_id: int, event_id, pick_type: str, team_id: str, owner_id: int):
+def start_tracking(
+    message: discord.Message, channel_id: int, event_id, pick_type: str, team_id: str, owner_id: int,
+    section: Optional[str] = None, label: Optional[str] = None,
+):
     key = track_key(channel_id, event_id, pick_type)
     if key in _active:
         return
@@ -487,6 +499,7 @@ def start_tracking(message: discord.Message, channel_id: int, event_id, pick_typ
     _active[key] = task
     register_message(message.id, channel_id, event_id, pick_type, owner_id)
     _persist(channel_id, event_id, pick_type, message.id, team_id, owner_id)
+    dailylog.record_pick(channel_id, "inningtracker", key, section, label or _PICK_LABELS[pick_type], message.id)
 
 
 async def resume_all(client: discord.Client):

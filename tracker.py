@@ -12,6 +12,7 @@ import discord
 
 import botlog
 import config
+import dailylog
 import parlaytracker
 import pendingdelete
 import scoreimage
@@ -259,6 +260,7 @@ def stop_tracking(channel_id: int, game_id) -> bool:
     key = track_key(channel_id, game_id)
     task = _active_tracks.pop(key, None)
     _forget(channel_id, game_id)
+    dailylog.record_result(channel_id, "tracker", key, "void")
     for message_id, (c_id, g_id, _owner) in list(_message_owners.items()):
         if c_id == channel_id and g_id == game_id:
             _message_owners.pop(message_id, None)
@@ -335,6 +337,7 @@ async def _track_loop(
         Voided to its parlay group instead of leaving the summary card
         frozen on whatever pending detail it last reported, forever, once
         this task quietly stops polling."""
+        dailylog.record_result(channel_id, "tracker", key, "void")
         group_ids = parlaytracker.groups_for_leg(channel_id, "tracker", key)
         if not group_ids:
             return
@@ -395,6 +398,7 @@ async def _track_loop(
                 # matter: a leg with a kickoff hours away would still never
                 # appear on its parlay's summary card until it was
                 # basically already live anyway.
+                dailylog.touch(channel_id, "tracker", key, f"NOT STARTED - <t:{int(kickoff)}:f>")
                 group_ids = parlaytracker.groups_for_leg(channel_id, "tracker", key)
                 if group_ids:
                     pre_embed, _pre_file = await build_embed(
@@ -462,6 +466,7 @@ async def _track_loop(
                         except discord.HTTPException as e:
                             log.warning("Failed to add result reaction: %s", e)
                     if result:
+                        dailylog.record_result(channel_id, "tracker", key, result)
                         group_ids = parlaytracker.groups_for_leg(channel_id, "tracker", key)
                         await parlaytracker.handle_leg_result(
                             message.channel, channel_id, message, "tracker", key, leg_label, result, group_ids,
@@ -469,13 +474,14 @@ async def _track_loop(
                 pendingdelete.start(channel_id, message, embed.description or "")
                 break
 
+            kickoff = scores365.start_epoch(game)
+            if scores365.map_status_type(game.get("statusGroup")) == "notstarted":
+                detail = f"NOT STARTED - <t:{int(kickoff)}:f>" if kickoff else "NOT STARTED"
+            else:
+                detail = f"LIVE, {scores365.status_line(game, sport_id)}"
+            dailylog.touch(channel_id, "tracker", key, detail)
             group_ids = parlaytracker.groups_for_leg(channel_id, "tracker", key)
             if group_ids:
-                kickoff = scores365.start_epoch(game)
-                if scores365.map_status_type(game.get("statusGroup")) == "notstarted":
-                    detail = f"NOT STARTED - <t:{int(kickoff)}:f>" if kickoff else "NOT STARTED"
-                else:
-                    detail = f"LIVE, {scores365.status_line(game, sport_id)}"
                 await parlaytracker.report_leg_progress(
                     message.channel, channel_id, message, "tracker", key, leg_label, detail, group_ids,
                 )
@@ -513,6 +519,7 @@ async def _track_loop(
                 except discord.HTTPException as e:
                     log.warning("Failed to add void reaction: %s", e)
                 pendingdelete.start(channel_id, message, embed.description or "")
+                dailylog.record_result(channel_id, "tracker", key, "void")
                 group_ids = parlaytracker.groups_for_leg(channel_id, "tracker", key)
                 await parlaytracker.handle_leg_result(
                     message.channel, channel_id, message, "tracker", key, leg_label, "void", group_ids,
@@ -536,7 +543,7 @@ async def _track_loop(
 def start_tracking(
     message: discord.Message, sport_id: int, game: dict, channel_id: int, owner_id: int,
     picked_team: Optional[str] = None, total_direction: Optional[str] = None, total_line: Optional[float] = None,
-    team_total: Optional[str] = None,
+    team_total: Optional[str] = None, section: Optional[str] = None, label: Optional[str] = None,
 ):
     game_id = game["id"]
     key = track_key(channel_id, game_id)
@@ -548,6 +555,9 @@ def start_tracking(
     _active_tracks[key] = task
     register_message(message.id, channel_id, game_id, owner_id)
     _persist(channel_id, game_id, message.id, sport_id, owner_id, picked_team, total_direction, total_line, team_total)
+    if not label:
+        label = f"{(game.get('homeCompetitor') or {}).get('name', '?')} vs {(game.get('awayCompetitor') or {}).get('name', '?')}"
+    dailylog.record_pick(channel_id, "tracker", key, section, label, message.id)
 
 
 async def resume_all(client: discord.Client):

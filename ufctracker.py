@@ -27,6 +27,7 @@ import discord
 
 import botlog
 import config
+import dailylog
 import espn_ufc
 import parlaytracker
 import pendingdelete
@@ -114,6 +115,7 @@ def stop_tracking(channel_id: int, competition_id) -> bool:
     key = track_key(channel_id, competition_id)
     task = _active.pop(key, None)
     _forget(channel_id, competition_id)
+    dailylog.record_result(channel_id, "ufctracker", key, "void")
     for message_id, (c_id, comp_id, _owner) in list(_message_owners.items()):
         if c_id == channel_id and comp_id == competition_id:
             _message_owners.pop(message_id, None)
@@ -259,6 +261,7 @@ async def _track_loop(
         Voided to its parlay group instead of leaving the summary card
         frozen on whatever pending detail it last reported, forever, once
         this task quietly stops polling."""
+        dailylog.record_result(channel_id, "ufctracker", key, "void")
         group_ids = parlaytracker.groups_for_leg(channel_id, "ufctracker", key)
         if not group_ids:
             return
@@ -314,6 +317,7 @@ async def _track_loop(
                 # (right before start) is too late: a leg with a kickoff
                 # hours away would still never appear on its parlay's
                 # summary card until it was basically already live anyway.
+                dailylog.touch(channel_id, "ufctracker", key, f"NOT STARTED - <t:{int(kickoff)}:f>")
                 group_ids = parlaytracker.groups_for_leg(channel_id, "ufctracker", key)
                 if group_ids:
                     pre_competitors = refreshed[0].get("competitors", [])
@@ -407,6 +411,7 @@ async def _track_loop(
                     except discord.HTTPException as e:
                         log.warning("Failed to add result reaction: %s", e)
                 if result:
+                    dailylog.record_result(channel_id, "ufctracker", key, result)
                     group_ids = parlaytracker.groups_for_leg(channel_id, "ufctracker", key)
                     await parlaytracker.handle_leg_result(
                         message.channel, channel_id, message, "ufctracker", key, leg_label, result, group_ids,
@@ -414,13 +419,14 @@ async def _track_loop(
                 pendingdelete.start(channel_id, message, embed.description or "")
                 break
 
+            kickoff = espn_ufc.start_epoch(competition)
+            if competition.get("status", {}).get("type", {}).get("state") == "pre":
+                detail = f"NOT STARTED - <t:{int(kickoff)}:f>" if kickoff else "NOT STARTED"
+            else:
+                detail = f"LIVE, {espn_ufc.status_text(competition)}"
+            dailylog.touch(channel_id, "ufctracker", key, detail)
             group_ids = parlaytracker.groups_for_leg(channel_id, "ufctracker", key)
             if group_ids:
-                kickoff = espn_ufc.start_epoch(competition)
-                if competition.get("status", {}).get("type", {}).get("state") == "pre":
-                    detail = f"NOT STARTED - <t:{int(kickoff)}:f>" if kickoff else "NOT STARTED"
-                else:
-                    detail = f"LIVE, {espn_ufc.status_text(competition)}"
                 await parlaytracker.report_leg_progress(
                     message.channel, channel_id, message, "ufctracker", key, leg_label, detail, group_ids,
                 )
@@ -459,6 +465,7 @@ def start_tracking(
     message: discord.Message, channel_id: int, league_slug: str, event_id, competition_id, competition_date: str, owner_id: int,
     event_name: str, fighter_id=None, fighter_name: Optional[str] = None,
     total_direction: Optional[str] = None, total_line: Optional[float] = None,
+    section: Optional[str] = None, label: Optional[str] = None,
 ):
     key = track_key(channel_id, competition_id)
     if key in _active:
@@ -475,6 +482,14 @@ def start_tracking(
         channel_id, league_slug, event_id, competition_id, competition_date, message.id, owner_id,
         event_name, fighter_id, fighter_name, total_direction, total_line,
     )
+    if not label:
+        if fighter_id is not None:
+            label = f"{fighter_name} ML"
+        elif total_direction and total_line is not None:
+            label = f"Fight {total_direction.title()} {total_line:g} Rounds"
+        else:
+            label = event_name
+    dailylog.record_pick(channel_id, "ufctracker", key, section, label, message.id)
 
 
 async def resume_all(client: discord.Client):
