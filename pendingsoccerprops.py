@@ -25,7 +25,7 @@ log = logging.getLogger("scorebox.pendingsoccerprops")
 
 # Comfortably shorter than the 2h search window, so a pick doesn't sit
 # resolved-but-unclaimed for long once its match actually enters it.
-RETRY_INTERVAL_SECONDS = 10 * 60
+RETRY_INTERVAL_SECONDS = 30 * 60
 # Picks are virtually always same-day, but this covers a pick dropped up to
 # two days ahead of kickoff without retrying forever on a bad name.
 MAX_WAIT_SECONDS = 48 * 3600
