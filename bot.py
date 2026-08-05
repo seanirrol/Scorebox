@@ -32,6 +32,7 @@ import inningtracker
 import parlaytracker
 import pendingdelete
 import picks
+import playerstatsfootball
 import proptracker
 import scores365
 import settracker
@@ -388,6 +389,25 @@ async def _auto_tennis_playerprops(
     botlog.event(f"✅ Tracked (tennis prop): **{player}** {stat} in <#{channel.id}>")
 
 
+async def _resolve_soccer_psf_match(game: dict, stat_name: str) -> tuple[Optional[str], Optional[dict]]:
+    """Resolves + fetches the matching playerstats.football fixture for a
+    stat backed by that source (see playerstatsfootball.py) - a no-op
+    (None, None) for the original scores365-backed stats, which don't need
+    it. Returns (fixture_path, psf_match) so the caller can persist the
+    path for soccerpropstracker._track_loop to keep polling directly on
+    every later cycle, without re-resolving from scratch each time."""
+    if stat_name not in playerstatsfootball.STAT_CATALOG:
+        return None, None
+    home = (game.get("homeCompetitor") or {}).get("name", "")
+    away = (game.get("awayCompetitor") or {}).get("name", "")
+    kickoff = scores365.start_epoch(game)
+    fixture_path = await asyncio.to_thread(playerstatsfootball.find_fixture, home, away, kickoff)
+    if not fixture_path:
+        return None, None
+    html = await asyncio.to_thread(playerstatsfootball.fetch_path, fixture_path)
+    return fixture_path, (playerstatsfootball.parse_match(html) if html else None)
+
+
 async def _auto_soccer_playerprops(
     channel: discord.abc.Messageable, player: str, stat: str,
     direction: Optional[str] = None, line: Optional[float] = None,
@@ -398,7 +418,10 @@ async def _auto_soccer_playerprops(
     "competitor"), a soccer player has to be found via their match's own
     roster (scores365.find_soccer_player), since 365scores' bulk game list
     only carries club names."""
-    stat_name = scores365.SOCCER_STAT_CATALOG.get(stat)
+    if stat in scores365.SOCCER_STAT_CATALOG or stat in playerstatsfootball.STAT_CATALOG:
+        stat_name = stat
+    else:
+        stat_name = None
     if not stat_name:
         botlog.event(f"❌ Not tracked (soccer prop): **{player}** {stat} — unknown stat")
         return
@@ -420,8 +443,14 @@ async def _auto_soccer_playerprops(
         botlog.event(f"⏭️ Skipped (soccer prop): **{player}** {stat} — already being tracked in <#{channel.id}>")
         return
 
+    fixture_path, psf_match = await _resolve_soccer_psf_match(game, stat_name)
+    if stat_name in playerstatsfootball.STAT_CATALOG and not fixture_path:
+        botlog.event(f"❌ Not tracked (soccer prop): **{player}** {stat} — couldn't find this match on our extended stats source")
+        return
+
     embed, file = await soccerpropstracker.build_embed(
-        game, member_id, member_competitor_id, resolved_name, photo_url, stat, stat_name, direction, line
+        game, member_id, member_competitor_id, resolved_name, photo_url, stat, stat_name, direction, line,
+        psf_match=psf_match,
     )
     message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
     embed.set_footer(text=soccerpropstracker._footer_text(message.id))
@@ -434,7 +463,7 @@ async def _auto_soccer_playerprops(
         return
     soccerpropstracker.start_tracking(
         message, game_id, channel.id, member_id, member_competitor_id, stat_name, photo_url,
-        stat, resolved_name, None, direction, line,
+        stat, resolved_name, None, direction, line, fixture_path,
     )
     log.info("Auto-tracked soccer player prop pick: %s - %s", player, stat)
     botlog.event(f"✅ Tracked (soccer prop): **{player}** {stat} in <#{channel.id}>")
@@ -869,7 +898,7 @@ async def stat_autocomplete(interaction: discord.Interaction, current: str) -> l
     if sport_key == "tennis":
         labels = list(scores365.TENNIS_STAT_CATALOG.keys())
     elif sport_key == "soccer":
-        labels = list(scores365.SOCCER_STAT_CATALOG.keys())
+        labels = list(scores365.SOCCER_STAT_CATALOG.keys()) + list(playerstatsfootball.STAT_CATALOG.keys())
     else:
         labels = list(espn.STAT_CATALOG.get(sport_key, {}).keys())
     matches = [label for label in labels if current.lower() in label.lower()]
@@ -926,7 +955,7 @@ async def _playerprops_tennis(interaction: discord.Interaction, player: str, sta
 async def _playerprops_soccer(interaction: discord.Interaction, player: str, stat: str):
     """Soccer-only equivalent of /playerprops' ESPN-backed body, using
     365scores instead (see soccerpropstracker.py)."""
-    stat_name = scores365.SOCCER_STAT_CATALOG.get(stat)
+    stat_name = stat if (stat in scores365.SOCCER_STAT_CATALOG or stat in playerstatsfootball.STAT_CATALOG) else None
     if not stat_name:
         await interaction.followup.send(
             f"Unknown stat '{stat}' for Soccer - pick one from the autocomplete list.", ephemeral=True
@@ -948,8 +977,16 @@ async def _playerprops_soccer(interaction: discord.Interaction, player: str, sta
     resolved_name = member.get("name", player)
     photo_url = scores365.athlete_photo_url(member)
 
+    fixture_path, psf_match = await _resolve_soccer_psf_match(game, stat_name)
+    if stat_name in playerstatsfootball.STAT_CATALOG and not fixture_path:
+        await interaction.followup.send(
+            f"Found **{resolved_name}**'s match, but couldn't find it on our extended stats source for {stat}.",
+            ephemeral=True,
+        )
+        return
+
     embed, file = await soccerpropstracker.build_embed(
-        game, member_id, member_competitor_id, resolved_name, photo_url, stat, stat_name
+        game, member_id, member_competitor_id, resolved_name, photo_url, stat, stat_name, psf_match=psf_match,
     )
     message = await interaction.followup.send(embed=embed, file=file, wait=True)
 
@@ -965,7 +1002,7 @@ async def _playerprops_soccer(interaction: discord.Interaction, player: str, sta
     if not scores365.is_finished(game):
         soccerpropstracker.start_tracking(
             message, game_id, interaction.channel_id, member_id, member_competitor_id, stat_name, photo_url,
-            stat, resolved_name, interaction.user.id,
+            stat, resolved_name, interaction.user.id, fixture_path=fixture_path,
         )
     botlog.event(f"✅ Tracked (manual, soccer prop): **{player}** {stat} in <#{interaction.channel_id}>, by **{interaction.user}**")
 

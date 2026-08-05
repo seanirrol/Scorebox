@@ -18,6 +18,7 @@ import re
 from typing import Optional
 
 import espn
+import playerstatsfootball
 import scores365
 
 # Bracket category (lowercased, "Props" suffix stripped) -> our sport key.
@@ -408,13 +409,19 @@ def _parse_tennis_player_prop(description: str) -> Optional[dict]:
 def _match_soccer_stat_label(raw_stat: str) -> Optional[str]:
     """Soccer-only equivalent of _match_stat_label - ESPN doesn't support
     soccer at all (see espn.py's module docstring), so soccer props are
-    backed by scores365.SOCCER_STAT_CATALOG instead."""
+    backed by two catalogs combined: scores365.SOCCER_STAT_CATALOG (Goals/
+    Assists/Yellow Cards/Red Cards) and playerstatsfootball.STAT_CATALOG
+    (Shots/Shots on Target/Tackles/Fouls Committed/Fouls Drawn/Dispossessed/
+    Offsides/Key Passes - see that module's docstring for why these needed
+    a second source). Which catalog a label came from doesn't matter here -
+    that's resolved later, at tracking time, by whichever of the two
+    actually has the label (see soccerpropstracker._current_value)."""
     raw = raw_stat.strip().lower()
-    catalog = scores365.SOCCER_STAT_CATALOG
-    for label in catalog:
+    labels = list(scores365.SOCCER_STAT_CATALOG) + list(playerstatsfootball.STAT_CATALOG)
+    for label in labels:
         if label.lower() == raw:
             return label
-    for label in catalog:
+    for label in labels:
         if raw in label.lower() or label.lower() in raw:
             return label
     return None

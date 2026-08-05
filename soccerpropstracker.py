@@ -1,18 +1,31 @@
 #!/usr/bin/env python3
 """
-Manages background tasks for soccer player prop picks (Goals, Assists,
-Yellow Cards, Red Cards) - backed by 365scores' single-game detail endpoint
-(see scores365.soccer_player_stat/find_soccer_player). ESPN doesn't support
-soccer at all (see espn.py's module docstring). Shots/Shots on Target aren't
-supported here - confirmed live 365scores only exposes those as team-level
-aggregates, never broken out per player.
+Manages background tasks for soccer player prop picks - two data sources
+depending on the stat. Goals/Assists/Yellow Cards/Red Cards are backed by
+365scores' single-game detail endpoint (see scores365.soccer_player_stat/
+find_soccer_player), unchanged since before playerstatsfootball.py existed.
+Shots/Shots on Target/Tackles/Fouls Committed/Fouls Drawn/Dispossessed/
+Offsides/Key Passes are backed by playerstats.football instead (see that
+module's docstring) - 365scores only exposes those as team-level
+aggregates, never broken out per player, confirmed live. ESPN doesn't
+support soccer at all either way (see espn.py's module docstring).
+
+365scores is ALWAYS still used for match status/timing/hibernation/kickoff
+- even a playerstatsfootball-backed pick's game/notstarted/finished/
+interrupted state comes from scores365.soccer_game_detail exactly as
+before. playerstatsfootball only ever supplies the live stat VALUE itself,
+via a separately-resolved fixture_path (see _current_value below) - this
+keeps every other piece of this tracker (hibernation, void-on-timeout,
+interrupted-match handling, parlay progress reporting) identical regardless
+of which source a given pick's stat comes from.
 
 Unlike tennis (where the "competitor" in 365scores' data model already IS
 the player), a soccer "competitor" is a club - finding which live/imminent
 match a named player is even in requires opening each candidate match's own
-roster (see find_soccer_player), and grading is done by counting matching
-play-by-play events for that player rather than reading a stat value
-directly (365scores has no continuous per-player stat endpoint for soccer).
+roster (see find_soccer_player), and 365scores-sourced stats are graded by
+counting matching play-by-play events for that player rather than reading a
+stat value directly (365scores has no continuous per-player stat endpoint
+for soccer).
 
 Mirrors proptracker.py's team-affiliated card layout (team name + opponent,
 not just "vs opponent" like tennis) since a soccer player genuinely has a
@@ -35,6 +48,7 @@ import botlog
 import config
 import parlaytracker
 import pendingdelete
+import playerstatsfootball
 import scoreimage
 import scores365
 import state
@@ -100,14 +114,14 @@ def unregister_message(message_id: int):
 def _persist(
     channel_id: int, game_id, member_id, stat_name: str, message_id: int,
     member_competitor_id, photo_url: Optional[str], stat_label: str, player_name: str, owner_id: int,
-    direction: Optional[str] = None, line: Optional[float] = None,
+    direction: Optional[str] = None, line: Optional[float] = None, fixture_path: Optional[str] = None,
 ):
     data = state.load_soccer_props()
     data[prop_key(channel_id, game_id, member_id, stat_name)] = {
         "channel_id": channel_id, "game_id": game_id, "member_id": member_id, "stat_name": stat_name,
         "message_id": message_id, "member_competitor_id": member_competitor_id, "photo_url": photo_url,
         "stat_label": stat_label, "player_name": player_name, "owner_id": owner_id,
-        "direction": direction, "line": line,
+        "direction": direction, "line": line, "fixture_path": fixture_path,
     }
     state.save_soccer_props(data)
 
@@ -135,11 +149,22 @@ def _fmt_value(v) -> str:
     return "-" if v is None else str(v)
 
 
+def _current_value(game: dict, member_id, player_name: str, stat_name: str, psf_match: Optional[dict]):
+    """Routes to whichever source actually carries this stat - see this
+    module's own docstring. psf_match is the already-fetched-and-parsed
+    playerstats.football match dict (or None if that fetch failed/hasn't
+    happened yet this cycle) - this function never fetches anything itself,
+    same fetch/render separation as every other tracker in this codebase."""
+    if stat_name in playerstatsfootball.STAT_CATALOG:
+        return playerstatsfootball.get_player_stat(psf_match, player_name, stat_name) if psf_match else None
+    return scores365.soccer_player_stat(game, member_id, stat_name)
+
+
 async def build_embed(
     game: dict, member_id, member_competitor_id, player_name: str, photo_url: Optional[str],
     stat_label: str, stat_name: str,
     direction: Optional[str] = None, line: Optional[float] = None, force_result: Optional[str] = None,
-    message_id: Optional[int] = None,
+    message_id: Optional[int] = None, psf_match: Optional[dict] = None,
 ) -> tuple[discord.Embed, discord.File]:
     """force_result overrides the color/title as if this were already graded
     that way, regardless of the game's actual live status - used only by
@@ -152,7 +177,7 @@ async def build_embed(
 
     current_value = None
     if status != "notstarted":
-        current_value = scores365.soccer_player_stat(game, member_id, stat_name)
+        current_value = _current_value(game, member_id, player_name, stat_name, psf_match)
 
     result = None
     if status == "finished" and direction is not None and line is not None:
@@ -215,7 +240,7 @@ async def build_embed(
 async def _track_loop(
     message: discord.Message, game_id, channel_id: int, member_id, member_competitor_id, stat_name: str,
     photo_url: Optional[str], stat_label: str, player_name: str, owner_id: int,
-    direction: Optional[str] = None, line: Optional[float] = None,
+    direction: Optional[str] = None, line: Optional[float] = None, fixture_path: Optional[str] = None,
 ):
     key = prop_key(channel_id, game_id, member_id, stat_name)
     deadline = time.monotonic() + config.MAX_TRACK_HOURS * 3600
@@ -293,6 +318,7 @@ async def _track_loop(
 
     await asyncio.sleep(random.uniform(0, config.UPDATE_INTERVAL_SECONDS))
     game = None
+    psf_match = None
     try:
         while time.monotonic() < deadline:
             await asyncio.sleep(config.UPDATE_INTERVAL_SECONDS)
@@ -351,9 +377,13 @@ async def _track_loop(
                 continue
             consecutive_misses = 0
 
+            if fixture_path:
+                psf_html = await asyncio.to_thread(playerstatsfootball.fetch_path, fixture_path)
+                psf_match = playerstatsfootball.parse_match(psf_html) if psf_html else None
+
             embed, file = await build_embed(
                 game, member_id, member_competitor_id, player_name, photo_url, stat_label, stat_name, direction, line,
-                message_id=message.id,
+                message_id=message.id, psf_match=psf_match,
             )
             leg_home = game.get("homeCompetitor") or {}
             leg_away = game.get("awayCompetitor") or {}
@@ -368,7 +398,7 @@ async def _track_loop(
                 await _repost_final(embed, file)
                 _persist(
                     channel_id, game_id, member_id, stat_name, message.id, member_competitor_id, photo_url,
-                    stat_label, player_name, owner_id, direction, line,
+                    stat_label, player_name, owner_id, direction, line, fixture_path,
                 )
                 continue
 
@@ -376,7 +406,7 @@ async def _track_loop(
                 await _repost_final(embed, file)
 
                 if direction is not None and line is not None:
-                    current_value = scores365.soccer_player_stat(game, member_id, stat_name)
+                    current_value = _current_value(game, member_id, player_name, stat_name, psf_match)
                     result = scores365.grade_over_under(current_value, direction, line)
                     reaction = _RESULT_REACTIONS.get(result)
                     if reaction:
@@ -426,7 +456,7 @@ async def _track_loop(
             if game and scores365.is_interrupted(game):
                 embed, file = await build_embed(
                     game, member_id, member_competitor_id, player_name, photo_url, stat_label, stat_name,
-                    direction, line, force_result="void", message_id=message.id,
+                    direction, line, force_result="void", message_id=message.id, psf_match=psf_match,
                 )
                 embed.title = _RESULT_TITLES["void"]
                 await _repost_final(embed, file)
@@ -458,7 +488,7 @@ async def _track_loop(
 def start_tracking(
     message: discord.Message, game_id, channel_id: int, member_id, member_competitor_id, stat_name: str,
     photo_url: Optional[str], stat_label: str, player_name: str, owner_id: int,
-    direction: Optional[str] = None, line: Optional[float] = None,
+    direction: Optional[str] = None, line: Optional[float] = None, fixture_path: Optional[str] = None,
 ):
     key = prop_key(channel_id, game_id, member_id, stat_name)
     if key in _active:
@@ -466,14 +496,14 @@ def start_tracking(
     task = asyncio.create_task(
         _track_loop(
             message, game_id, channel_id, member_id, member_competitor_id, stat_name, photo_url,
-            stat_label, player_name, owner_id, direction, line,
+            stat_label, player_name, owner_id, direction, line, fixture_path,
         )
     )
     _active[key] = task
     register_message(message.id, channel_id, game_id, member_id, stat_name, owner_id)
     _persist(
         channel_id, game_id, member_id, stat_name, message.id, member_competitor_id, photo_url,
-        stat_label, player_name, owner_id, direction, line,
+        stat_label, player_name, owner_id, direction, line, fixture_path,
     )
 
 
@@ -513,6 +543,6 @@ async def resume_all(client: discord.Client):
         start_tracking(
             message, game_id, channel_id, member_id, entry["member_competitor_id"], stat_name,
             entry.get("photo_url"), entry["stat_label"], entry["player_name"], entry.get("owner_id"),
-            entry.get("direction"), entry.get("line"),
+            entry.get("direction"), entry.get("line"), entry.get("fixture_path"),
         )
         log.info("Resumed soccer prop tracking for %s in channel %s", entry["player_name"], channel_id)
