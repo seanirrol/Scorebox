@@ -23,11 +23,21 @@ will be from the picks being tracked on that same day."
 A pick's `date` is fixed at creation time (record_pick) and never moves,
 even if grading happens after an Eastern midnight rollover - the report is
 about when a pick was POSTED, not when it finished.
-"""
+
+Every entry also carries `origin_channel_id` - the picks-SOURCE channel the
+pick was parsed from (message.channel.id in bot.py's on_message, captured
+before it resolves to that source's own mapped target/scores channel via
+config.PICKS_CHANNEL_MAP) - distinct from `channel_id`, which is whatever
+channel_id the owning tracker module itself uses internally (the target
+channel, for message ownership/throttling/etc., unrelated to reporting).
+/summary's config.SUMMARY_ROUTES groups one or more origin channels under a
+single report destination, so every read here filters by a SET of origin
+ids rather than one - e.g. two separate picks-source channels whose reports
+both belong combined into the same downstream report."""
 
 import datetime
 import logging
-from typing import Optional
+from typing import Iterable, Optional
 
 import state
 from scores365 import EASTERN
@@ -54,6 +64,7 @@ def today_str() -> str:
 
 def record_pick(
     channel_id: int, module: str, track_key_str: str, section: Optional[str], label: str, message_id: int,
+    origin_channel_id: Optional[int] = None,
 ):
     """Called once, right alongside each tracker's start_tracking. No-op if
     section is None - i.e. this pick didn't come from the auto-track
@@ -63,7 +74,7 @@ def record_pick(
         return
     data = state.load_daily_log()
     data[_key(channel_id, module, track_key_str)] = {
-        "channel_id": channel_id, "module": module, "date": today_str(),
+        "channel_id": channel_id, "origin_channel_id": origin_channel_id, "module": module, "date": today_str(),
         "section": section, "label": label, "message_id": message_id,
         "status": "pending", "detail": _PENDING_DETAIL, "reported": False,
     }
@@ -101,40 +112,45 @@ def record_result(channel_id: int, module: str, track_key_str: str, status: str)
     state.save_daily_log(data)
 
 
-def picks_for_date(channel_id: int, date_str: str) -> list[dict]:
-    """Every not-yet-reported pick logged for this channel on this date,
-    in original tracking order (insertion order - both dict iteration and
-    JSON round-tripping preserve it)."""
+def picks_for_date(origin_channel_ids: Iterable[int], date_str: str) -> list[dict]:
+    """Every not-yet-reported pick whose origin_channel_id is in
+    origin_channel_ids, logged on this date, in original tracking order
+    (insertion order - both dict iteration and JSON round-tripping preserve
+    it). Pass a single int for a one-channel route."""
+    ids = {origin_channel_ids} if isinstance(origin_channel_ids, int) else set(origin_channel_ids)
     data = state.load_daily_log()
     return [
         entry for entry in data.values()
-        if entry["channel_id"] == channel_id and entry["date"] == date_str and not entry["reported"]
+        if entry.get("origin_channel_id") in ids and entry["date"] == date_str and not entry["reported"]
     ]
 
 
-def mark_reported(channel_id: int, date_str: str):
+def mark_reported(origin_channel_ids: Iterable[int], date_str: str):
     """Called only when a rendered report is actually POSTED to the
-    channel (never on a preview) - every currently-unreported pick for
-    that date is flagged so a later /summary for the same date (catching
-    picks that were still pending the first time around) doesn't repeat
-    ones already published."""
+    channel (never on a preview) - every currently-unreported pick from any
+    of these origin channels on that date is flagged so a later /summary
+    for the same date (catching picks that were still pending the first
+    time around) doesn't repeat ones already published."""
+    ids = {origin_channel_ids} if isinstance(origin_channel_ids, int) else set(origin_channel_ids)
     data = state.load_daily_log()
     changed = False
     for entry in data.values():
-        if entry["channel_id"] == channel_id and entry["date"] == date_str and not entry["reported"]:
+        if entry.get("origin_channel_id") in ids and entry["date"] == date_str and not entry["reported"]:
             entry["reported"] = True
             changed = True
     if changed:
         state.save_daily_log(data)
 
 
-def available_dates(channel_id: int, limit: int = 14) -> list[str]:
+def available_dates(origin_channel_ids: Iterable[int], limit: int = 14) -> list[str]:
     """Most-recent-first distinct dates with at least one not-yet-reported
-    pick for this channel - used for the /summary date autocomplete."""
+    pick from any of these origin channels - used for the /summary date
+    autocomplete/dropdown."""
+    ids = {origin_channel_ids} if isinstance(origin_channel_ids, int) else set(origin_channel_ids)
     data = state.load_daily_log()
     dates = {
         entry["date"] for entry in data.values()
-        if entry["channel_id"] == channel_id and not entry["reported"]
+        if entry.get("origin_channel_id") in ids and not entry["reported"]
     }
     return sorted(dates, reverse=True)[:limit]
 

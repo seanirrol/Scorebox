@@ -472,7 +472,7 @@ def start_tracking(
     message: discord.Message, sport_id: int, game_id, channel_id: int, competitor_id, stat_name: str,
     stat_label: str, player_name: str, owner_id: int,
     direction: Optional[str] = None, line: Optional[float] = None,
-    section: Optional[str] = None, label: Optional[str] = None,
+    section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
 ):
     key = prop_key(channel_id, game_id, competitor_id, stat_name)
     if key in _active:
@@ -483,7 +483,9 @@ def start_tracking(
     _active[key] = task
     register_message(message.id, channel_id, game_id, competitor_id, stat_name, owner_id)
     _persist(channel_id, game_id, competitor_id, stat_name, message.id, sport_id, stat_label, player_name, owner_id, direction, line)
-    dailylog.record_pick(channel_id, "tennispropstracker", key, section, label or player_name, message.id)
+    dailylog.record_pick(
+        channel_id, "tennispropstracker", key, section, label or player_name, message.id, origin_channel_id,
+    )
 
 
 async def resume_all(client: discord.Client):

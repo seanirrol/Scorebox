@@ -490,7 +490,7 @@ async def _track_loop(message: discord.Message, channel_id: int, event_id, pick_
 
 def start_tracking(
     message: discord.Message, channel_id: int, event_id, pick_type: str, team_id: str, owner_id: int,
-    section: Optional[str] = None, label: Optional[str] = None,
+    section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
 ):
     key = track_key(channel_id, event_id, pick_type)
     if key in _active:
@@ -499,7 +499,9 @@ def start_tracking(
     _active[key] = task
     register_message(message.id, channel_id, event_id, pick_type, owner_id)
     _persist(channel_id, event_id, pick_type, message.id, team_id, owner_id)
-    dailylog.record_pick(channel_id, "inningtracker", key, section, label or _PICK_LABELS[pick_type], message.id)
+    dailylog.record_pick(
+        channel_id, "inningtracker", key, section, label or _PICK_LABELS[pick_type], message.id, origin_channel_id,
+    )
 
 
 async def resume_all(client: discord.Client):

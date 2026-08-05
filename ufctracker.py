@@ -465,7 +465,7 @@ def start_tracking(
     message: discord.Message, channel_id: int, league_slug: str, event_id, competition_id, competition_date: str, owner_id: int,
     event_name: str, fighter_id=None, fighter_name: Optional[str] = None,
     total_direction: Optional[str] = None, total_line: Optional[float] = None,
-    section: Optional[str] = None, label: Optional[str] = None,
+    section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
 ):
     key = track_key(channel_id, competition_id)
     if key in _active:
@@ -489,7 +489,7 @@ def start_tracking(
             label = f"Fight {total_direction.title()} {total_line:g} Rounds"
         else:
             label = event_name
-    dailylog.record_pick(channel_id, "ufctracker", key, section, label, message.id)
+    dailylog.record_pick(channel_id, "ufctracker", key, section, label, message.id, origin_channel_id)
 
 
 async def resume_all(client: discord.Client):

@@ -57,3 +57,25 @@ _summary_allowed_user_ids = os.environ.get("SUMMARY_ALLOWED_USER_IDS", "").strip
 SUMMARY_ALLOWED_USER_IDS: set[int] = {
     int(uid.strip()) for uid in _summary_allowed_user_ids.split(",") if uid.strip()
 }
+
+# Groups one or more picks-source channels' reports into a single combined
+# /summary report, posted to (and only invokable from) one destination
+# channel - e.g. two separate picks channels that should still produce one
+# merged end-of-day report. /summary refuses to run in any channel that
+# isn't a destination here - there's no separate "which channels can this
+# command run in" setting the way ALLOWED_CHANNEL_ID works for every other
+# command. A destination can be one of its own origins (a picks channel
+# that reports on itself). Format (comma-separated
+# "origin1|origin2|...:destination" routes):
+#   SUMMARY_ROUTES=111:111,222|333:222
+_summary_routes_raw = os.environ.get("SUMMARY_ROUTES", "").strip()
+SUMMARY_ROUTES: dict[int, tuple[int, ...]] = {}
+for _route in _summary_routes_raw.split(","):
+    _route = _route.strip()
+    if not _route:
+        continue
+    _origins_part, _, _dest_part = _route.partition(":")
+    _dest_part = _dest_part.strip()
+    _origin_ids = tuple(int(o.strip()) for o in _origins_part.split("|") if o.strip())
+    if _dest_part and _origin_ids:
+        SUMMARY_ROUTES[int(_dest_part)] = _origin_ids

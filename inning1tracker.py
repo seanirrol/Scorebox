@@ -435,7 +435,7 @@ async def _track_loop(
 
 def start_tracking(
     message: discord.Message, sport_id: int, game: dict, channel_id: int, owner_id: int, team: str, pick: str,
-    section: Optional[str] = None, label: Optional[str] = None,
+    section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
 ):
     game_id = game["id"]
     key = track_key(channel_id, game_id)
@@ -446,7 +446,10 @@ def start_tracking(
     register_message(message.id, channel_id, game_id, owner_id)
     _persist(channel_id, game_id, message.id, sport_id, owner_id, team, pick)
     pick_label = "Draw" if pick.upper() == "DRAW" else pick
-    dailylog.record_pick(channel_id, "inning1tracker", key, section, label or f"1st Inning Result: {pick_label}", message.id)
+    dailylog.record_pick(
+        channel_id, "inning1tracker", key, section, label or f"1st Inning Result: {pick_label}", message.id,
+        origin_channel_id,
+    )
 
 
 async def resume_all(client: discord.Client):

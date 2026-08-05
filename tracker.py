@@ -544,6 +544,7 @@ def start_tracking(
     message: discord.Message, sport_id: int, game: dict, channel_id: int, owner_id: int,
     picked_team: Optional[str] = None, total_direction: Optional[str] = None, total_line: Optional[float] = None,
     team_total: Optional[str] = None, section: Optional[str] = None, label: Optional[str] = None,
+    origin_channel_id: Optional[int] = None,
 ):
     game_id = game["id"]
     key = track_key(channel_id, game_id)
@@ -557,7 +558,7 @@ def start_tracking(
     _persist(channel_id, game_id, message.id, sport_id, owner_id, picked_team, total_direction, total_line, team_total)
     if not label:
         label = f"{(game.get('homeCompetitor') or {}).get('name', '?')} vs {(game.get('awayCompetitor') or {}).get('name', '?')}"
-    dailylog.record_pick(channel_id, "tracker", key, section, label, message.id)
+    dailylog.record_pick(channel_id, "tracker", key, section, label, message.id, origin_channel_id)
 
 
 async def resume_all(client: discord.Client):

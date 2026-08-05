@@ -561,7 +561,7 @@ async def _track_loop(
 def start_tracking(
     message: discord.Message, sport_id: int, game: dict, channel_id: int, market: str, owner_id: int,
     team: Optional[str] = None, direction: Optional[str] = None, line: Optional[float] = None,
-    section: Optional[str] = None, label: Optional[str] = None,
+    section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
 ):
     game_id = game["id"]
     key = track_key(channel_id, game_id, market, team)
@@ -575,6 +575,7 @@ def start_tracking(
     _persist(channel_id, game_id, market, message.id, sport_id, owner_id, team, direction, line)
     dailylog.record_pick(
         channel_id, "settracker", key, section, label or pick_label(market, team, direction, line), message.id,
+        origin_channel_id,
     )
 
 
