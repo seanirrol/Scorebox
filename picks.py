@@ -170,11 +170,18 @@ _PLAYER_TOTAL_GAMES_AFTER_RE = re.compile(
 # generic player-prop parser (see the "if sport == tennis" no-matchup
 # block) so "Games" doesn't get silently rejected as an unrecognized stat
 # the way "Breaks" was before _TENNIS_STAT_ALIASES.
+#
+# The dash itself is optional - confirmed live a real "Felix
+# Auger-Aliassime Under 21.5 Total Games" pick had no separating dash at
+# all (unlike the dashed slate that originally motivated this parser). Safe
+# to drop even for a player name with its own internal hyphen (e.g.
+# "Auger-Aliassime") since group 1 is non-greedy and the Over/Under anchor
+# only lines up correctly at the real name/bet boundary, not mid-name.
 _PLAYER_TOTAL_GAMES_NOMATCHUP_BEFORE_RE = re.compile(
-    r"^(.+?)\s*-\s*(?:total\s+)?games\s+(Over|Under)\s+([\d.]+)", re.IGNORECASE,
+    r"^(.+?)\s*(?:-\s*)?(?:total\s+)?games\s+(Over|Under)\s+([\d.]+)", re.IGNORECASE,
 )
 _PLAYER_TOTAL_GAMES_NOMATCHUP_AFTER_RE = re.compile(
-    r"^(.+?)\s*-\s*(Over|Under)\s+([\d.]+)\s*(?:total\s+)?games\b", re.IGNORECASE,
+    r"^(.+?)\s*(?:-\s*)?(Over|Under)\s+([\d.]+)\s*(?:total\s+)?games\b", re.IGNORECASE,
 )
 
 # "Team A vs Team B - Venus Williams to Win a Set" (Yes) / "... - Venus
@@ -445,7 +452,7 @@ _PARTIAL_GAME_MARKERS = (
 # live a real "Daniel Vallejo vs Juncheng Shang - Juncheng Shang ML" pick
 # would have silently tracked Vallejo, the WRONG side, since Shang is the
 # second-listed team here).
-_MATCHUP_ML_TRAILER_RE = re.compile(r"^(.+?)\s*-\s*(.+?)\s*(?:ML|Moneyline)\s*$", re.IGNORECASE)
+_MATCHUP_ML_TRAILER_RE = re.compile(r"^(.+?)\s*-\s*(.+?)\s*(?:Sets\s+)?(?:ML|Moneyline)\s*$", re.IGNORECASE)
 
 
 def _parse_team_pick(description: str) -> Optional[str]:
@@ -465,7 +472,11 @@ def _parse_team_pick(description: str) -> Optional[str]:
                     return team_b
                 return None  # explicit pick doesn't match either side - don't guess
             return team_a
-    for cutword in ("Moneyline", "ML", " Over ", " Under "):
+    # "Sets Moneyline"/"Sets ML" checked before the bare "Moneyline"/"ML"
+    # cutwords - same match-winner bet, just this tipster's own wording
+    # (tennis matches are decided by sets) - confirmed live. Cutting at
+    # "Moneyline" alone would leave "Sets" attached to the name.
+    for cutword in ("Sets Moneyline", "Sets ML", "Moneyline", "ML", " Over ", " Under "):
         idx = text.find(cutword)
         if idx > 0:
             text = text[:idx].strip()
@@ -491,10 +502,16 @@ def _bullet_strip(line: str) -> str:
 
 
 def _is_simple_pick_name(text: str) -> Optional[str]:
-    """A bare 'Name' or 'Name ML' with nothing else attached - rejects
-    anything with digits or prop-betting keywords, which signal a more
-    complex bet we can't safely reduce to just a name."""
-    stripped = re.sub(r"\b(?:ML|Moneyline)\b\s*$", "", text, flags=re.IGNORECASE).strip()
+    """A bare 'Name', 'Name ML', or 'Name Sets Moneyline' with nothing else
+    attached - rejects anything with digits or prop-betting keywords, which
+    signal a more complex bet we can't safely reduce to just a name.
+
+    "Sets Moneyline" (confirmed live, a real tennis slate used this wording
+    throughout) means exactly the same match-winner bet as a plain
+    "Moneyline"/"ML" - just this tipster's own label, since a tennis match is
+    decided by sets. Stripped as one unit together with Moneyline/ML so
+    "Sets" isn't left behind to trip the _PROP_REJECT_WORDS check below."""
+    stripped = re.sub(r"\b(?:Sets\s+)?(?:ML|Moneyline)\b\s*$", "", text, flags=re.IGNORECASE).strip()
     if not stripped or re.search(r"\d", stripped):
         return None
     if any(word.lower() in _PROP_REJECT_WORDS for word in stripped.split()):
