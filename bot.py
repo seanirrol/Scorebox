@@ -859,6 +859,17 @@ async def _reject_wrong_channel(interaction: discord.Interaction):
     await interaction.response.send_message(f"This bot only works in {channels}.", ephemeral=True)
 
 
+def _summary_allowed(interaction: discord.Interaction) -> bool:
+    """/summary is restricted to server admins plus config.SUMMARY_ALLOWED_USER_IDS
+    - a fixed allowlist rather than Discord's own per-command permission
+    system (@app_commands.default_permissions), since that would need a
+    server admin in each individual server to grant the override through
+    Discord's own UI, which isn't an option for a user who isn't an admin
+    there in the first place."""
+    is_admin = isinstance(interaction.user, discord.Member) and interaction.user.guild_permissions.administrator
+    return bool(is_admin) or interaction.user.id in config.SUMMARY_ALLOWED_USER_IDS
+
+
 def _log_command(interaction: discord.Interaction, **params):
     detail = ", ".join(f"{k}={v}" for k, v in params.items() if v is not None)
     botlog.event(
@@ -1751,6 +1762,9 @@ class SummaryDatePickView(discord.ui.View):
 async def summary(interaction: discord.Interaction, date: Optional[str] = None):
     if not _channel_allowed(interaction):
         await _reject_wrong_channel(interaction)
+        return
+    if not _summary_allowed(interaction):
+        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
         return
     _log_command(interaction, date=date)
     await interaction.response.defer(ephemeral=True)

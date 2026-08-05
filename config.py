@@ -48,3 +48,12 @@ for _pair in _picks_channel_map_raw.split(","):
     _picks_id, _, _target_id = _pair.partition(":")
     if _picks_id.strip() and _target_id.strip():
         PICKS_CHANNEL_MAP[int(_picks_id.strip())] = int(_target_id.strip())
+
+# /summary is restricted to server admins (guild_permissions.administrator)
+# plus these specific user IDs, comma-separated - lets a non-admin (e.g. in
+# a server they don't administer) still use it without granting them admin
+# outright. Empty = admins only.
+_summary_allowed_user_ids = os.environ.get("SUMMARY_ALLOWED_USER_IDS", "").strip()
+SUMMARY_ALLOWED_USER_IDS: set[int] = {
+    int(uid.strip()) for uid in _summary_allowed_user_ids.split(",") if uid.strip()
+}
