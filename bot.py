@@ -32,6 +32,7 @@ import inning1tracker
 import inningtracker
 import parlaytracker
 import pendingdelete
+import pendingsoccerprops
 import picks
 import playerstatsfootball
 import proptracker
@@ -82,6 +83,7 @@ async def on_ready():
     await esportstracker.resume_all(client)
     await parlaytracker.resume_all(client)
     await pendingdelete.resume_all(client)
+    await pendingsoccerprops.resume_all(_resolve_pending_soccer_prop)
 
 
 @client.event
@@ -417,34 +419,16 @@ async def _resolve_soccer_psf_match(game: dict, stat_name: str) -> tuple[Optiona
     return fixture_path, (playerstatsfootball.parse_match(html) if html else None)
 
 
-async def _auto_soccer_playerprops(
-    channel: discord.abc.Messageable, player: str, stat: str,
-    direction: Optional[str] = None, line: Optional[float] = None,
-    section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
+async def _complete_soccer_prop_track(
+    channel: discord.abc.Messageable, player: str, stat: str, stat_name: str,
+    direction: Optional[float], line: Optional[float], result: tuple,
+    section: Optional[str], label: Optional[str], origin_channel_id: Optional[int],
 ):
-    """Soccer-only equivalent of _auto_playerprops, backed by 365scores
-    instead of ESPN (which doesn't support soccer at all) - see
-    soccerpropstracker.py. Unlike tennis (where the player IS the
-    "competitor"), a soccer player has to be found via their match's own
-    roster (scores365.find_soccer_player), since 365scores' bulk game list
-    only carries club names."""
-    if stat in scores365.SOCCER_STAT_CATALOG or stat in playerstatsfootball.STAT_CATALOG:
-        stat_name = stat
-    else:
-        stat_name = None
-    if not stat_name:
-        botlog.event(f"❌ Not tracked (soccer prop): **{player}** {stat} — unknown stat")
-        return
-    try:
-        result = await asyncio.to_thread(scores365.find_soccer_player, player)
-    except scores365.ScoresError as e:
-        log.info("Auto-soccer-playerprops: couldn't reach 365scores for '%s': %s", player, e)
-        botlog.event(f"❌ Not tracked (soccer prop): **{player}** {stat} — couldn't reach 365scores: {e}")
-        return
-    if not result:
-        log.info("Auto-soccer-playerprops: no player found for '%s'", player)
-        botlog.event(f"❌ Not tracked (soccer prop): **{player}** {stat} — player not found (not in a live/imminent match)")
-        return
+    """Shared tail of a successful scores365.find_soccer_player() lookup -
+    called both right after a fresh auto-track attempt finds a match
+    immediately, and later from a pendingsoccerprops retry once one shows up.
+    Keeping this split out means the retry path never has to duplicate (or
+    drift from) the actual posting/tracking logic below."""
     game, member = result
     game_id, member_id, member_competitor_id = game["id"], member["id"], member.get("competitorId")
     resolved_name = member.get("name", player)
@@ -477,6 +461,69 @@ async def _auto_soccer_playerprops(
     )
     log.info("Auto-tracked soccer player prop pick: %s - %s", player, stat)
     botlog.event(f"✅ Tracked (soccer prop): **{player}** {stat} in <#{channel.id}>")
+
+
+async def _resolve_pending_soccer_prop(entry: dict) -> bool:
+    """resolve callback for pendingsoccerprops - retried every
+    RETRY_INTERVAL_SECONDS until it returns True (found and tracked) or the
+    entry's max wait elapses. Re-fetches the channel by id since a resumed
+    entry (after a bot restart) only has the persisted channel_id, not a
+    live channel object."""
+    try:
+        channel = client.get_channel(entry["channel_id"]) or await client.fetch_channel(entry["channel_id"])
+    except discord.HTTPException as e:
+        log.warning("Pending soccer prop: couldn't resolve channel %s: %s", entry["channel_id"], e)
+        return False
+    try:
+        result = await asyncio.to_thread(scores365.find_soccer_player, entry["player"])
+    except scores365.ScoresError as e:
+        log.info("Pending soccer prop retry: couldn't reach 365scores for '%s': %s", entry["player"], e)
+        return False
+    if not result:
+        return False
+    await _complete_soccer_prop_track(
+        channel, entry["player"], entry["stat"], entry["stat_name"], entry["direction"], entry["line"],
+        result, entry["section"], entry["label"], entry["origin_channel_id"],
+    )
+    return True
+
+
+async def _auto_soccer_playerprops(
+    channel: discord.abc.Messageable, player: str, stat: str,
+    direction: Optional[str] = None, line: Optional[float] = None,
+    section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
+):
+    """Soccer-only equivalent of _auto_playerprops, backed by 365scores
+    instead of ESPN (which doesn't support soccer at all) - see
+    soccerpropstracker.py. Unlike tennis (where the player IS the
+    "competitor"), a soccer player has to be found via their match's own
+    roster (scores365.find_soccer_player), since 365scores' bulk game list
+    only carries club names."""
+    if stat in scores365.SOCCER_STAT_CATALOG or stat in playerstatsfootball.STAT_CATALOG:
+        stat_name = stat
+    else:
+        stat_name = None
+    if not stat_name:
+        botlog.event(f"❌ Not tracked (soccer prop): **{player}** {stat} — unknown stat")
+        return
+    try:
+        result = await asyncio.to_thread(scores365.find_soccer_player, player)
+    except scores365.ScoresError as e:
+        log.info("Auto-soccer-playerprops: couldn't reach 365scores for '%s': %s", player, e)
+        botlog.event(f"❌ Not tracked (soccer prop): **{player}** {stat} — couldn't reach 365scores: {e}")
+        return
+    if not result:
+        log.info("Auto-soccer-playerprops: no player found for '%s', queuing retry", player)
+        pendingsoccerprops.queue(
+            channel.id, player, stat, stat_name, direction, line, section, label, origin_channel_id,
+            _resolve_pending_soccer_prop,
+        )
+        botlog.event(
+            f"⏳ Queued (soccer prop): **{player}** {stat} — not in a live/imminent match yet, "
+            f"will retry automatically as kickoff nears"
+        )
+        return
+    await _complete_soccer_prop_track(channel, player, stat, stat_name, direction, line, result, section, label, origin_channel_id)
 
 
 async def _auto_inning_runs(
