@@ -303,13 +303,24 @@ async def _post_or_edit_summary(channel: discord.abc.Messageable, channel_id: in
     """Sends the one summary card the first time a group has anything to
     show, edits it in place on every later update - returns the message id
     to persist (unchanged on a successful edit), or whatever was already
-    there if even a fresh send fails."""
+    there if even a fresh send fails.
+
+    Called every poll cycle by every tracker with a leg in some group (see
+    report_leg_progress), so an edit failure here isn't rare over a
+    multi-day slate - if the fetch above still finds the message (edit
+    itself failed for some transient reason, not "message already gone"),
+    the stale card is deleted after the replacement posts, same as
+    _repost_summary does for its own repost. Confirmed live: previously this
+    fell straight through to sending a fresh card with no delete attempt at
+    all, silently orphaning one card in the channel per failed edit - a
+    multi-day parlay could accumulate several of these over time."""
     embed = _build_summary_embed(group)
     message_id = group.get("summary_message_id")
+    old_message: Optional[discord.Message] = None
     if message_id:
         try:
-            message = await channel.fetch_message(message_id)
-            await throttle.run(channel_id, lambda: message.edit(content=None, embed=embed))
+            old_message = await channel.fetch_message(message_id)
+            await throttle.run(channel_id, lambda: old_message.edit(content=None, embed=embed))
             return message_id
         except discord.HTTPException as e:
             log.warning("Parlay summary card message %s gone, reposting: %s", message_id, e)
@@ -318,6 +329,11 @@ async def _post_or_edit_summary(channel: discord.abc.Messageable, channel_id: in
     except discord.HTTPException as e:
         log.warning("Failed to post parlay summary card: %s", e)
         return message_id
+    if old_message is not None:
+        try:
+            await old_message.delete()
+        except discord.HTTPException as e:
+            log.warning("Failed to delete stale parlay summary card %s: %s", message_id, e)
     return message.id
 
 
