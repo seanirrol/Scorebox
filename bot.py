@@ -1731,10 +1731,10 @@ def _build_summary_embed(date_str: str, picks_list: list[dict]) -> discord.Embed
 class SummaryPostView(discord.ui.View):
     """Lets /summary's ephemeral preview actually get posted, or dropped,
     without a second command invocation. Re-reads dailylog at click time
-    (not the preview-time snapshot) since a pending pick can resolve, or
-    someone else can post/re-preview the same date, in the time between
-    preview and click - stale data here would either double-post already-
-    reported picks or show a result that's since gone final."""
+    (not the preview-time snapshot) since a pending pick can resolve in the
+    time between preview and click - stale data here could show a result
+    that's since gone final. Posting (or reposting) a date is entirely the
+    caller's call - nothing here prevents publishing the same date twice."""
 
     def __init__(self, origin_ids: tuple[int, ...], date_strs: list[str], requester_id: int):
         super().__init__(timeout=900)
@@ -1760,13 +1760,11 @@ class SummaryPostView(discord.ui.View):
             posted_dates.append(date_str)
         if not embeds:
             await interaction.response.edit_message(
-                content="Nothing left to post — already posted or empty.", embed=None, view=None,
+                content="Nothing to post — no picks logged for the selected date(s).", embed=None, view=None,
             )
             self.stop()
             return
         await interaction.channel.send(embeds=embeds)
-        for date_str in posted_dates:
-            dailylog.mark_reported(self.origin_ids, date_str)
         dates_label = ", ".join(posted_dates)
         botlog.event(f"📋 Summary report ({dates_label}) posted in <#{interaction.channel_id}> by **{interaction.user}**")
         await interaction.response.edit_message(content="Posted.", embed=None, view=None)
@@ -1797,16 +1795,18 @@ async def _send_summary_preview(interaction: discord.Interaction, origin_ids: tu
 
 
 class _SummaryDateSelect(discord.ui.Select):
-    """One option per date that still has unreported picks logged for this
-    route - the closest Discord components get to an actual calendar
-    widget (there's no native date-picker component for bots). Multiple
-    dates can be selected at once (up to Discord's 10-embeds-per-message
-    cap); the resulting preview/post covers all of them together."""
+    """One option per date that has any picks logged for this route
+    (including already-posted dates - reposting is always available, it's
+    just up to whoever runs the command) - the closest Discord components
+    get to an actual calendar widget (there's no native date-picker
+    component for bots). Multiple dates can be selected at once (up to
+    Discord's 10-embeds-per-message cap); the resulting preview/post covers
+    all of them together."""
 
     def __init__(self, origin_ids: tuple[int, ...], dates: list[str], requester_id: int):
         options = [
             discord.SelectOption(
-                label=d, description=f"{len(dailylog.picks_for_date(origin_ids, d))} pick(s) not yet reported",
+                label=d, description=f"{len(dailylog.picks_for_date(origin_ids, d))} pick(s) logged",
             )
             for d in dates
         ]
