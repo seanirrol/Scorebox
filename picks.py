@@ -1427,6 +1427,17 @@ def parse_picks_message(content: str) -> list[dict]:
                 if sport:
                     prop = _parse_player_prop(sport, sport, bare)
                     if prop:
+                        # Every other append site in this loop tags
+                        # section/raw from current_category - this is the
+                        # one path where there's no literal header line to
+                        # take it from (that's the whole reason inference was
+                        # needed), but the sport was still confidently
+                        # inferred, so a display label stands in for it.
+                        # Confirmed live: without this, an inferred pick
+                        # tracked normally but never made it into /summary
+                        # (dailylog.record_pick no-ops on a missing section).
+                        prop["section"] = espn.SPORT_DISPLAY_LABELS.get(sport, sport.upper())
+                        prop["raw"] = bare
                         results.append(prop)
             continue
 
