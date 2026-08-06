@@ -1728,15 +1728,6 @@ def _build_summary_embed(date_str: str, picks_list: list[dict]) -> discord.Embed
     )
 
 
-async def summary_date_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
-    origin_ids = _summary_route(interaction.channel_id)
-    if not origin_ids:
-        return []
-    dates = dailylog.available_dates(origin_ids)
-    matches = [d for d in dates if current in d]
-    return [app_commands.Choice(name=d, value=d) for d in matches[:25]]
-
-
 class SummaryPostView(discord.ui.View):
     """Lets /summary's ephemeral preview actually get posted, or dropped,
     without a second command invocation. Re-reads dailylog at click time
@@ -1826,9 +1817,7 @@ class SummaryDatePickView(discord.ui.View):
 
 
 @tree.command(name="summary", description="Preview an end-of-day picks report for a date, then optionally post it")
-@app_commands.describe(date="Date to report on - type to filter, or leave blank to pick from a dropdown")
-@app_commands.autocomplete(date=summary_date_autocomplete)
-async def summary(interaction: discord.Interaction, date: Optional[str] = None):
+async def summary(interaction: discord.Interaction):
     origin_ids = _summary_route(interaction.channel_id)
     if not origin_ids:
         await _reject_summary_wrong_channel(interaction)
@@ -1836,19 +1825,15 @@ async def summary(interaction: discord.Interaction, date: Optional[str] = None):
     if not _summary_allowed(interaction):
         await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
         return
-    _log_command(interaction, date=date)
+    _log_command(interaction)
     await interaction.response.defer(ephemeral=True)
 
-    if date is None:
-        dates = dailylog.available_dates(origin_ids, limit=25)
-        if not dates:
-            await interaction.followup.send("No picks logged for any date yet.", ephemeral=True)
-            return
-        view = SummaryDatePickView(origin_ids, dates, interaction.user.id)
-        await interaction.followup.send("Pick a date to preview:", view=view, ephemeral=True)
+    dates = dailylog.available_dates(origin_ids, limit=25)
+    if not dates:
+        await interaction.followup.send("No picks logged for any date yet.", ephemeral=True)
         return
-
-    await _send_summary_preview(interaction, origin_ids, date, edit=False)
+    view = SummaryDatePickView(origin_ids, dates, interaction.user.id)
+    await interaction.followup.send("Pick a date to preview:", view=view, ephemeral=True)
 
 
 def main():
