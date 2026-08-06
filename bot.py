@@ -1729,13 +1729,22 @@ def _win_rate_line(picks_list: list[dict]) -> str:
     return f"**Win Rate:** {won}-{lost} ({won / decided:.1%})"
 
 
-_SUMMARY_SECTION_ALIASES = {"WNBA Props": "WNBA"}
+def _normalize_summary_section(section: str) -> str:
+    """Folds any "<Sport> Props" picks-channel header into its plain
+    "<Sport>" counterpart (e.g. "WNBA Props" -> "WNBA", "MLB Props" -> "MLB")
+    so props and non-props picks for the same sport land in one section
+    instead of two - section text is whatever GreenFox's header literally
+    says, not a fixed enum, so this is a suffix rule rather than a lookup
+    table of every sport."""
+    if section.endswith(" Props") and len(section) > len(" Props"):
+        return section[: -len(" Props")]
+    return section
 
 
 def _build_summary_embed(date_str: str, picks_list: list[dict]) -> discord.Embed:
     sections: dict[str, list[dict]] = {}
     for entry in picks_list:
-        section = _SUMMARY_SECTION_ALIASES.get(entry["section"], entry["section"])
+        section = _normalize_summary_section(entry["section"])
         sections.setdefault(section, []).append(entry)
 
     blocks = []
