@@ -341,6 +341,11 @@ _AMBIGUOUS_STAT_DEFAULTS = {
     ("baseball", "strikeouts"): "Strikeouts (Pitching)",
     ("baseball", "earned runs allowed"): "Earned Runs",
     ("baseball", "walks allowed"): "Walks (Pitching)",
+    # "Rushing Yards" doesn't substring-match "rush yards" in either
+    # direction (the "ing" breaks the contiguous substring) - confirmed
+    # live: "Trey Benson - Over 33.5 Rush yards" silently dropped the
+    # whole pick.
+    ("nfl", "rush yards"): "Rushing Yards",
     # "3-Pointers Made" shares no substring with any of these (confirmed
     # live: "A'ja Wilson Over 0.5 player threes" silently dropped the whole
     # pick), unlike most other stat wording variants this module already
