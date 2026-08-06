@@ -1729,10 +1729,14 @@ def _win_rate_line(picks_list: list[dict]) -> str:
     return f"**Win Rate:** {won}-{lost} ({won / decided:.1%})"
 
 
+_SUMMARY_SECTION_ALIASES = {"WNBA Props": "WNBA"}
+
+
 def _build_summary_embed(date_str: str, picks_list: list[dict]) -> discord.Embed:
     sections: dict[str, list[dict]] = {}
     for entry in picks_list:
-        sections.setdefault(entry["section"], []).append(entry)
+        section = _SUMMARY_SECTION_ALIASES.get(entry["section"], entry["section"])
+        sections.setdefault(section, []).append(entry)
 
     blocks = []
     for section, entries in sections.items():
