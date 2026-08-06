@@ -28,6 +28,7 @@ import espn_ufc
 import esports
 import esportstracker
 import f5tracker
+import halftracker
 import inning1tracker
 import inningtracker
 import parlaytracker
@@ -75,6 +76,7 @@ async def on_ready():
     await proptracker.resume_all(client)
     await inningtracker.resume_all(client)
     await f5tracker.resume_all(client)
+    await halftracker.resume_all(client)
     await inning1tracker.resume_all(client)
     await settracker.resume_all(client)
     await tennispropstracker.resume_all(client)
@@ -273,6 +275,49 @@ async def _auto_f5(
     )
     log.info("Auto-tracked F5 pick '%s' -> game %s", team, game_id)
     botlog.event(f"✅ Tracked (F5): **{team}** ({sport_value}) — game `{game_id}` in <#{channel.id}>")
+
+
+async def _auto_1h_total(
+    channel: discord.abc.Messageable, sport_value: str, team: str, total_direction: str, total_line: float,
+    combined: bool = False, section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
+):
+    """1H (1st Half) team total or combined total - settles after the 2nd
+    quarter, not the whole game - see halftracker.py. combined=True means
+    total_direction/total_line grade both sides' Q1+Q2 points summed
+    together, not team's own - team is still used to find the match either
+    way."""
+    try:
+        result = await asyncio.to_thread(scores365.find_match_for_team, team, sport_value)
+    except scores365.ScoresError as e:
+        log.info("Auto-1H: couldn't reach 365scores for '%s': %s", team, e)
+        botlog.event(f"❌ Not tracked (1H): **{team}** ({sport_value}) — couldn't reach 365scores: {e}")
+        return
+    if not result:
+        log.info("Auto-1H: no match found for '%s' (%s)", team, sport_value)
+        botlog.event(f"❌ Not tracked (1H): **{team}** ({sport_value}) — no match found")
+        return
+    game, sport_id = result
+    game_id = game["id"]
+    if halftracker.is_tracked(channel.id, game_id):
+        botlog.event(f"⏭️ Skipped (1H): **{team}** — game `{game_id}` already being tracked in <#{channel.id}>")
+        return
+
+    picked_team = None if combined else team
+    embed, file = await halftracker.build_embed(game, sport_id, picked_team, total_direction, total_line)
+    message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
+    embed.set_footer(text=halftracker._footer_text(message.id))
+    await throttle.run(channel.id, lambda: message.edit(embed=embed))
+    halftracker.register_message(message.id, channel.id, game_id, None)
+    await message.add_reaction(TRASH_EMOJI)
+
+    if await asyncio.to_thread(scores365.quarters_breakdown, game_id, halftracker.THROUGH_QUARTER) is not None:
+        botlog.event(f"⏭️ Not tracked (1H): **{team}** — game `{game_id}` 1st half already decided, posted final score only")
+        return  # 1st half was already decided by the time this pick was posted
+    halftracker.start_tracking(
+        message, sport_id, game, channel.id, None, picked_team, total_direction, total_line, section, label, origin_channel_id,
+    )
+    log.info("Auto-tracked 1H pick '%s' -> game %s", team, game_id)
+    botlog.event(f"✅ Tracked (1H): **{team}** ({sport_value}) — game `{game_id}` in <#{channel.id}>")
 
 
 async def _auto_playerprops(
@@ -809,6 +854,16 @@ async def on_message(message: discord.Message):
             elif pick["kind"] == "f5_handicap":
                 await _auto_f5(
                     target_channel, pick["sport"], pick["team"], handicap_line=pick["line"],
+                    section=section, label=label, origin_channel_id=origin_channel_id,
+                )
+            elif pick["kind"] == "1h_total":
+                await _auto_1h_total(
+                    target_channel, pick["sport"], pick["team"], pick["direction"], pick["line"],
+                    section=section, label=label, origin_channel_id=origin_channel_id,
+                )
+            elif pick["kind"] == "1h_combined_total":
+                await _auto_1h_total(
+                    target_channel, pick["sport"], pick["team"], pick["direction"], pick["line"], combined=True,
                     section=section, label=label, origin_channel_id=origin_channel_id,
                 )
             elif pick["kind"] == "inning_runs":

@@ -689,6 +689,114 @@ def innings_breakdown(game_id, through_inning: int) -> Optional[tuple[int, int]]
     return int(home_total), int(away_total)
 
 
+_QUARTER_STAGE_NAMES = {1: "Q1", 2: "Q2", 3: "Q3", 4: "Q4"}
+THROUGH_1H_QUARTER = 2
+
+
+def quarters_breakdown(game_id, through_quarter: int) -> Optional[tuple[int, int]]:
+    """Football equivalent of innings_breakdown - sums each side's points
+    through the given quarter (through_quarter=2 for a 1st Half pick), once
+    that quarter is fully complete. Confirmed live via the per-game detail
+    call's `stages` array - each quarter is its own entry ("Q1", "Q2", ...)
+    with the same homeCompetitorScore/awayCompetitorScore/isEnded shape as
+    baseball's innings. Returns None if the target quarter hasn't finished
+    yet, an earlier quarter is missing, or the detail call failed."""
+    detail = _get_game_detail(game_id)
+    if not detail:
+        return None
+    quarters = {s.get("name"): s for s in (detail.get("stages") or [])}
+    home_total = away_total = 0
+    for n in range(1, through_quarter + 1):
+        stage = quarters.get(_QUARTER_STAGE_NAMES.get(n))
+        if not stage or not stage.get("isEnded"):
+            return None
+        home_total += stage.get("homeCompetitorScore") or 0
+        away_total += stage.get("awayCompetitorScore") or 0
+    return int(home_total), int(away_total)
+
+
+def grade_1h_team_total(
+    game: dict, home_points: int, away_points: int, team: str, direction: str, line: float
+) -> Optional[str]:
+    """Grades a 1st Half *team* total pick - one side's own Q1+Q2 points
+    against a line, not compared against the other side (see
+    grade_1h_combined_total for that). Returns "won"/"lost"/"push" (exact
+    match), or None if team doesn't match either side."""
+    home = (game.get("homeCompetitor") or {}).get("name", "")
+    away = (game.get("awayCompetitor") or {}).get("name", "")
+    if names_match(home, team):
+        value = home_points
+    elif names_match(away, team):
+        value = away_points
+    else:
+        return None
+    if value == line:
+        return "push"
+    if direction == "over":
+        return "won" if value > line else "lost"
+    return "won" if value < line else "lost"
+
+
+def grade_1h_combined_total(home_points: int, away_points: int, direction: str, line: float) -> Optional[str]:
+    """Grades a 1st Half combined-total pick - both sides' Q1+Q2 points
+    summed together (see grade_1h_team_total for a single side's own total
+    instead). Returns "won"/"lost"/"push" (exact match)."""
+    total = home_points + away_points
+    if total == line:
+        return "push"
+    if direction == "over":
+        return "won" if total > line else "lost"
+    return "won" if total < line else "lost"
+
+
+def partial_1h_team_total(game_id, team: str, home_name: str, away_name: str) -> Optional[int]:
+    """Sums whichever of the team's Q1/Q2 quarters have actually completed
+    so far, stopping at the first one that hasn't - unlike
+    quarters_breakdown, doesn't require the whole half to be done. Lets an
+    Over pick be tagged a win the moment the partial total already clears
+    the line. Returns None if the team doesn't match either side, or
+    nothing's completed yet."""
+    detail = _get_game_detail(game_id)
+    if not detail:
+        return None
+    if names_match(home_name, team):
+        key = "homeCompetitorScore"
+    elif names_match(away_name, team):
+        key = "awayCompetitorScore"
+    else:
+        return None
+    quarters = {s.get("name"): s for s in (detail.get("stages") or [])}
+    total = 0
+    counted_any = False
+    for n in range(1, THROUGH_1H_QUARTER + 1):
+        stage = quarters.get(_QUARTER_STAGE_NAMES.get(n))
+        if not stage or not stage.get("isEnded"):
+            break
+        total += stage.get(key) or 0
+        counted_any = True
+    return int(total) if counted_any else None
+
+
+def partial_1h_combined_total(game_id) -> Optional[int]:
+    """Sums both sides' Q1+Q2 points combined, using whichever quarters have
+    completed so far (see partial_1h_team_total for the single-side
+    equivalent) - lets a combined 1H Over pick get tagged a win early.
+    Returns None if nothing's completed yet."""
+    detail = _get_game_detail(game_id)
+    if not detail:
+        return None
+    quarters = {s.get("name"): s for s in (detail.get("stages") or [])}
+    total = 0
+    counted_any = False
+    for n in range(1, THROUGH_1H_QUARTER + 1):
+        stage = quarters.get(_QUARTER_STAGE_NAMES.get(n))
+        if not stage or not stage.get("isEnded"):
+            break
+        total += (stage.get("homeCompetitorScore") or 0) + (stage.get("awayCompetitorScore") or 0)
+        counted_any = True
+    return int(total) if counted_any else None
+
+
 def grade_f5_moneyline(game: dict, home_runs: int, away_runs: int, picked_team: str) -> Optional[str]:
     """Grades an F5 (First 5 Innings) moneyline pick against the summed
     1st-5th inning score - same push-on-tie rule as grade_moneyline, just

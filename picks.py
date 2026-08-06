@@ -252,6 +252,38 @@ _F5_HANDICAP_RE = re.compile(
     re.IGNORECASE,
 )
 
+# "1H"/"1st Half"/"First Half" team total OR combined total for football -
+# settle once the 2nd quarter is fully complete, not the whole game, so
+# they're routed to halftracker.py rather than /track's kind="track" (see
+# _parse_1h_total_pick / _parse_1h_combined_total_pick). No moneyline/
+# handicap flavor here (unlike F5's baseball equivalent) - not asked for.
+_1H_MARKER_RE = re.compile(r"\b1h\b|\b1st\s+half\b|\bfirst\s+half\b", re.IGNORECASE)
+
+# "Arizona Cardinals 1H Over 10.5 Total Points" / "Arizona Cardinals 1H Team
+# Total Over 10.5" - one team's own Q1+Q2 point total against a line, not
+# compared to the other side (see scores365.grade_1h_team_total). "Team"/
+# "Total" are both optional wording, and a trailing stat word after the
+# number (e.g. "Total Points") is fully optional too - only the 1H marker +
+# Over/Under + number are actually required, same flexibility as
+# _TOTAL_LINE_RE for the generic full-game total.
+_1H_TOTAL_RE = re.compile(
+    r"^(.+?)\s*(?:1h|1st\s+half|first\s+half)"
+    r"\s*(?:team\s*)?(?:total\s*)?(Over|Under)\s+([\d.]+)(?:\s+\S.*)?\s*$",
+    re.IGNORECASE,
+)
+
+# "Arizona Cardinals vs Carolina Panthers - 1H Total Under 17.5 Total
+# Points" - a COMBINED 1st-half total (both sides' Q1+Q2 points summed), not
+# one team's own total (see _1H_TOTAL_RE above) - the matchup (two team
+# names) is what distinguishes it. Checked before the generic game-total
+# parser below, same reasoning as F5's combined total for baseball.
+_1H_COMBINED_TOTAL_RE = re.compile(
+    r"^(.+?)\s*(?:@|\bvs\.?|\bv\.?)\s*(.+?)\s*-\s*"
+    r"(?:1h|1st\s+half|first\s+half)"
+    r"\s*(?:total\s*)?(Over|Under)\s+([\d.]+)",
+    re.IGNORECASE,
+)
+
 # "Daniel Rodriguez vs Uros Medic - Under 2.5 Rounds" - a UFC round total
 # (see grade_ufc_round_total). Requires "Rounds" explicitly since it would
 # otherwise match the same shape as a generic combined game total
@@ -796,6 +828,34 @@ def _parse_f5_handicap_pick(description: str, sport: str) -> Optional[dict]:
     }
 
 
+def _parse_1h_total_pick(description: str, sport: str) -> Optional[dict]:
+    text = _clean_line(description)
+    m = _1H_TOTAL_RE.match(text)
+    if not m:
+        return None
+    team = m.group(1).strip()
+    if not team:
+        return None
+    return {
+        "kind": "1h_total", "sport": sport, "team": team,
+        "direction": m.group(2).lower(), "line": float(m.group(3)),
+    }
+
+
+def _parse_1h_combined_total_pick(description: str, sport: str) -> Optional[dict]:
+    text = _clean_line(description)
+    m = _1H_COMBINED_TOTAL_RE.match(text)
+    if not m:
+        return None
+    team = m.group(1).strip()  # either team - just used to look the game up
+    if not team:
+        return None
+    return {
+        "kind": "1h_combined_total", "sport": sport, "team": team,
+        "direction": m.group(3).lower(), "line": float(m.group(4)),
+    }
+
+
 # "Dakota Ditcheva by KO/TKO KO/TKO Method of Victory" - method of victory
 # (KO/TKO, submission, decision) has no reliable field anywhere in ESPN's
 # public MMA data (see espn_ufc.py's module docstring), so it's deliberately
@@ -1134,6 +1194,11 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
         if f5_handicap:
             return f5_handicap
 
+    if sport == "nfl":
+        onehalf_combined = _parse_1h_combined_total_pick(description, sport)
+        if onehalf_combined:
+            return onehalf_combined
+
     if sport == "mma":
         ufc_round_total = _parse_ufc_round_total_pick(description)
         if ufc_round_total:
@@ -1187,6 +1252,11 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
         f5_team = _parse_f5_pick(description)
         if f5_team:
             return {"kind": "f5_moneyline", "sport": sport, "team": f5_team}
+
+        if sport == "nfl":
+            onehalf_total = _parse_1h_total_pick(description, sport)
+            if onehalf_total:
+                return onehalf_total
 
         if sport == "baseball":
             inning1_team = _parse_inning1_team_pick(description)
