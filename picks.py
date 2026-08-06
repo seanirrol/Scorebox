@@ -1331,6 +1331,14 @@ def parse_picks_message(content: str) -> list[dict]:
         if bare.lower() in _HEADER_SPORT_MAP:
             current_category = bare
             continue
+        # A purely cosmetic sub-label under an already-set sport header (e.g.
+        # "NFL" then "Player props" before the actual prop lines) - confirmed
+        # live: "Player props" fell through to the bare-name fallback below
+        # and got tracked as a team literally named "Player props". Doesn't
+        # touch current_category (unlike a real "<Sport> Props" header) since
+        # the sport context needs to stay intact for the prop lines under it.
+        if bare.lower() in ("player props", "player prop", "props"):
+            continue
 
         if not current_category:
             # No header/tag anywhere above this line - last resort before
