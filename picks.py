@@ -309,6 +309,18 @@ _AMBIGUOUS_STAT_DEFAULTS = {
     ("baseball", "strikeouts"): "Strikeouts (Pitching)",
     ("baseball", "earned runs allowed"): "Earned Runs",
     ("baseball", "walks allowed"): "Walks (Pitching)",
+    # "3-Pointers Made" shares no substring with any of these (confirmed
+    # live: "A'ja Wilson Over 0.5 player threes" silently dropped the whole
+    # pick), unlike most other stat wording variants this module already
+    # fuzzy-matches via _match_stat_label's substring check.
+    ("basketball", "threes"): "3-Pointers Made",
+    ("basketball", "player threes"): "3-Pointers Made",
+    ("basketball", "three pointers"): "3-Pointers Made",
+    ("basketball", "3 pointers"): "3-Pointers Made",
+    ("wnba", "threes"): "3-Pointers Made",
+    ("wnba", "player threes"): "3-Pointers Made",
+    ("wnba", "three pointers"): "3-Pointers Made",
+    ("wnba", "3 pointers"): "3-Pointers Made",
 }
 
 # _SPORT_MAP collapses "nba"/"wnba" to the same "basketball" key since
