@@ -1696,9 +1696,12 @@ async def _reject_summary_wrong_channel(interaction: discord.Interaction):
 def _summary_status_line(entry: dict) -> str:
     """Never blank, per the report's whole point: a resolved pick gets its
     win/loss/push/void mark; anything still pending gets a neutral mark plus
-    whatever live detail its tracker last reported (NOT STARTED/LIVE/
-    Postponed), so a reader can see *why* it has no result yet instead of
-    the line just vanishing or looking unfinished."""
+    whatever live detail its tracker last reported (LIVE/Postponed), so a
+    reader can see *why* it has no result yet instead of the line just
+    vanishing or looking unfinished. A pick that hadn't kicked off yet by
+    report time reads as "Postponed" here too, same as an actual
+    postponement - from a day's report perspective a match not yet underway
+    reads the same either way."""
     if dailylog.is_final(entry["status"]):
         return f"{dailylog.result_mark(entry['status'])} {entry['label']}"
     detail = entry["detail"]
@@ -1706,9 +1709,24 @@ def _summary_status_line(entry: dict) -> str:
         mark = "🟡"
     elif detail.startswith("⏸️"):
         mark, detail = "⏸️", detail[2:].strip()
+    elif detail.startswith("NOT STARTED"):
+        mark, detail = "⏸️", "Postponed" + detail[len("NOT STARTED"):]
     else:
         mark = "⏳"
     return f"{mark} {entry['label']} — {detail}"
+
+
+def _win_rate_line(picks_list: list[dict]) -> str:
+    """Won/lost decisions only - push, void (which also covers postponed
+    and interrupted-never-resumed picks, see dailylog.record_result call
+    sites) and anything still pending don't count as either a win or a
+    loss, so they're excluded from both the numerator and denominator."""
+    won = sum(1 for e in picks_list if e["status"] == "won")
+    lost = sum(1 for e in picks_list if e["status"] == "lost")
+    decided = won + lost
+    if decided == 0:
+        return "**Win Rate:** —"
+    return f"**Win Rate:** {won}-{lost} ({won / decided:.1%})"
 
 
 def _build_summary_embed(date_str: str, picks_list: list[dict]) -> discord.Embed:
@@ -1720,6 +1738,7 @@ def _build_summary_embed(date_str: str, picks_list: list[dict]) -> discord.Embed
     for section, entries in sections.items():
         lines = [_summary_status_line(e) for e in entries]
         blocks.append(f"**{section}**\n" + "\n".join(lines))
+    blocks.append(_win_rate_line(picks_list))
 
     return discord.Embed(
         title=f"Summary Report ({date_str})",
