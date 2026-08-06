@@ -349,10 +349,14 @@ _AMBIGUOUS_STAT_DEFAULTS = {
     ("basketball", "player threes"): "3-Pointers Made",
     ("basketball", "three pointers"): "3-Pointers Made",
     ("basketball", "3 pointers"): "3-Pointers Made",
+    ("basketball", "3-point field goals"): "3-Pointers Made",
+    ("basketball", "total 3-point field goals"): "3-Pointers Made",
     ("wnba", "threes"): "3-Pointers Made",
     ("wnba", "player threes"): "3-Pointers Made",
     ("wnba", "three pointers"): "3-Pointers Made",
     ("wnba", "3 pointers"): "3-Pointers Made",
+    ("wnba", "3-point field goals"): "3-Pointers Made",
+    ("wnba", "total 3-point field goals"): "3-Pointers Made",
 }
 
 # _SPORT_MAP collapses "nba"/"wnba" to the same "basketball" key since
