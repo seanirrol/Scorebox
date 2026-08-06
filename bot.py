@@ -1736,10 +1736,10 @@ class SummaryPostView(discord.ui.View):
     preview and click - stale data here would either double-post already-
     reported picks or show a result that's since gone final."""
 
-    def __init__(self, origin_ids: tuple[int, ...], date_str: str, requester_id: int):
+    def __init__(self, origin_ids: tuple[int, ...], date_strs: list[str], requester_id: int):
         super().__init__(timeout=900)
         self.origin_ids = origin_ids
-        self.date_str = date_str
+        self.date_strs = date_strs
         self.requester_id = requester_id
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -1750,17 +1750,25 @@ class SummaryPostView(discord.ui.View):
 
     @discord.ui.button(label="Post to channel", style=discord.ButtonStyle.success)
     async def post(self, interaction: discord.Interaction, button: discord.ui.Button):
-        picks_list = dailylog.picks_for_date(self.origin_ids, self.date_str)
-        if not picks_list:
+        embeds = []
+        posted_dates = []
+        for date_str in self.date_strs:
+            picks_list = dailylog.picks_for_date(self.origin_ids, date_str)
+            if not picks_list:
+                continue
+            embeds.append(_build_summary_embed(date_str, picks_list))
+            posted_dates.append(date_str)
+        if not embeds:
             await interaction.response.edit_message(
-                content=f"Nothing left to post for **{self.date_str}** — already posted or empty.", embed=None, view=None,
+                content="Nothing left to post — already posted or empty.", embed=None, view=None,
             )
             self.stop()
             return
-        embed = _build_summary_embed(self.date_str, picks_list)
-        await interaction.channel.send(embed=embed)
-        dailylog.mark_reported(self.origin_ids, self.date_str)
-        botlog.event(f"📋 Summary report ({self.date_str}) posted in <#{interaction.channel_id}> by **{interaction.user}**")
+        await interaction.channel.send(embeds=embeds)
+        for date_str in posted_dates:
+            dailylog.mark_reported(self.origin_ids, date_str)
+        dates_label = ", ".join(posted_dates)
+        botlog.event(f"📋 Summary report ({dates_label}) posted in <#{interaction.channel_id}> by **{interaction.user}**")
         await interaction.response.edit_message(content="Posted.", embed=None, view=None)
         self.stop()
 
@@ -1770,27 +1778,30 @@ class SummaryPostView(discord.ui.View):
         self.stop()
 
 
-async def _send_summary_preview(interaction: discord.Interaction, origin_ids: tuple[int, ...], date_str: str, *, edit: bool):
-    """Shared by the direct-date path and the date-picker dropdown's
-    callback - the only difference is whether the response is a fresh
-    followup or an edit of the picker message already on screen."""
-    picks_list = dailylog.picks_for_date(origin_ids, date_str)
-    if not picks_list:
-        content, embed, view = f"No picks logged for **{date_str}**.", None, None
+async def _send_summary_preview(interaction: discord.Interaction, origin_ids: tuple[int, ...], date_strs: list[str], *, edit: bool):
+    """Renders the date-picker's selection (one or more dates) as a
+    preview - re-reads dailylog at click time (not the picker's own
+    snapshot) since a pending pick can resolve, or someone else can
+    post/re-preview the same date, in the time between opening the picker
+    and selecting a date."""
+    embeds = [_build_summary_embed(d, picks) for d in date_strs if (picks := dailylog.picks_for_date(origin_ids, d))]
+    if not embeds:
+        content, view = f"No picks logged for {', '.join(date_strs)}.", None
     else:
         content = "Preview only - not posted yet. Click below to publish it to this channel."
-        embed = _build_summary_embed(date_str, picks_list)
-        view = SummaryPostView(origin_ids, date_str, interaction.user.id)
+        view = SummaryPostView(origin_ids, date_strs, interaction.user.id)
     if edit:
-        await interaction.response.edit_message(content=content, embed=embed, view=view)
+        await interaction.response.edit_message(content=content, embeds=embeds, view=view)
     else:
-        await interaction.followup.send(content=content, embed=embed, view=view, ephemeral=True)
+        await interaction.followup.send(content=content, embeds=embeds, view=view, ephemeral=True)
 
 
 class _SummaryDateSelect(discord.ui.Select):
     """One option per date that still has unreported picks logged for this
     route - the closest Discord components get to an actual calendar
-    widget (there's no native date-picker component for bots)."""
+    widget (there's no native date-picker component for bots). Multiple
+    dates can be selected at once (up to Discord's 10-embeds-per-message
+    cap); the resulting preview/post covers all of them together."""
 
     def __init__(self, origin_ids: tuple[int, ...], dates: list[str], requester_id: int):
         options = [
@@ -1799,15 +1810,19 @@ class _SummaryDateSelect(discord.ui.Select):
             )
             for d in dates
         ]
-        super().__init__(placeholder="Pick a date to preview...", min_values=1, max_values=1, options=options)
+        super().__init__(
+            placeholder="Pick one or more dates to preview...", min_values=1, max_values=min(len(dates), 10), options=options,
+        )
         self.origin_ids = origin_ids
+        self.dates = dates
         self.requester_id = requester_id
 
     async def callback(self, interaction: discord.Interaction):
         if interaction.user.id != self.requester_id:
             await interaction.response.send_message("Only the person who ran /summary can use this.", ephemeral=True)
             return
-        await _send_summary_preview(interaction, self.origin_ids, self.values[0], edit=True)
+        selected = [d for d in self.dates if d in self.values]
+        await _send_summary_preview(interaction, self.origin_ids, selected, edit=True)
 
 
 class SummaryDatePickView(discord.ui.View):
