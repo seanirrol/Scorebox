@@ -61,7 +61,13 @@ _HEADER_SPORT_MAP = {
     "hockey": "hockey",
 }
 
-_LINE_RE = re.compile(r"^\s*(?:\d+[.)]\s*)?\[([^\]]+)\]\s*(.+)$")
+# Optional leading numbered ("1.", "2)") OR bullet ("•", or a literal "-"/
+# "*" markdown list marker - Discord renders any of these as a bullet point,
+# so the raw text the bot actually receives could be either) prefix before
+# a "[Category]" tag - confirmed live, a real message mixed a numbered top
+# list with a bulleted list below it, and the bulleted half silently never
+# matched at all.
+_LINE_RE = re.compile(r"^\s*(?:\d+[.)]\s*|[•\-*]\s*)?\[([^\]]+)\]\s*(.+)$")
 # The optional "the" handles wording like "Roki Sasaki Over the 1.5 Walks
 # Allowed" (confirmed live - a real pick worded this way silently never
 # posted, since the number wasn't immediately after Over/Under).
