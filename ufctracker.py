@@ -177,7 +177,16 @@ async def build_embed(
             description_lines.append(f"<t:{int(kickoff)}:f>")
     embed.description = "\n".join(description_lines)
 
-    period_text = "Final" if decided else espn_ufc.status_text(competition)
+    # Every other tracker in this bot blanks this out until the event is
+    # actually live/finished (see tracker.py/proptracker.py etc.) - UFC was
+    # the one exception, always showing "Starts in Xh0Ym" even pre-fight,
+    # inconsistent with that established convention.
+    if decided:
+        period_text = "Final"
+    elif color_status == "notstarted":
+        period_text = ""
+    else:
+        period_text = espn_ufc.status_text(competition)
 
     if decided:
         home_cols = ["W"] if fighter_a.get("winner") else (["L"] if any(c.get("winner") for c in competitors) else ["-"])
