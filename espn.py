@@ -50,6 +50,14 @@ SPORT_DISPLAY_LABELS = {
 # label lookup - handled specially in get_stat_value.
 TOTAL_BASES_KEY = ("__computed__", "total_bases")
 
+# ESPN reports these boxscore labels as a "made-attempted" string (e.g.
+# "1-6"), never a plain number - confirmed live for every athlete in a real
+# WNBA boxscore's "3PT" column. Passing that straight to float() in
+# grade_over_under always raised, so a 3-Pointers Made prop could never
+# grade won/lost and silently voided after timing out instead. Only the
+# made count (before the "-") is what the line actually grades against.
+_MADE_ATTEMPTED_LABELS = {"3PT"}
+
 # label -> (label within its stat group, a second "discriminator" label that
 # must also be present in that same group). ESPN's stat groups don't carry a
 # usable "name" field for baseball/basketball (confirmed None live), and some
@@ -311,7 +319,10 @@ def get_stat_value(event: dict, entity_id: str, stat_key: tuple) -> tuple[Option
             for a in group.get("athletes", []):
                 if a.get("athlete", {}).get("id") == entity_id:
                     stats = a.get("stats", [])
-                    return (stats[idx] if idx < len(stats) else None), is_home, team
+                    raw = stats[idx] if idx < len(stats) else None
+                    if label in _MADE_ATTEMPTED_LABELS and raw:
+                        raw = raw.split("-", 1)[0]
+                    return raw, is_home, team
     return None, is_home, team
 
 
