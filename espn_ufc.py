@@ -114,16 +114,28 @@ def find_ufc_fight(fighter_name: str) -> Optional[tuple[dict, dict, dict, str]]:
 
 def refresh_ufc_fight(league_slug: str, event_id, competition_id, fighter_id, competition_date: str) -> Optional[tuple[dict, dict]]:
     """Re-fetches a specific already-found bout's current status/result for
-    live polling. Queries just that single day's scoreboard for the one
-    known league (cheap) rather than find_ufc_fight's wide multi-league
-    window, since both are already known. Returns (competition,
-    fighter_competitor) or None if it's no longer listed (e.g. card
-    canceled)."""
+    live polling. Queries a narrow +-1 day window around the bout's own UTC
+    timestamp for the one known league (cheap) rather than find_ufc_fight's
+    wide multi-league window, since both are already known.
+
+    The +-1 day is deliberate, not a single exact date - ESPN files a card
+    under its LOCAL (US) date, but competition_date is UTC, and a fight
+    starting in the evening US time lands after midnight UTC (confirmed
+    live: a real PFL card at 10pm ET / 2am UTC the next day was only found
+    querying the day BEFORE its UTC date, not that UTC date itself). A
+    single exact date silently found nothing on every single refresh,
+    auto-stopping tracking on every UFC/PFL pick within ~3 poll cycles of
+    being tracked, every time.
+
+    Returns (competition, fighter_competitor) or None if it's no longer
+    listed (e.g. card canceled)."""
     try:
-        date_str = datetime.datetime.fromisoformat(competition_date.replace("Z", "+00:00")).strftime("%Y%m%d")
+        comp_date = datetime.datetime.fromisoformat(competition_date.replace("Z", "+00:00"))
     except ValueError:
         return None
-    data = _get(league_slug, dates=date_str)
+    start = (comp_date - datetime.timedelta(days=1)).strftime("%Y%m%d")
+    end = (comp_date + datetime.timedelta(days=1)).strftime("%Y%m%d")
+    data = _get(league_slug, dates=f"{start}-{end}")
     for event in data.get("events", []):
         if str(event.get("id")) != str(event_id):
             continue
