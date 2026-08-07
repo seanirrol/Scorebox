@@ -41,6 +41,7 @@ _SPORT_MAP = {
     "ufc": "mma",
     "mma": "mma",
     "combat": "mma",
+    "pfl": "mma",  # espn_ufc.py's scoreboard already covers PFL, not just UFC
     "dota 2": "dota2",
     "dota2": "dota2",
     "cs2": "cs2",
