@@ -88,9 +88,14 @@ STAT_CATALOG = {
         "3-Pointers Made": ("3PT", None),
     },
     "nfl": {
-        "Passing Yards": ("YDS", "QBR"),
-        "Passing TDs": ("TD", "QBR"),
-        "Interceptions Thrown": ("INT", "QBR"),
+        # "RTG" (passer rating), not "QBR" - confirmed live that preseason
+        # boxscores' passing group carries RTG but never QBR, while regular
+        # season carries both. QBR as the discriminator silently skipped the
+        # whole passing group (and its otherwise-present YDS/TD/INT values)
+        # for every preseason game.
+        "Passing Yards": ("YDS", "RTG"),
+        "Passing TDs": ("TD", "RTG"),
+        "Interceptions Thrown": ("INT", "RTG"),
         "Rushing Yards": ("YDS", "CAR"),
         "Rushing TDs": ("TD", "CAR"),
         "Receiving Yards": ("YDS", "TGTS"),
