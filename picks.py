@@ -28,6 +28,7 @@ import scores365
 # includes KBO games alongside MLB), just the label users type differs.
 _SPORT_MAP = {
     "mlb": "baseball",
+    "mbl": "baseball",  # confirmed live - a real header typo'd this way twice
     "kbo": "baseball",
     "nba": "basketball",
     "wnba": "basketball",
@@ -325,6 +326,22 @@ _TOTAL_LINE_RE = re.compile(
 # doesn't get mistaken for a team name.
 _NAMED_TEAM_TOTAL_RE = re.compile(
     r"^(.+?)\s*(?:@|\bvs\.?|\bv\.?)\s*(.+?)\s*-\s*(.+?)\s+(Over|Under)\s+([\d.]+)\b",
+    re.IGNORECASE,
+)
+
+# "Athletics - Over 1.5 Total Score" / "Athletics Over 1.5" - a single
+# team's own full-game total with NO opponent stated at all (unlike
+# _NAMED_TEAM_TOTAL_RE above, which requires a full "Team A vs Team B -
+# Team Over N" matchup) - confirmed live, a real pick worded this way.
+# Only reachable from inside the has_matchup==False branch (see
+# _parse_description), so there's no risk of this swallowing a real
+# matchup line - has_matchup already filtered those out by the time this
+# runs. find_match_for_team already resolves a bare team name to its
+# current game without needing the opponent named, same as a bare
+# moneyline pick, so this reuses the exact same "team_total" kind/grading
+# path as _NAMED_TEAM_TOTAL_RE instead of needing its own.
+_BARE_TEAM_TOTAL_RE = re.compile(
+    r"^(.+?)\s*-?\s*(Over|Under)\s+([\d.]+)(?:\s+\S.*)?\s*$",
     re.IGNORECASE,
 )
 
@@ -1166,6 +1183,20 @@ def _parse_named_team_total_pick(sport: str, description: str) -> Optional[dict]
     }
 
 
+def _parse_bare_team_total_pick(sport: str, description: str) -> Optional[dict]:
+    text = _clean_line(description)
+    m = _BARE_TEAM_TOTAL_RE.match(text)
+    if not m:
+        return None
+    team = m.group(1).strip()
+    if not team:
+        return None
+    return {
+        "kind": "team_total", "sport": sport, "team": team,
+        "direction": m.group(2).lower(), "line": float(m.group(3)),
+    }
+
+
 def _parse_description(sport: str, sport_key: str, description: str, is_prop_category: bool) -> Optional[dict]:
     if sport in ("dota2", "cs2"):
         # None of the generic total/player-prop/track fallback logic below
@@ -1306,6 +1337,12 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
         prop = _parse_player_prop(sport_key, sport, description)
         if prop:
             return prop
+
+        if not is_prop_category:
+            bare_total = _parse_bare_team_total_pick(sport, description)
+            if bare_total:
+                return bare_total
+
         # mma is exempt: this source tags every combat pick "Combat Props"
         # regardless of bet type (confirmed live - a plain fighter moneyline
         # came tagged that way, not just stat props), and ESPN has no
