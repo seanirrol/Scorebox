@@ -455,6 +455,11 @@ async def _track_loop(
             await _void_leg_and_give_up()
     except asyncio.CancelledError:
         raise
+    except Exception:
+        # See tracker.py's identical handler for why this exists.
+        log.exception("UFC tracker crashed unexpectedly for bout %s in channel %s", competition_id, channel_id)
+        botlog.event(f"⚠️ Auto-stopped tracking (UFC): bout `{competition_id}` crashed unexpectedly (see server logs), in <#{channel_id}>")
+        await _void_leg_and_give_up()
     finally:
         _active.pop(key, None)
         _message_owners.pop(message.id, None)
@@ -499,7 +504,11 @@ async def resume_all(client: discord.Client):
     message, or - if the message/channel/bout is gone - cleans up instead.
     """
     for entry in list(state.load_ufc().values()):
-        channel_id, competition_id = entry["channel_id"], entry["competition_id"]
+        try:
+            channel_id, competition_id = entry["channel_id"], entry["competition_id"]
+        except KeyError:
+            log.warning("Dropping UFC entry from an incompatible state schema: %r", entry)
+            continue
         league_slug = entry.get("league_slug", "ufc")
         try:
             channel = await client.fetch_channel(channel_id)

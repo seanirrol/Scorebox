@@ -427,6 +427,11 @@ async def _track_loop(
                 await _void_leg_and_give_up()
     except asyncio.CancelledError:
         raise
+    except Exception:
+        # See tracker.py's identical handler for why this exists.
+        log.exception("1st-inning tracker crashed unexpectedly for game %s in channel %s", game_id, channel_id)
+        botlog.event(f"⚠️ Auto-stopped tracking (1st inning result): game `{game_id}` crashed unexpectedly (see server logs), in <#{channel_id}>")
+        await _void_leg_and_give_up()
     finally:
         _active.pop(key, None)
         _message_owners.pop(message.id, None)
@@ -459,9 +464,13 @@ async def resume_all(client: discord.Client):
     message, or - if the message/channel/game is gone - cleans up instead.
     """
     for entry in list(state.load_inning1().values()):
-        channel_id, game_id, message_id, sport_id = (
-            entry["channel_id"], entry["game_id"], entry["message_id"], entry["sport_id"]
-        )
+        try:
+            channel_id, game_id, message_id, sport_id = (
+                entry["channel_id"], entry["game_id"], entry["message_id"], entry["sport_id"]
+            )
+        except KeyError:
+            log.warning("Dropping 1st-inning entry from an incompatible state schema: %r", entry)
+            continue
         owner_id = entry.get("owner_id")
         try:
             channel = await client.fetch_channel(channel_id)

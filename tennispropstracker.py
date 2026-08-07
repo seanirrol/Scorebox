@@ -462,6 +462,11 @@ async def _track_loop(
                 await _void_leg_and_give_up()
     except asyncio.CancelledError:
         raise
+    except Exception:
+        # See tracker.py's identical handler for why this exists.
+        log.exception("Tennis prop tracker crashed unexpectedly for game %s (%s) in channel %s", game_id, player_name, channel_id)
+        botlog.event(f"⚠️ Auto-stopped tracking (tennis prop): **{player_name}** — game `{game_id}` crashed unexpectedly (see server logs), in <#{channel_id}>")
+        await _void_leg_and_give_up()
     finally:
         _active.pop(key, None)
         _message_owners.pop(message.id, None)

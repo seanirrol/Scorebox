@@ -68,24 +68,39 @@ SPORT_CHOICES = [
 TRASH_EMOJI = "🗑️"
 
 
+async def _safe_resume(name: str, coro):
+    """Isolates one module's resume_all() from every other - previously a
+    single exception (e.g. a KeyError from an old persisted-state schema)
+    would abort on_ready entirely, silently skipping resume_all for every
+    module listed after the one that failed on that restart. Confirmed live:
+    settracker.py/tennispropstracker.py both needed their own try/except
+    after hitting exactly this, but the other modules never got the same
+    fix, so the risk was still there for any of them."""
+    try:
+        await coro
+    except Exception:
+        log.exception("%s.resume_all() failed on startup - other modules still resumed normally", name)
+        botlog.event(f"⚠️ {name}.resume_all() failed on startup (see server logs) - active picks in this module may not have resumed")
+
+
 @client.event
 async def on_ready():
     await tree.sync()
     log.info("Logged in as %s", client.user)
-    await tracker.resume_all(client)
-    await proptracker.resume_all(client)
-    await inningtracker.resume_all(client)
-    await f5tracker.resume_all(client)
-    await halftracker.resume_all(client)
-    await inning1tracker.resume_all(client)
-    await settracker.resume_all(client)
-    await tennispropstracker.resume_all(client)
-    await soccerpropstracker.resume_all(client)
-    await ufctracker.resume_all(client)
-    await esportstracker.resume_all(client)
-    await parlaytracker.resume_all(client)
-    await pendingdelete.resume_all(client)
-    await pendingsoccerprops.resume_all(_resolve_pending_soccer_prop)
+    await _safe_resume("tracker", tracker.resume_all(client))
+    await _safe_resume("proptracker", proptracker.resume_all(client))
+    await _safe_resume("inningtracker", inningtracker.resume_all(client))
+    await _safe_resume("f5tracker", f5tracker.resume_all(client))
+    await _safe_resume("halftracker", halftracker.resume_all(client))
+    await _safe_resume("inning1tracker", inning1tracker.resume_all(client))
+    await _safe_resume("settracker", settracker.resume_all(client))
+    await _safe_resume("tennispropstracker", tennispropstracker.resume_all(client))
+    await _safe_resume("soccerpropstracker", soccerpropstracker.resume_all(client))
+    await _safe_resume("ufctracker", ufctracker.resume_all(client))
+    await _safe_resume("esportstracker", esportstracker.resume_all(client))
+    await _safe_resume("parlaytracker", parlaytracker.resume_all(client))
+    await _safe_resume("pendingdelete", pendingdelete.resume_all(client))
+    await _safe_resume("pendingsoccerprops", pendingsoccerprops.resume_all(_resolve_pending_soccer_prop))
 
 
 @client.event

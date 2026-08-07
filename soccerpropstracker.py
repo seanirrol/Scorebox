@@ -486,6 +486,11 @@ async def _track_loop(
                 await _void_leg_and_give_up()
     except asyncio.CancelledError:
         raise
+    except Exception:
+        # See tracker.py's identical handler for why this exists.
+        log.exception("Soccer prop tracker crashed unexpectedly for game %s (%s) in channel %s", game_id, player_name, channel_id)
+        botlog.event(f"⚠️ Auto-stopped tracking (soccer prop): **{player_name}** — game `{game_id}` crashed unexpectedly (see server logs), in <#{channel_id}>")
+        await _void_leg_and_give_up()
     finally:
         _active.pop(key, None)
         _message_owners.pop(message.id, None)
@@ -525,9 +530,13 @@ async def resume_all(client: discord.Client):
     message, or - if the message/channel/game is gone - cleans up instead.
     """
     for entry in list(state.load_soccer_props().values()):
-        channel_id, game_id, member_id, stat_name = (
-            entry["channel_id"], entry["game_id"], entry["member_id"], entry["stat_name"]
-        )
+        try:
+            channel_id, game_id, member_id, stat_name = (
+                entry["channel_id"], entry["game_id"], entry["member_id"], entry["stat_name"]
+            )
+        except KeyError:
+            log.warning("Dropping soccer prop entry from an incompatible state schema: %r", entry)
+            continue
         try:
             channel = await client.fetch_channel(channel_id)
             message = await channel.fetch_message(entry["message_id"])

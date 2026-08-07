@@ -534,6 +534,18 @@ async def _track_loop(
                 await _void_leg_and_give_up()
     except asyncio.CancelledError:
         raise
+    except Exception:
+        # Anything else escaping this loop (a data shape we didn't guard
+        # against, etc.) used to just kill the task silently - the card
+        # frozen forever with no Discord/botlog signal, "Task exception was
+        # never retrieved" only ever visible in server-side stderr.
+        # Confirmed live: exactly this symptom on a real pick. Logging +
+        # botlog + voiding the parlay leg turns a silent permanent freeze
+        # into something visible and diagnosable, matching every other
+        # give-up path above.
+        log.exception("Tracker crashed unexpectedly for game %s in channel %s", game_id, channel_id)
+        botlog.event(f"⚠️ Auto-stopped tracking: game `{game_id}` crashed unexpectedly (see server logs), in <#{channel_id}>")
+        await _void_leg_and_give_up()
     finally:
         _active_tracks.pop(key, None)
         _message_owners.pop(message.id, None)
@@ -568,9 +580,17 @@ async def resume_all(client: discord.Client):
     message, or - if the message/channel/game is gone - cleans up instead.
     """
     for entry in list(state.load_tracks().values()):
-        channel_id, game_id, message_id, sport_id = (
-            entry["channel_id"], entry["game_id"], entry["message_id"], entry["sport_id"]
-        )
+        try:
+            channel_id, game_id, message_id, sport_id = (
+                entry["channel_id"], entry["game_id"], entry["message_id"], entry["sport_id"]
+            )
+        except KeyError:
+            # Belongs to an incompatible/old state schema - can't be
+            # resumed, just drop it rather than blocking every other entry
+            # in this same loop (a single bad entry used to abort the whole
+            # resume_all call, silently skipping every pick after it too).
+            log.warning("Dropping track entry from an incompatible state schema: %r", entry)
+            continue
         owner_id = entry.get("owner_id")
         try:
             channel = await client.fetch_channel(channel_id)

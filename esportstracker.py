@@ -494,6 +494,14 @@ async def _track_loop(
             await _void_leg_and_give_up()
     except asyncio.CancelledError:
         raise
+    except Exception:
+        # See tracker.py's identical handler for why this exists.
+        log.exception("Esports tracker crashed unexpectedly for %s v %s (%s) in channel %s", team_a, team_b, market, channel_id)
+        botlog.event(
+            f"⚠️ Auto-stopped tracking (esports {market}): "
+            f"{team_a} v {team_b} crashed unexpectedly (see server logs), in <#{channel_id}>"
+        )
+        await _void_leg_and_give_up()
     finally:
         _active.pop(key, None)
         _message_owners.pop(message.id, None)
@@ -532,9 +540,13 @@ async def resume_all(client: discord.Client):
     message, or - if the message/channel/match is gone - cleans up instead.
     """
     for entry in list(state.load_esports().values()):
-        channel_id, sport, team_a, team_b, market, message_id = (
-            entry["channel_id"], entry["sport"], entry["team_a"], entry["team_b"], entry["market"], entry["message_id"]
-        )
+        try:
+            channel_id, sport, team_a, team_b, market, message_id = (
+                entry["channel_id"], entry["sport"], entry["team_a"], entry["team_b"], entry["market"], entry["message_id"]
+            )
+        except KeyError:
+            log.warning("Dropping esports entry from an incompatible state schema: %r", entry)
+            continue
         owner_id = entry.get("owner_id")
         try:
             channel = await client.fetch_channel(channel_id)

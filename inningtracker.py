@@ -171,7 +171,7 @@ async def build_embed(
         embed.title = _RESULT_TITLES[result]
     embed.set_author(name=f"MLB • {league_name}" if league_name != "MLB" else "MLB")
 
-    description_lines = [f"{away_name} v {home_name}", _PICK_LABELS[pick_type]]
+    description_lines = [f"{away_name} v {home_name}", _PICK_LABELS.get(pick_type, pick_type)]
     if state_name == "pre" and comp.get("date"):
         try:
             kickoff = int(datetime.datetime.fromisoformat(comp["date"].replace("Z", "+00:00")).timestamp())
@@ -280,7 +280,7 @@ async def _track_loop(message: discord.Message, channel_id: int, event_id, pick_
         else:
             matchup = f"Event `{event_id}`"
         await parlaytracker.handle_leg_result(
-            message.channel, channel_id, message, "inningtracker", key, f"{matchup} - {_PICK_LABELS[pick_type]}", "void", group_ids,
+            message.channel, channel_id, message, "inningtracker", key, f"{matchup} - {_PICK_LABELS.get(pick_type, pick_type)}", "void", group_ids,
         )
 
     await asyncio.sleep(random.uniform(0, config.UPDATE_INTERVAL_SECONDS))
@@ -328,7 +328,7 @@ async def _track_loop(message: discord.Message, channel_id: int, event_id, pick_
                     pre_away = next((c.get("team", {}).get("displayName", "?") for c in pre_competitors if c.get("homeAway") == "away"), "?")
                     await parlaytracker.report_leg_progress(
                         message.channel, channel_id, message, "inningtracker", key,
-                        f"{pre_away} v {pre_home} - {_PICK_LABELS[pick_type]}",
+                        f"{pre_away} v {pre_home} - {_PICK_LABELS.get(pick_type, pick_type)}",
                         f"NOT STARTED - <t:{int(kickoff)}:f>", group_ids,
                     )
 
@@ -353,7 +353,7 @@ async def _track_loop(message: discord.Message, channel_id: int, event_id, pick_
             leg_competitors = (event.get("header", {}).get("competitions") or [{}])[0].get("competitors", [])
             leg_home = next((c.get("team", {}).get("displayName", "?") for c in leg_competitors if c.get("homeAway") == "home"), "?")
             leg_away = next((c.get("team", {}).get("displayName", "?") for c in leg_competitors if c.get("homeAway") == "away"), "?")
-            leg_label = f"{leg_away} v {leg_home} - {_PICK_LABELS[pick_type]}"
+            leg_label = f"{leg_away} v {leg_home} - {_PICK_LABELS.get(pick_type, pick_type)}"
 
             if hibernated:
                 # The final wake right before kickoff - bump the card to the
@@ -482,6 +482,11 @@ async def _track_loop(message: discord.Message, channel_id: int, event_id, pick_
             await _void_leg_and_give_up()
     except asyncio.CancelledError:
         raise
+    except Exception:
+        # See tracker.py's identical handler for why this exists.
+        log.exception("Inning tracker crashed unexpectedly for event %s (%s) in channel %s", event_id, pick_type, channel_id)
+        botlog.event(f"⚠️ Auto-stopped tracking ({pick_type}): event `{event_id}` crashed unexpectedly (see server logs), in <#{channel_id}>")
+        await _void_leg_and_give_up()
     finally:
         _active.pop(key, None)
         _message_owners.pop(message.id, None)
@@ -500,7 +505,7 @@ def start_tracking(
     register_message(message.id, channel_id, event_id, pick_type, owner_id)
     _persist(channel_id, event_id, pick_type, message.id, team_id, owner_id)
     dailylog.record_pick(
-        channel_id, "inningtracker", key, section, label or _PICK_LABELS[pick_type], message.id, origin_channel_id,
+        channel_id, "inningtracker", key, section, label or _PICK_LABELS.get(pick_type, pick_type), message.id, origin_channel_id,
     )
 
 
@@ -511,7 +516,11 @@ async def resume_all(client: discord.Client):
     message, or - if the message/channel/event is gone - cleans up instead.
     """
     for entry in list(state.load_innings().values()):
-        channel_id, event_id, pick_type = entry["channel_id"], entry["event_id"], entry["pick_type"]
+        try:
+            channel_id, event_id, pick_type = entry["channel_id"], entry["event_id"], entry["pick_type"]
+        except KeyError:
+            log.warning("Dropping inning entry from an incompatible state schema: %r", entry)
+            continue
         try:
             channel = await client.fetch_channel(channel_id)
             message = await channel.fetch_message(entry["message_id"])

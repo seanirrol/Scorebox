@@ -650,6 +650,13 @@ async def _track_loop(
             await _void_leg_and_give_up()
     except asyncio.CancelledError:
         raise
+    except Exception:
+        # See tracker.py's identical handler for why this exists - an
+        # unguarded exception here used to kill the task silently, freezing
+        # the card forever with no Discord/botlog signal.
+        log.exception("Prop tracker crashed unexpectedly for event %s (%s) in channel %s", event_id, player_name, channel_id)
+        botlog.event(f"⚠️ Auto-stopped tracking (prop): **{player_name}** — event `{event_id}` crashed unexpectedly (see server logs), in <#{channel_id}>")
+        await _void_leg_and_give_up()
     finally:
         _active_props.pop(key, None)
         _message_owners.pop(message.id, None)
@@ -700,8 +707,15 @@ async def resume_all(client: discord.Client):
     message, or - if the message/channel/event is gone - cleans up instead.
     """
     for entry in list(state.load_props().values()):
-        stat_key = tuple(entry["stat_key"])
-        channel_id, event_id, entity_id = entry["channel_id"], entry["event_id"], entry["entity_id"]
+        try:
+            stat_key = tuple(entry["stat_key"])
+            channel_id, event_id, entity_id = entry["channel_id"], entry["event_id"], entry["entity_id"]
+        except KeyError:
+            # Belongs to an incompatible/old state schema - can't be
+            # resumed, just drop it rather than blocking every other entry
+            # in this same loop.
+            log.warning("Dropping prop entry from an incompatible state schema: %r", entry)
+            continue
         try:
             channel = await client.fetch_channel(channel_id)
             message = await channel.fetch_message(entry["message_id"])
