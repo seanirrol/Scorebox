@@ -235,9 +235,6 @@ async def _auto_track(
     tracker.register_message(message.id, channel.id, game_id, None)
     await message.add_reaction(TRASH_EMOJI)
 
-    if scores365.is_finished(game):
-        botlog.event(f"⏭️ Not tracked: **{team}** — game `{game_id}` already finished, posted final score only")
-        return
     tracker.start_tracking(
         message, sport_id, game, channel.id, None, picked_team, total_direction, total_line, team_total,
         section, label, origin_channel_id,
@@ -281,9 +278,6 @@ async def _auto_f5(
     f5tracker.register_message(message.id, channel.id, game_id, None)
     await message.add_reaction(TRASH_EMOJI)
 
-    if await asyncio.to_thread(scores365.innings_breakdown, game_id, f5tracker.THROUGH_INNING) is not None:
-        botlog.event(f"⏭️ Not tracked (F5): **{team}** — game `{game_id}` F5 already decided, posted final score only")
-        return  # F5 was already decided by the time this pick was posted
     f5tracker.start_tracking(
         message, sport_id, game, channel.id, None, picked_team, total_direction, total_line, handicap_line,
         section, label, origin_channel_id,
@@ -325,9 +319,6 @@ async def _auto_1h_total(
     halftracker.register_message(message.id, channel.id, game_id, None)
     await message.add_reaction(TRASH_EMOJI)
 
-    if await asyncio.to_thread(scores365.quarters_breakdown, game_id, halftracker.THROUGH_QUARTER) is not None:
-        botlog.event(f"⏭️ Not tracked (1H): **{team}** — game `{game_id}` 1st half already decided, posted final score only")
-        return  # 1st half was already decided by the time this pick was posted
     halftracker.start_tracking(
         message, sport_id, game, channel.id, None, picked_team, total_direction, total_line, section, label, origin_channel_id,
     )
@@ -404,9 +395,6 @@ async def _auto_playerprops(
     proptracker.register_message(message.id, channel.id, event_id, entity["id"], stat_key, None)
     await message.add_reaction(TRASH_EMOJI)
 
-    if espn.is_finished(event):
-        botlog.event(f"⏭️ Not tracked (prop): **{player}** {stat} — match already finished, posted final value only")
-        return
     proptracker.start_tracking(
         message, channel.id, event_id, entity["id"], entity["team_id"], entity["photo_url"],
         sport_value, stat_key, stat, entity["name"], None, direction, line, entity["team_name"],
@@ -459,9 +447,6 @@ async def _auto_tennis_playerprops(
     tennispropstracker.register_message(message.id, channel.id, game_id, competitor_id, stat_name, None)
     await message.add_reaction(TRASH_EMOJI)
 
-    if scores365.is_finished(game):
-        botlog.event(f"⏭️ Not tracked (tennis prop): **{player}** {stat} — match already finished, posted final value only")
-        return
     tennispropstracker.start_tracking(
         message, sport_id, game_id, channel.id, competitor_id, stat_name, stat, resolved_name, None, direction, line,
         section, label, origin_channel_id,
@@ -522,9 +507,6 @@ async def _complete_soccer_prop_track(
     soccerpropstracker.register_message(message.id, channel.id, game_id, member_id, stat_name, None)
     await message.add_reaction(TRASH_EMOJI)
 
-    if scores365.is_finished(game):
-        botlog.event(f"⏭️ Not tracked (soccer prop): **{player}** {stat} — match already finished, posted final value only")
-        return
     soccerpropstracker.start_tracking(
         message, game_id, channel.id, member_id, member_competitor_id, stat_name, photo_url,
         stat, resolved_name, None, direction, line, fixture_path, section, label, origin_channel_id,
@@ -632,9 +614,6 @@ async def _auto_inning_runs(
     inningtracker.register_message(message.id, channel.id, event_id, pick_type, None)
     await message.add_reaction(TRASH_EMOJI)
 
-    if espn.get_first_inning_breakdown(event) is not None:
-        botlog.event(f"⏭️ Not tracked ({pick_type}): **{team}** — 1st inning already decided, posted final result only")
-        return  # 1st inning was already decided by the time this pick was posted
     inningtracker.start_tracking(
         message, channel.id, event_id, pick_type, entity["id"], None, section, label, origin_channel_id,
     )
@@ -672,9 +651,6 @@ async def _auto_inning1_result(
     inning1tracker.register_message(message.id, channel.id, game_id, None)
     await message.add_reaction(TRASH_EMOJI)
 
-    if await asyncio.to_thread(scores365.innings_breakdown, game_id, inning1tracker.THROUGH_INNING) is not None:
-        botlog.event(f"⏭️ Not tracked (1st inning result): **{team}** — game `{game_id}` already decided, posted final result only")
-        return  # already decided by the time this pick was posted
     inning1tracker.start_tracking(
         message, sport_id, game, channel.id, None, team, pick, section, label, origin_channel_id,
     )
@@ -717,10 +693,6 @@ async def _auto_tennis_market(
     settracker.register_message(message.id, channel.id, game_id, market, team, None)
     await message.add_reaction(TRASH_EMOJI)
 
-    decided, _ = settracker.grade_now(game, market, team, direction, line)
-    if decided:
-        botlog.event(f"⏭️ Not tracked ({market}): **{team}** — game `{game_id}` already decided, posted final result only")
-        return  # already decided by the time this pick was posted
     settracker.start_tracking(
         message, sport_id, game, channel.id, market, None, team, direction, line, section, label, origin_channel_id,
     )
@@ -764,9 +736,6 @@ async def _auto_ufc(
     ufctracker.register_message(message.id, channel.id, competition_id, None)
     await message.add_reaction(TRASH_EMOJI)
 
-    if espn_ufc.is_finished(competition):
-        botlog.event(f"⏭️ Not tracked ({category_label}): **{fighter}** — bout `{competition_id}` already finished, posted final result only")
-        return
     ufctracker.start_tracking(
         message, channel.id, league_slug, event["id"], competition_id, competition["date"], None, event["name"],
         fighter_id, fighter_name, total_direction, total_line, section, label, origin_channel_id,
@@ -805,10 +774,6 @@ async def _auto_esports(
     esportstracker.register_message(message.id, channel.id, sport, team_a, team_b, market, None)
     await message.add_reaction(TRASH_EMOJI)
 
-    decided, _ = esportstracker.grade_now(series_data, market, picked_team, direction, line, map_number, picked_maps, other_maps)
-    if decided:
-        botlog.event(f"⏭️ Not tracked ({category_label}): **{team_a} v {team_b}** — already decided, posted final result only")
-        return
     esportstracker.start_tracking(
         message, sport, team_a, team_b, channel.id, market, None,
         picked_team, direction, line, map_number, picked_maps, other_maps, section, label, origin_channel_id,
