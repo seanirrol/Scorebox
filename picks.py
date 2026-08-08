@@ -74,6 +74,19 @@ _LINE_RE = re.compile(r"^\s*(?:\d+[.)]\s*|[•\-*]\s*)?\[([^\]]+)\]\s*(.+)$")
 # posted, since the number wasn't immediately after Over/Under).
 _PLAYER_STAT_RE = re.compile(r"^(.+?)\s+(Over|Under)\s+(?:the\s+)?([\d.]+)\s+(.+?)\s*(?:\(|$)", re.IGNORECASE)
 
+# Combined basketball stat props ("P+R+A") are conventionally worded with
+# the stat token BEFORE "Over/Under" (e.g. "Shakira Austin P+R+A Over
+# 24.5") - the reverse of every other player prop this module parses
+# (_PLAYER_STAT_RE above expects "Player Over N Stat"). A generic
+# "stat can be on either side" regex would be ambiguous for ordinary player
+# names (no way to tell where the name ends and an arbitrary stat begins) -
+# safe here only because the combo-stat token itself is a small, fixed,
+# unambiguous set, always immediately followed by whitespace + Over/Under.
+_COMBO_STAT_BEFORE_RE = re.compile(
+    r"^(.+?)\s+(P\s*\+\s*R\s*\+\s*A|PRA)\s+(Over|Under)\s+(?:the\s+)?([\d.]+)\s*(?:\(|$)",
+    re.IGNORECASE,
+)
+
 # "Team A vs Team B - YRFI - Yes Runs 1st Inning (...)" - settles after just
 # the 1st inning, not the whole game, so it's routed to inningtracker.py
 # rather than /track's kind="track" (see _parse_yrfi_line). Only one of the
@@ -386,6 +399,16 @@ _AMBIGUOUS_STAT_DEFAULTS = {
     ("wnba", "3 pointers"): "3-Pointers Made",
     ("wnba", "3-point field goals"): "3-Pointers Made",
     ("wnba", "total 3-point field goals"): "3-Pointers Made",
+    # "P+R+A"/"PRA" (points + rebounds + assists) shares no substring with
+    # the catalog's "Points + Rebounds + Assists" label - same fuzzy-match
+    # gap as the 3-Pointers aliases above. Covers the less common
+    # stat-after-Over wording ("... Over 24.5 P+R+A"); the far more common
+    # stat-before-Over wording ("... P+R+A Over 24.5") is handled separately
+    # by _COMBO_STAT_BEFORE_RE, not through this table.
+    ("basketball", "p+r+a"): "Points + Rebounds + Assists",
+    ("basketball", "pra"): "Points + Rebounds + Assists",
+    ("wnba", "p+r+a"): "Points + Rebounds + Assists",
+    ("wnba", "pra"): "Points + Rebounds + Assists",
 }
 
 # _SPORT_MAP collapses "nba"/"wnba" to the same "basketball" key since
@@ -661,6 +684,26 @@ def _parse_player_prop(sport_key: str, sport: str, description: str) -> Optional
     return {
         "kind": "playerprops", "sport": prop_sport, "player": player, "stat": stat_label,
         "direction": direction, "line": line,
+    }
+
+
+def _parse_combo_stat_prop(sport_key: str, sport: str, description: str) -> Optional[dict]:
+    """Basketball-only "P+R+A"/"PRA" props, worded stat-BEFORE-Over unlike
+    every other prop here - see _COMBO_STAT_BEFORE_RE."""
+    if sport not in ("basketball", "wnba"):
+        return None
+    m = _COMBO_STAT_BEFORE_RE.match(description)
+    if not m:
+        return None
+    player = re.sub(r"[\s-]+$", "", m.group(1)).strip()
+    direction = m.group(3).lower()
+    line = float(m.group(4))
+    prop_sport = _PROP_SPORT_OVERRIDE.get(sport_key, sport)
+    if not player:
+        return None
+    return {
+        "kind": "playerprops", "sport": prop_sport, "player": player,
+        "stat": "Points + Rebounds + Assists", "direction": direction, "line": line,
     }
 
 
@@ -1340,6 +1383,10 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
                 # Same reasoning as tennis above - e.g. "Shots"/"Passes"
                 # aren't supported (see scores365.SOCCER_STAT_CATALOG).
                 return None
+
+        combo_prop = _parse_combo_stat_prop(sport_key, sport, description)
+        if combo_prop:
+            return combo_prop
 
         prop = _parse_player_prop(sport_key, sport, description)
         if prop:

@@ -50,6 +50,18 @@ SPORT_DISPLAY_LABELS = {
 # label lookup - handled specially in get_stat_value.
 TOTAL_BASES_KEY = ("__computed__", "total_bases")
 
+# Combined-stat props (e.g. "P+R+A") aren't their own boxscore column -
+# they're a sum of existing single-stat columns. Computed the same way as
+# TOTAL_BASES_KEY: a sentinel key handled specially in get_stat_value, which
+# sums the listed component (label, discriminator) pairs via ordinary
+# recursive get_stat_value calls rather than a bespoke play-by-play scan
+# (unlike Total Bases, every component here already has its own plain
+# boxscore column, so no play-by-play digging is needed).
+PRA_KEY = ("__computed__", "pra")
+_COMBO_STAT_COMPONENTS = {
+    PRA_KEY: (("PTS", None), ("REB", None), ("AST", None)),
+}
+
 # ESPN reports these boxscore labels as a "made-attempted" string (e.g.
 # "1-6"), never a plain number - confirmed live for every athlete in a real
 # WNBA boxscore's "3PT" column. Passing that straight to float() in
@@ -86,6 +98,7 @@ STAT_CATALOG = {
         "Blocks": ("BLK", None),
         "Turnovers": ("TO", None),
         "3-Pointers Made": ("3PT", None),
+        "Points + Rebounds + Assists": PRA_KEY,
     },
     "nfl": {
         # "RTG" (passer rating), not "QBR" - confirmed live that preseason
@@ -311,6 +324,22 @@ def get_stat_value(event: dict, entity_id: str, stat_key: tuple) -> tuple[Option
 
     if stat_key == TOTAL_BASES_KEY:
         return _compute_total_bases(event, entity_id), is_home, team
+
+    if stat_key in _COMBO_STAT_COMPONENTS:
+        # PTS/REB/AST are always whole numbers - int, not float, so display
+        # matches every other integer stat (e.g. "30" not "30.0").
+        total = 0
+        any_found = False
+        for component_key in _COMBO_STAT_COMPONENTS[stat_key]:
+            raw, _, _ = get_stat_value(event, entity_id, component_key)
+            if raw is None:
+                continue
+            try:
+                total += int(raw)
+                any_found = True
+            except (TypeError, ValueError):
+                continue
+        return (total if any_found else None), is_home, team
 
     label, discriminator = stat_key
     for team_entry in (event.get("boxscore") or {}).get("players", []):
