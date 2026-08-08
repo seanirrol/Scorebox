@@ -125,12 +125,19 @@ def unregister_message(message_id: int):
 def _persist(
     channel_id: int, game_id, message_id: int, sport_id, owner_id: int, picked_team: Optional[str] = None,
     total_direction: Optional[str] = None, total_line: Optional[float] = None, handicap_line: Optional[float] = None,
+    section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
 ):
+    """section/label/origin_channel_id are persisted purely so resume_all
+    can hand them back to dailylog.record_pick on restart - see
+    tracker.py's _persist for why this matters (confirmed live: a restart
+    mid-tracking orphaned a dailylog entry once track_key's format changed,
+    since resume_all had no section/label to re-link a fresh one with)."""
     data = state.load_f5()
     data[track_key(channel_id, game_id, picked_team, total_direction, total_line, handicap_line)] = {
         "channel_id": channel_id, "game_id": game_id, "message_id": message_id,
         "sport_id": sport_id, "owner_id": owner_id, "picked_team": picked_team,
         "total_direction": total_direction, "total_line": total_line, "handicap_line": handicap_line,
+        "section": section, "label": label, "origin_channel_id": origin_channel_id,
     }
     state.save_f5(data)
 
@@ -565,9 +572,12 @@ def start_tracking(
     )
     _active[key] = task
     register_message(message.id, channel_id, game_id, owner_id, picked_team, total_direction, total_line, handicap_line)
-    _persist(channel_id, game_id, message.id, sport_id, owner_id, picked_team, total_direction, total_line, handicap_line)
     if not label:
         label = f"{(game.get('homeCompetitor') or {}).get('name', '?')} vs {(game.get('awayCompetitor') or {}).get('name', '?')}"
+    _persist(
+        channel_id, game_id, message.id, sport_id, owner_id, picked_team, total_direction, total_line, handicap_line,
+        section, label, origin_channel_id,
+    )
     dailylog.record_pick(channel_id, "f5tracker", key, section, label, message.id, origin_channel_id)
 
 
@@ -612,5 +622,6 @@ async def resume_all(client: discord.Client):
         start_tracking(
             message, sport_id, game, channel_id, owner_id, entry["picked_team"],
             entry.get("total_direction"), entry.get("total_line"), entry.get("handicap_line"),
+            entry.get("section"), entry.get("label"), entry.get("origin_channel_id"),
         )
         log.info("Resumed F5 tracking for game %s in channel %s", game_id, channel_id)

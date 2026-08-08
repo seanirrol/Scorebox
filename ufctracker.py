@@ -116,13 +116,18 @@ def _persist(
     channel_id: int, league_slug: str, event_id, competition_id, competition_date: str, message_id: int, owner_id: int,
     event_name: str, fighter_id=None, fighter_name: Optional[str] = None,
     total_direction: Optional[str] = None, total_line: Optional[float] = None,
+    section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
 ):
+    """section/label/origin_channel_id are persisted purely so resume_all
+    can hand them back to dailylog.record_pick on restart - see
+    tracker.py's _persist for why this matters."""
     data = state.load_ufc()
     data[track_key(channel_id, competition_id, fighter_id, total_direction, total_line)] = {
         "channel_id": channel_id, "league_slug": league_slug, "event_id": event_id, "competition_id": competition_id,
         "competition_date": competition_date, "message_id": message_id, "owner_id": owner_id,
         "event_name": event_name, "fighter_id": fighter_id, "fighter_name": fighter_name,
         "total_direction": total_direction, "total_line": total_line,
+        "section": section, "label": label, "origin_channel_id": origin_channel_id,
     }
     state.save_ufc(data)
 
@@ -516,10 +521,6 @@ def start_tracking(
     )
     _active[key] = task
     register_message(message.id, channel_id, competition_id, owner_id, fighter_id, total_direction, total_line)
-    _persist(
-        channel_id, league_slug, event_id, competition_id, competition_date, message.id, owner_id,
-        event_name, fighter_id, fighter_name, total_direction, total_line,
-    )
     if not label:
         if fighter_id is not None:
             label = f"{fighter_name} ML"
@@ -527,6 +528,10 @@ def start_tracking(
             label = f"Fight {total_direction.title()} {total_line:g} Rounds"
         else:
             label = event_name
+    _persist(
+        channel_id, league_slug, event_id, competition_id, competition_date, message.id, owner_id,
+        event_name, fighter_id, fighter_name, total_direction, total_line, section, label, origin_channel_id,
+    )
     dailylog.record_pick(channel_id, "ufctracker", key, section, label, message.id, origin_channel_id)
 
 
@@ -572,5 +577,6 @@ async def resume_all(client: discord.Client):
         start_tracking(
             message, channel_id, league_slug, entry["event_id"], competition_id, entry["competition_date"], entry.get("owner_id"),
             event_name, entry.get("fighter_id"), entry.get("fighter_name"), entry.get("total_direction"), entry.get("total_line"),
+            entry.get("section"), entry.get("label"), entry.get("origin_channel_id"),
         )
         log.info("Resumed UFC tracking for bout %s in channel %s", competition_id, channel_id)

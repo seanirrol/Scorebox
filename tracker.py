@@ -264,12 +264,22 @@ def list_tracked_details(channel_id: int) -> list[dict]:
 def _persist(
     channel_id: int, game_id, message_id: int, sport_id, owner_id: int, picked_team: Optional[str] = None,
     total_direction: Optional[str] = None, total_line: Optional[float] = None, team_total: Optional[str] = None,
+    section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
 ):
+    """section/label/origin_channel_id are persisted purely so resume_all
+    can hand them back to dailylog.record_pick on restart (see start_tracking)
+    - without them, a resumed pick's dailylog entry silently stops updating
+    forever the moment track_key's own format ever changes (confirmed live:
+    exactly this happened when track_key gained a market discriminator -
+    a restart mid-tracking orphaned the old-format dailylog entry, and
+    resume_all had nothing to re-link a fresh one with, since it never had
+    section/label to pass to record_pick in the first place)."""
     data = state.load_tracks()
     data[track_key(channel_id, game_id, picked_team, team_total, total_direction, total_line)] = {
         "channel_id": channel_id, "game_id": game_id, "message_id": message_id,
         "sport_id": sport_id, "owner_id": owner_id, "picked_team": picked_team,
         "total_direction": total_direction, "total_line": total_line, "team_total": team_total,
+        "section": section, "label": label, "origin_channel_id": origin_channel_id,
     }
     state.save_tracks(data)
 
@@ -597,9 +607,12 @@ def start_tracking(
     )
     _active_tracks[key] = task
     register_message(message.id, channel_id, game_id, owner_id, picked_team, team_total, total_direction, total_line)
-    _persist(channel_id, game_id, message.id, sport_id, owner_id, picked_team, total_direction, total_line, team_total)
     if not label:
         label = f"{(game.get('homeCompetitor') or {}).get('name', '?')} vs {(game.get('awayCompetitor') or {}).get('name', '?')}"
+    _persist(
+        channel_id, game_id, message.id, sport_id, owner_id, picked_team, total_direction, total_line, team_total,
+        section, label, origin_channel_id,
+    )
     dailylog.record_pick(channel_id, "tracker", key, section, label, message.id, origin_channel_id)
 
 
@@ -653,6 +666,6 @@ async def resume_all(client: discord.Client):
         start_tracking(
             message, sport_id, game, channel_id, owner_id,
             entry.get("picked_team"), entry.get("total_direction"), entry.get("total_line"),
-            entry.get("team_total"),
+            entry.get("team_total"), entry.get("section"), entry.get("label"), entry.get("origin_channel_id"),
         )
         log.info("Resumed tracking game %s in channel %s", game_id, channel_id)
