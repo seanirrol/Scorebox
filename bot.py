@@ -366,6 +366,16 @@ async def _auto_playerprops(
             return
         if entity:
             sport_value = "wnba"
+            # Fixes tracking (ESPN calls below now correctly hit the WNBA
+            # endpoint), but /summary groups purely by this literal header
+            # text (see dailylog.record_pick) - left uncorrected, a pick
+            # that tracked and graded fine under WNBA data would still
+            # file under "NBA" in the report. Confirmed live: Shakira
+            # Austin and Alyssa Thomas picks both graded correctly but
+            # showed up under an "NBA" section instead of "WNBA".
+            if section:
+                suffix = " Props" if section.lower().endswith("props") else ""
+                section = espn.SPORT_DISPLAY_LABELS.get("wnba", "WNBA") + suffix
     if not entity:
         log.info("Auto-playerprops: no player found for '%s' (%s)", player, sport_value)
         botlog.event(f"❌ Not tracked (prop): **{player}** {stat} ({sport_value}) — player not found on ESPN")
