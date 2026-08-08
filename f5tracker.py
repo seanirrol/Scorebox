@@ -66,12 +66,32 @@ def _footer_text(message_id: Optional[int] = None) -> str:
     return f"Scorebox ({message_id}) • data via 365scores" if message_id else "Scorebox • data via 365scores"
 
 
-def track_key(channel_id: int, game_id) -> str:
-    return f"{channel_id}:{game_id}"
+def track_key(
+    channel_id: int, game_id, picked_team: Optional[str] = None, total_direction: Optional[str] = None,
+    total_line: Optional[float] = None, handicap_line: Optional[float] = None,
+) -> str:
+    """Different F5 bet types on the same game must never collide - same
+    fix as tracker.py's track_key (see its docstring) - this used to be
+    bare channel_id:game_id, so an F5 moneyline and an F5 team total on the
+    same game couldn't both be tracked at once."""
+    if picked_team and handicap_line is not None:
+        market = f"hcap:{picked_team}:{handicap_line:+g}"
+    elif picked_team and total_direction and total_line is not None:
+        market = f"tt:{picked_team}:{total_direction}:{total_line:g}"
+    elif total_direction and total_line is not None:
+        market = f"total:{total_direction}:{total_line:g}"
+    elif picked_team:
+        market = f"ml:{picked_team}"
+    else:
+        market = "manual"
+    return f"{channel_id}:{game_id}:{market}"
 
 
-def is_tracked(channel_id: int, game_id) -> bool:
-    return track_key(channel_id, game_id) in _active
+def is_tracked(
+    channel_id: int, game_id, picked_team: Optional[str] = None, total_direction: Optional[str] = None,
+    total_line: Optional[float] = None, handicap_line: Optional[float] = None,
+) -> bool:
+    return track_key(channel_id, game_id, picked_team, total_direction, total_line, handicap_line) in _active
 
 
 def list_tracked_details(channel_id: int) -> list[dict]:
@@ -79,13 +99,19 @@ def list_tracked_details(channel_id: int) -> list[dict]:
     active_keys = {k for k in _active if k.startswith(prefix)}
     return [
         entry for entry in state.load_f5().values()
-        if track_key(entry["channel_id"], entry["game_id"]) in active_keys
+        if track_key(
+            entry["channel_id"], entry["game_id"], entry.get("picked_team"), entry.get("total_direction"),
+            entry.get("total_line"), entry.get("handicap_line"),
+        ) in active_keys
     ]
 
 
-def register_message(message_id: int, channel_id: int, game_id, owner_id: int):
+def register_message(
+    message_id: int, channel_id: int, game_id, owner_id: int, picked_team: Optional[str] = None,
+    total_direction: Optional[str] = None, total_line: Optional[float] = None, handicap_line: Optional[float] = None,
+):
     """Lets bot.py's 🗑️-reaction handler know who's allowed to delete this message."""
-    _message_owners[message_id] = (channel_id, game_id, owner_id)
+    _message_owners[message_id] = (channel_id, game_id, picked_team, total_direction, total_line, handicap_line, owner_id)
 
 
 def get_message_owner(message_id: int) -> Optional[tuple]:
@@ -101,7 +127,7 @@ def _persist(
     total_direction: Optional[str] = None, total_line: Optional[float] = None, handicap_line: Optional[float] = None,
 ):
     data = state.load_f5()
-    data[track_key(channel_id, game_id)] = {
+    data[track_key(channel_id, game_id, picked_team, total_direction, total_line, handicap_line)] = {
         "channel_id": channel_id, "game_id": game_id, "message_id": message_id,
         "sport_id": sport_id, "owner_id": owner_id, "picked_team": picked_team,
         "total_direction": total_direction, "total_line": total_line, "handicap_line": handicap_line,
@@ -109,19 +135,25 @@ def _persist(
     state.save_f5(data)
 
 
-def _forget(channel_id: int, game_id):
+def _forget(
+    channel_id: int, game_id, picked_team: Optional[str] = None, total_direction: Optional[str] = None,
+    total_line: Optional[float] = None, handicap_line: Optional[float] = None,
+):
     data = state.load_f5()
-    data.pop(track_key(channel_id, game_id), None)
+    data.pop(track_key(channel_id, game_id, picked_team, total_direction, total_line, handicap_line), None)
     state.save_f5(data)
 
 
-def stop_tracking(channel_id: int, game_id) -> bool:
-    key = track_key(channel_id, game_id)
+def stop_tracking(
+    channel_id: int, game_id, picked_team: Optional[str] = None, total_direction: Optional[str] = None,
+    total_line: Optional[float] = None, handicap_line: Optional[float] = None,
+) -> bool:
+    key = track_key(channel_id, game_id, picked_team, total_direction, total_line, handicap_line)
     task = _active.pop(key, None)
-    _forget(channel_id, game_id)
+    _forget(channel_id, game_id, picked_team, total_direction, total_line, handicap_line)
     dailylog.record_result(channel_id, "f5tracker", key, "void")
-    for message_id, (c_id, g_id, _owner) in list(_message_owners.items()):
-        if c_id == channel_id and g_id == game_id:
+    for message_id, (c_id, g_id, pt, td, tl, hl, _owner) in list(_message_owners.items()):
+        if c_id == channel_id and g_id == game_id and pt == picked_team and td == total_direction and tl == total_line and hl == handicap_line:
             _message_owners.pop(message_id, None)
     if task:
         task.cancel()
@@ -259,7 +291,7 @@ async def _track_loop(
     picked_team: Optional[str] = None, total_direction: Optional[str] = None, total_line: Optional[float] = None,
     handicap_line: Optional[float] = None,
 ):
-    key = track_key(channel_id, game_id)
+    key = track_key(channel_id, game_id, picked_team, total_direction, total_line, handicap_line)
     deadline = time.monotonic() + config.MAX_TRACK_HOURS * 3600
 
     consecutive_misses = 0
@@ -302,7 +334,7 @@ async def _track_loop(
         old_message = message
         message = new_message
         _message_owners.pop(old_message.id, None)
-        register_message(message.id, channel_id, game_id, owner_id)
+        register_message(message.id, channel_id, game_id, owner_id, picked_team, total_direction, total_line, handicap_line)
         try:
             await old_message.delete()
         except discord.HTTPException as e:
@@ -523,7 +555,7 @@ def start_tracking(
     origin_channel_id: Optional[int] = None,
 ):
     game_id = game["id"]
-    key = track_key(channel_id, game_id)
+    key = track_key(channel_id, game_id, picked_team, total_direction, total_line, handicap_line)
     if key in _active:
         return
     task = asyncio.create_task(
@@ -532,7 +564,7 @@ def start_tracking(
         )
     )
     _active[key] = task
-    register_message(message.id, channel_id, game_id, owner_id)
+    register_message(message.id, channel_id, game_id, owner_id, picked_team, total_direction, total_line, handicap_line)
     _persist(channel_id, game_id, message.id, sport_id, owner_id, picked_team, total_direction, total_line, handicap_line)
     if not label:
         label = f"{(game.get('homeCompetitor') or {}).get('name', '?')} vs {(game.get('awayCompetitor') or {}).get('name', '?')}"

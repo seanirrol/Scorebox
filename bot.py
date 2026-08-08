@@ -157,8 +157,8 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
         return
 
     if kind == "track":
-        channel_id, game_id, _ = info
-        tracker.stop_tracking(channel_id, game_id)
+        channel_id, game_id, picked_team, team_total, total_direction, total_line, _ = info
+        tracker.stop_tracking(channel_id, game_id, picked_team, team_total, total_direction, total_line)
     elif kind == "prop":
         channel_id, event_id, entity_id, stat_key, _ = info
         proptracker.stop_tracking(channel_id, event_id, entity_id, stat_key)
@@ -166,8 +166,8 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
         channel_id, event_id, pick_type, _ = info
         inningtracker.stop_tracking(channel_id, event_id, pick_type)
     elif kind == "f5":
-        channel_id, game_id, _ = info
-        f5tracker.stop_tracking(channel_id, game_id)
+        channel_id, game_id, picked_team, total_direction, total_line, handicap_line, _ = info
+        f5tracker.stop_tracking(channel_id, game_id, picked_team, total_direction, total_line, handicap_line)
     elif kind == "inning1":
         channel_id, game_id, _ = info
         inning1tracker.stop_tracking(channel_id, game_id)
@@ -178,8 +178,8 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
         channel_id, game_id, competitor_id, stat_name, _ = info
         tennispropstracker.stop_tracking(channel_id, game_id, competitor_id, stat_name)
     elif kind == "ufc":
-        channel_id, competition_id, _ = info
-        ufctracker.stop_tracking(channel_id, competition_id)
+        channel_id, competition_id, fighter_id, total_direction, total_line, _ = info
+        ufctracker.stop_tracking(channel_id, competition_id, fighter_id, total_direction, total_line)
     elif kind == "esports":
         channel_id, sport, team_a, team_b, market, _ = info
         esportstracker.stop_tracking(channel_id, sport, team_a, team_b, market)
@@ -223,16 +223,16 @@ async def _auto_track(
         return
     game, sport_id = result
     game_id = game["id"]
-    if tracker.is_tracked(channel.id, game_id):
+    picked_team = team if total_direction is None and team_total is None else None
+    if tracker.is_tracked(channel.id, game_id, picked_team, team_total, total_direction, total_line):
         botlog.event(f"⏭️ Skipped: **{team}** — game `{game_id}` already being tracked in <#{channel.id}>")
         return
 
-    picked_team = team if total_direction is None and team_total is None else None
     embed, file = await tracker.build_embed(game, sport_id, picked_team, total_direction, total_line, team_total)
     message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
     embed.set_footer(text=tracker._footer_text(message.id))
     await throttle.run(channel.id, lambda: message.edit(embed=embed))
-    tracker.register_message(message.id, channel.id, game_id, None)
+    tracker.register_message(message.id, channel.id, game_id, None, picked_team, team_total, total_direction, total_line)
     await message.add_reaction(TRASH_EMOJI)
 
     tracker.start_tracking(
@@ -266,16 +266,16 @@ async def _auto_f5(
         return
     game, sport_id = result
     game_id = game["id"]
-    if f5tracker.is_tracked(channel.id, game_id):
+    picked_team = None if combined else team
+    if f5tracker.is_tracked(channel.id, game_id, picked_team, total_direction, total_line, handicap_line):
         botlog.event(f"⏭️ Skipped (F5): **{team}** — game `{game_id}` already being tracked in <#{channel.id}>")
         return
 
-    picked_team = None if combined else team
     embed, file = await f5tracker.build_embed(game, sport_id, picked_team, total_direction, total_line, handicap_line)
     message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
     embed.set_footer(text=f5tracker._footer_text(message.id))
     await throttle.run(channel.id, lambda: message.edit(embed=embed))
-    f5tracker.register_message(message.id, channel.id, game_id, None)
+    f5tracker.register_message(message.id, channel.id, game_id, None, picked_team, total_direction, total_line, handicap_line)
     await message.add_reaction(TRASH_EMOJI)
 
     f5tracker.start_tracking(
@@ -307,16 +307,16 @@ async def _auto_1h_total(
         return
     game, sport_id = result
     game_id = game["id"]
-    if halftracker.is_tracked(channel.id, game_id):
+    picked_team = None if combined else team
+    if halftracker.is_tracked(channel.id, game_id, picked_team, total_direction, total_line):
         botlog.event(f"⏭️ Skipped (1H): **{team}** — game `{game_id}` already being tracked in <#{channel.id}>")
         return
 
-    picked_team = None if combined else team
     embed, file = await halftracker.build_embed(game, sport_id, picked_team, total_direction, total_line)
     message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
     embed.set_footer(text=halftracker._footer_text(message.id))
     await throttle.run(channel.id, lambda: message.edit(embed=embed))
-    halftracker.register_message(message.id, channel.id, game_id, None)
+    halftracker.register_message(message.id, channel.id, game_id, None, picked_team, total_direction, total_line)
     await message.add_reaction(TRASH_EMOJI)
 
     halftracker.start_tracking(
@@ -723,17 +723,17 @@ async def _auto_ufc(
         return
     event, competition, fighter_competitor, league_slug = result
     competition_id = competition["id"]
-    if ufctracker.is_tracked(channel.id, competition_id):
+    fighter_id = None if total_direction else fighter_competitor["id"]
+    fighter_name = None if total_direction else fighter_competitor["athlete"]["displayName"]
+    if ufctracker.is_tracked(channel.id, competition_id, fighter_id, total_direction, total_line):
         botlog.event(f"⏭️ Skipped ({category_label}): **{fighter}** — bout `{competition_id}` already being tracked in <#{channel.id}>")
         return
 
-    fighter_id = None if total_direction else fighter_competitor["id"]
-    fighter_name = None if total_direction else fighter_competitor["athlete"]["displayName"]
     embed, file = await ufctracker.build_embed(competition, league_slug, event["name"], fighter_id, fighter_name, total_direction, total_line)
     message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
     embed.set_footer(text=ufctracker._footer_text(message.id))
     await throttle.run(channel.id, lambda: message.edit(embed=embed))
-    ufctracker.register_message(message.id, channel.id, competition_id, None)
+    ufctracker.register_message(message.id, channel.id, competition_id, None, fighter_id, total_direction, total_line)
     await message.add_reaction(TRASH_EMOJI)
 
     ufctracker.start_tracking(
@@ -1253,11 +1253,23 @@ def _untrack_one(channel_id: int, game_id: str, player: Optional[str]) -> list[s
     this one game_id in this channel. Returns what was actually stopped, if
     anything."""
     stopped = []
-    if tracker.stop_tracking(channel_id, game_id):
-        stopped.append("moneyline/total pick")
+    for entry in tracker.list_tracked_details(channel_id):
+        if str(entry["game_id"]) != str(game_id):
+            continue
+        if tracker.stop_tracking(
+            channel_id, entry["game_id"], entry.get("picked_team"), entry.get("team_total"),
+            entry.get("total_direction"), entry.get("total_line"),
+        ):
+            stopped.append("moneyline/total pick")
 
-    if f5tracker.stop_tracking(channel_id, game_id):
-        stopped.append("F5 pick")
+    for entry in f5tracker.list_tracked_details(channel_id):
+        if str(entry["game_id"]) != str(game_id):
+            continue
+        if f5tracker.stop_tracking(
+            channel_id, entry["game_id"], entry.get("picked_team"), entry.get("total_direction"),
+            entry.get("total_line"), entry.get("handicap_line"),
+        ):
+            stopped.append("F5 pick")
 
     if inning1tracker.stop_tracking(channel_id, game_id):
         stopped.append("1st inning result pick")
@@ -1270,8 +1282,14 @@ def _untrack_one(channel_id: int, game_id: str, player: Optional[str]) -> list[s
         if settracker.stop_tracking(channel_id, entry["game_id"], entry["market"], entry.get("team")):
             stopped.append(f"{entry['market']} pick")
 
-    if ufctracker.stop_tracking(channel_id, game_id):
-        stopped.append("UFC pick")
+    for entry in ufctracker.list_tracked_details(channel_id):
+        if str(entry["competition_id"]) != str(game_id):
+            continue
+        if ufctracker.stop_tracking(
+            channel_id, entry["competition_id"], entry.get("fighter_id"),
+            entry.get("total_direction"), entry.get("total_line"),
+        ):
+            stopped.append("UFC pick")
 
     for entry in proptracker.list_tracked_details(channel_id):
         if str(entry["event_id"]) != str(game_id):
@@ -1394,7 +1412,8 @@ async def _gather_tracked_items(channel_id: int) -> list[dict]:
         items.append({
             "kind": "match", "label": f"{matchup}{pick_suffix}", "id_label": entry["game_id"],
             "message_id": entry["message_id"],
-            "stop": lambda cid=channel_id, gid=entry["game_id"]: tracker.stop_tracking(cid, gid),
+            "stop": lambda cid=channel_id, gid=entry["game_id"], pt=entry.get("picked_team"), tt=entry.get("team_total"),
+                td=entry.get("total_direction"), tl=entry.get("total_line"): tracker.stop_tracking(cid, gid, pt, tt, td, tl),
         })
 
     for entry in proptracker.list_tracked_details(channel_id):
@@ -1425,7 +1444,8 @@ async def _gather_tracked_items(channel_id: int) -> list[dict]:
         items.append({
             "kind": "f5", "label": pick_label, "id_label": entry["game_id"],
             "message_id": entry["message_id"],
-            "stop": lambda cid=channel_id, gid=entry["game_id"]: f5tracker.stop_tracking(cid, gid),
+            "stop": lambda cid=channel_id, gid=entry["game_id"], pt=entry.get("picked_team"), td=entry.get("total_direction"),
+                tl=entry.get("total_line"), hl=entry.get("handicap_line"): f5tracker.stop_tracking(cid, gid, pt, td, tl, hl),
         })
 
     for entry in inning1tracker.list_tracked_details(channel_id):
@@ -1470,7 +1490,8 @@ async def _gather_tracked_items(channel_id: int) -> list[dict]:
         items.append({
             "kind": "ufc", "label": pick_label, "id_label": entry["competition_id"],
             "message_id": entry["message_id"],
-            "stop": lambda cid=channel_id, compid=entry["competition_id"]: ufctracker.stop_tracking(cid, compid),
+            "stop": lambda cid=channel_id, compid=entry["competition_id"], fid=entry.get("fighter_id"),
+                td=entry.get("total_direction"), tl=entry.get("total_line"): ufctracker.stop_tracking(cid, compid, fid, td, tl),
         })
 
     for entry in esportstracker.list_tracked_details(channel_id):

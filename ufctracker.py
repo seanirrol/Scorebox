@@ -60,12 +60,28 @@ def _footer_text(message_id: Optional[int] = None) -> str:
     return f"Scorebox ({message_id}) • data via ESPN" if message_id else "Scorebox • data via ESPN"
 
 
-def track_key(channel_id: int, competition_id) -> str:
-    return f"{channel_id}:{competition_id}"
+def track_key(
+    channel_id: int, competition_id, fighter_id=None, total_direction: Optional[str] = None,
+    total_line: Optional[float] = None,
+) -> str:
+    """Different bet types on the same bout must never collide - same fix
+    as tracker.py's track_key (see its docstring) - this used to be bare
+    channel_id:competition_id, so a fighter moneyline and a round total on
+    the same bout couldn't both be tracked at once."""
+    if fighter_id is not None:
+        market = f"ml:{fighter_id}"
+    elif total_direction and total_line is not None:
+        market = f"total:{total_direction}:{total_line:g}"
+    else:
+        market = "manual"
+    return f"{channel_id}:{competition_id}:{market}"
 
 
-def is_tracked(channel_id: int, competition_id) -> bool:
-    return track_key(channel_id, competition_id) in _active
+def is_tracked(
+    channel_id: int, competition_id, fighter_id=None, total_direction: Optional[str] = None,
+    total_line: Optional[float] = None,
+) -> bool:
+    return track_key(channel_id, competition_id, fighter_id, total_direction, total_line) in _active
 
 
 def list_tracked_details(channel_id: int) -> list[dict]:
@@ -73,13 +89,19 @@ def list_tracked_details(channel_id: int) -> list[dict]:
     active_keys = {k for k in _active if k.startswith(prefix)}
     return [
         entry for entry in state.load_ufc().values()
-        if track_key(entry["channel_id"], entry["competition_id"]) in active_keys
+        if track_key(
+            entry["channel_id"], entry["competition_id"], entry.get("fighter_id"),
+            entry.get("total_direction"), entry.get("total_line"),
+        ) in active_keys
     ]
 
 
-def register_message(message_id: int, channel_id: int, competition_id, owner_id: int):
+def register_message(
+    message_id: int, channel_id: int, competition_id, owner_id: int, fighter_id=None,
+    total_direction: Optional[str] = None, total_line: Optional[float] = None,
+):
     """Lets bot.py's 🗑️-reaction handler know who's allowed to delete this message."""
-    _message_owners[message_id] = (channel_id, competition_id, owner_id)
+    _message_owners[message_id] = (channel_id, competition_id, fighter_id, total_direction, total_line, owner_id)
 
 
 def get_message_owner(message_id: int) -> Optional[tuple]:
@@ -96,7 +118,7 @@ def _persist(
     total_direction: Optional[str] = None, total_line: Optional[float] = None,
 ):
     data = state.load_ufc()
-    data[track_key(channel_id, competition_id)] = {
+    data[track_key(channel_id, competition_id, fighter_id, total_direction, total_line)] = {
         "channel_id": channel_id, "league_slug": league_slug, "event_id": event_id, "competition_id": competition_id,
         "competition_date": competition_date, "message_id": message_id, "owner_id": owner_id,
         "event_name": event_name, "fighter_id": fighter_id, "fighter_name": fighter_name,
@@ -105,19 +127,21 @@ def _persist(
     state.save_ufc(data)
 
 
-def _forget(channel_id: int, competition_id):
+def _forget(channel_id: int, competition_id, fighter_id=None, total_direction: Optional[str] = None, total_line: Optional[float] = None):
     data = state.load_ufc()
-    data.pop(track_key(channel_id, competition_id), None)
+    data.pop(track_key(channel_id, competition_id, fighter_id, total_direction, total_line), None)
     state.save_ufc(data)
 
 
-def stop_tracking(channel_id: int, competition_id) -> bool:
-    key = track_key(channel_id, competition_id)
+def stop_tracking(
+    channel_id: int, competition_id, fighter_id=None, total_direction: Optional[str] = None, total_line: Optional[float] = None,
+) -> bool:
+    key = track_key(channel_id, competition_id, fighter_id, total_direction, total_line)
     task = _active.pop(key, None)
-    _forget(channel_id, competition_id)
+    _forget(channel_id, competition_id, fighter_id, total_direction, total_line)
     dailylog.record_result(channel_id, "ufctracker", key, "void")
-    for message_id, (c_id, comp_id, _owner) in list(_message_owners.items()):
-        if c_id == channel_id and comp_id == competition_id:
+    for message_id, (c_id, comp_id, fid, td, tl, _owner) in list(_message_owners.items()):
+        if c_id == channel_id and comp_id == competition_id and fid == fighter_id and td == total_direction and tl == total_line:
             _message_owners.pop(message_id, None)
     if task:
         task.cancel()
@@ -213,7 +237,7 @@ async def _track_loop(
     event_name: str, fighter_id=None, fighter_name: Optional[str] = None,
     total_direction: Optional[str] = None, total_line: Optional[float] = None,
 ):
-    key = track_key(channel_id, competition_id)
+    key = track_key(channel_id, competition_id, fighter_id, total_direction, total_line)
     deadline = time.monotonic() + config.MAX_TRACK_HOURS * 3600
 
     consecutive_misses = 0
@@ -256,7 +280,7 @@ async def _track_loop(
         old_message = message
         message = new_message
         _message_owners.pop(old_message.id, None)
-        register_message(message.id, channel_id, competition_id, owner_id)
+        register_message(message.id, channel_id, competition_id, owner_id, fighter_id, total_direction, total_line)
         try:
             await old_message.delete()
         except discord.HTTPException as e:
@@ -481,7 +505,7 @@ def start_tracking(
     total_direction: Optional[str] = None, total_line: Optional[float] = None,
     section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
 ):
-    key = track_key(channel_id, competition_id)
+    key = track_key(channel_id, competition_id, fighter_id, total_direction, total_line)
     if key in _active:
         return
     task = asyncio.create_task(
@@ -491,7 +515,7 @@ def start_tracking(
         )
     )
     _active[key] = task
-    register_message(message.id, channel_id, competition_id, owner_id)
+    register_message(message.id, channel_id, competition_id, owner_id, fighter_id, total_direction, total_line)
     _persist(
         channel_id, league_slug, event_id, competition_id, competition_date, message.id, owner_id,
         event_name, fighter_id, fighter_name, total_direction, total_line,
