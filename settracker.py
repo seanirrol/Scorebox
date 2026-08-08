@@ -64,7 +64,7 @@ _RESULT_TITLES = {
     "won": "<:winmark:1532115635071488221> Pick Won", "lost": "<:lossmark:1532115600162422894> Pick Lost",
     "push": "➖ Push", "void": "<:cashback:1533844020839841832> Pick Voided",
 }
-_RESULT_REACTIONS = {"won": "<:winmark:1532115635071488221>", "lost": "<:lossmark:1532115600162422894>", "void": "<:cashback:1533844020839841832>"}
+_RESULT_REACTIONS = {"won": "<:winmark:1532115635071488221>", "lost": "<:lossmark:1532115600162422894>", "push": "➖", "void": "<:cashback:1533844020839841832>"}
 
 # Reactions the bot itself ever adds - excluded when carrying reactions
 # forward across a repost (see _repost_final) so a manually-added marker

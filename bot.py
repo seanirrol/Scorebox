@@ -1748,7 +1748,10 @@ def _summary_status_line(entry: dict) -> str:
     postponement - from a day's report perspective a match not yet underway
     reads the same either way."""
     if dailylog.is_final(entry["status"]):
-        return f"{dailylog.result_mark(entry['status'])} {entry['label']}"
+        line = f"{dailylog.result_mark(entry['status'])} {entry['label']}"
+        if entry["status"] == "push":
+            line += " — Push - Tie"
+        return line
     detail = entry["detail"]
     if detail.startswith("LIVE"):
         mark = "🟡"
