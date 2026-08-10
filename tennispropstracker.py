@@ -536,6 +536,9 @@ async def resume_all(client: discord.Client):
             channel = await client.fetch_channel(channel_id)
             message = await channel.fetch_message(entry["message_id"])
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            # Silent before this fix - see tracker.py's identical resume_all
+            # fix for why this matters.
+            botlog.event(f"⚠️ Dropped on resume (tennis prop): **{entry.get('player_name', competitor_id)}** — message/channel no longer reachable, in <#{channel_id}>")
             _forget(channel_id, game_id, competitor_id, stat_name, entry.get("direction"), entry.get("line"))
             continue
 
@@ -552,6 +555,7 @@ async def resume_all(client: discord.Client):
             if attempt < MAX_CONSECUTIVE_MISSES - 1:
                 await asyncio.sleep(5)
         if not game:
+            botlog.event(f"⚠️ Dropped on resume (tennis prop): **{entry.get('player_name', competitor_id)}** — game `{game_id}` not found on 365scores after {MAX_CONSECUTIVE_MISSES} attempts, in <#{channel_id}>")
             _forget(channel_id, game_id, competitor_id, stat_name, entry.get("direction"), entry.get("line"))
             continue
 

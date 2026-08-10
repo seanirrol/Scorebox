@@ -639,6 +639,14 @@ async def resume_all(client: discord.Client):
             channel = await client.fetch_channel(channel_id)
             message = await channel.fetch_message(message_id)
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            # Silent before this fix - confirmed live this made a pick
+            # vanish from tracking on restart with zero trace anywhere,
+            # unlike every other give-up path in this module, which always
+            # logs. Worse, since the persisted state entry is gone too, the
+            # exact same pick showing up again in a later message (a resend/
+            # live-odds repost) reads as brand new rather than a duplicate,
+            # silently resetting its /summary progress.
+            botlog.event(f"⚠️ Dropped on resume: game `{game_id}` — message/channel no longer reachable, in <#{channel_id}>")
             _forget(channel_id, game_id, entry.get("picked_team"), entry.get("team_total"), entry.get("total_direction"), entry.get("total_line"))
             continue
 
@@ -656,6 +664,7 @@ async def resume_all(client: discord.Client):
             if attempt < MAX_CONSECUTIVE_MISSES - 1:
                 await asyncio.sleep(5)
         if not game:
+            botlog.event(f"⚠️ Dropped on resume: game `{game_id}` not found on 365scores after {MAX_CONSECUTIVE_MISSES} attempts, in <#{channel_id}>")
             _forget(channel_id, game_id, entry.get("picked_team"), entry.get("team_total"), entry.get("total_direction"), entry.get("total_line"))
             continue
 
