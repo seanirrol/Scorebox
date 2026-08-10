@@ -60,12 +60,26 @@ def _stat_key_str(stat_key: tuple) -> str:
     return f"{label}:{discriminator}"
 
 
-def prop_key(channel_id: int, event_id, entity_id: str, stat_key: tuple) -> str:
-    return f"{channel_id}:{event_id}:{entity_id}:{_stat_key_str(stat_key)}"
+def prop_key(
+    channel_id: int, event_id, entity_id: str, stat_key: tuple,
+    direction: Optional[str] = None, line: Optional[float] = None,
+) -> str:
+    """Different lines/directions on the same player+stat must never
+    collide - same fix as tracker.py's track_key (see its docstring).
+    Confirmed live: "Angel Reese Over 10.5 Rebounds" tracked fine, then a
+    revised "Angel Reese Over 11.5 Rebounds" on the same message was
+    silently rejected as "already being tracked" and never posted its own
+    card - this key used to be bare channel_id:event_id:entity_id:stat_key
+    with no line/direction discriminator at all."""
+    market = f"{direction}:{line:g}" if direction and line is not None else "manual"
+    return f"{channel_id}:{event_id}:{entity_id}:{_stat_key_str(stat_key)}:{market}"
 
 
-def is_tracked(channel_id: int, event_id, entity_id: str, stat_key: tuple) -> bool:
-    return prop_key(channel_id, event_id, entity_id, stat_key) in _active_props
+def is_tracked(
+    channel_id: int, event_id, entity_id: str, stat_key: tuple,
+    direction: Optional[str] = None, line: Optional[float] = None,
+) -> bool:
+    return prop_key(channel_id, event_id, entity_id, stat_key, direction, line) in _active_props
 
 
 def list_tracked_details(channel_id: int) -> list[dict]:
@@ -74,13 +88,19 @@ def list_tracked_details(channel_id: int) -> list[dict]:
     active_keys = {k for k in _active_props if k.startswith(prefix)}
     return [
         entry for entry in state.load_props().values()
-        if prop_key(entry["channel_id"], entry["event_id"], entry["entity_id"], tuple(entry["stat_key"])) in active_keys
+        if prop_key(
+            entry["channel_id"], entry["event_id"], entry["entity_id"], tuple(entry["stat_key"]),
+            entry.get("direction"), entry.get("line"),
+        ) in active_keys
     ]
 
 
-def register_message(message_id: int, channel_id: int, event_id, entity_id: str, stat_key: tuple, owner_id: int):
+def register_message(
+    message_id: int, channel_id: int, event_id, entity_id: str, stat_key: tuple, owner_id: int,
+    direction: Optional[str] = None, line: Optional[float] = None,
+):
     """Lets bot.py's 🗑️-reaction handler know who's allowed to delete this message."""
-    _message_owners[message_id] = (channel_id, event_id, entity_id, stat_key, owner_id)
+    _message_owners[message_id] = (channel_id, event_id, entity_id, stat_key, direction, line, owner_id)
 
 
 def get_message_owner(message_id: int) -> Optional[tuple]:
@@ -97,7 +117,7 @@ def _persist(
     direction: Optional[str] = None, line: Optional[float] = None, known_team_name: Optional[str] = None,
 ):
     data = state.load_props()
-    data[prop_key(channel_id, event_id, entity_id, stat_key)] = {
+    data[prop_key(channel_id, event_id, entity_id, stat_key, direction, line)] = {
         "channel_id": channel_id, "event_id": event_id, "entity_id": entity_id,
         "stat_key": list(stat_key), "message_id": message_id, "sport": sport,
         "team_id": team_id, "photo_url": photo_url, "stat_label": stat_label,
@@ -107,19 +127,25 @@ def _persist(
     state.save_props(data)
 
 
-def _forget(channel_id: int, event_id, entity_id: str, stat_key: tuple):
+def _forget(
+    channel_id: int, event_id, entity_id: str, stat_key: tuple,
+    direction: Optional[str] = None, line: Optional[float] = None,
+):
     data = state.load_props()
-    data.pop(prop_key(channel_id, event_id, entity_id, stat_key), None)
+    data.pop(prop_key(channel_id, event_id, entity_id, stat_key, direction, line), None)
     state.save_props(data)
 
 
-def stop_tracking(channel_id: int, event_id, entity_id: str, stat_key: tuple) -> bool:
-    key = prop_key(channel_id, event_id, entity_id, stat_key)
+def stop_tracking(
+    channel_id: int, event_id, entity_id: str, stat_key: tuple,
+    direction: Optional[str] = None, line: Optional[float] = None,
+) -> bool:
+    key = prop_key(channel_id, event_id, entity_id, stat_key, direction, line)
     task = _active_props.pop(key, None)
-    _forget(channel_id, event_id, entity_id, stat_key)
+    _forget(channel_id, event_id, entity_id, stat_key, direction, line)
     dailylog.record_result(channel_id, "proptracker", key, "void")
-    for message_id, (c_id, e_id, ent_id, s_key, _owner) in list(_message_owners.items()):
-        if c_id == channel_id and e_id == event_id and ent_id == entity_id and s_key == stat_key:
+    for message_id, (c_id, e_id, ent_id, s_key, drct, ln, _owner) in list(_message_owners.items()):
+        if c_id == channel_id and e_id == event_id and ent_id == entity_id and s_key == stat_key and drct == direction and ln == line:
             _message_owners.pop(message_id, None)
     if task:
         task.cancel()
@@ -311,7 +337,7 @@ async def _track_loop(
     line: Optional[float] = None,
     known_team_name: Optional[str] = None,
 ):
-    key = prop_key(channel_id, event_id, entity_id, stat_key)
+    key = prop_key(channel_id, event_id, entity_id, stat_key, direction, line)
     deadline = time.monotonic() + config.MAX_TRACK_HOURS * 3600
 
     # When this event was first observed postponed (wall-clock epoch
@@ -361,7 +387,7 @@ async def _track_loop(
         old_message = message
         message = new_message
         _message_owners.pop(old_message.id, None)
-        register_message(message.id, channel_id, event_id, entity_id, stat_key, owner_id)
+        register_message(message.id, channel_id, event_id, entity_id, stat_key, owner_id, direction, line)
         try:
             await old_message.delete()
         except discord.HTTPException as e:
@@ -660,7 +686,7 @@ async def _track_loop(
     finally:
         _active_props.pop(key, None)
         _message_owners.pop(message.id, None)
-        _forget(channel_id, event_id, entity_id, stat_key)
+        _forget(channel_id, event_id, entity_id, stat_key, direction, line)
 
 
 def start_tracking(
@@ -682,7 +708,7 @@ def start_tracking(
     label: Optional[str] = None,
     origin_channel_id: Optional[int] = None,
 ):
-    key = prop_key(channel_id, event_id, entity_id, stat_key)
+    key = prop_key(channel_id, event_id, entity_id, stat_key, direction, line)
     if key in _active_props:
         return
     task = asyncio.create_task(
@@ -692,7 +718,7 @@ def start_tracking(
         )
     )
     _active_props[key] = task
-    register_message(message.id, channel_id, event_id, entity_id, stat_key, owner_id)
+    register_message(message.id, channel_id, event_id, entity_id, stat_key, owner_id, direction, line)
     _persist(
         channel_id, event_id, entity_id, stat_key, message.id, sport, team_id, photo_url, stat_label,
         player_name, owner_id, direction, line, known_team_name,
@@ -720,7 +746,7 @@ async def resume_all(client: discord.Client):
             channel = await client.fetch_channel(channel_id)
             message = await channel.fetch_message(entry["message_id"])
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-            _forget(channel_id, event_id, entity_id, stat_key)
+            _forget(channel_id, event_id, entity_id, stat_key, entry.get("direction"), entry.get("line"))
             continue
 
         # A single miss right here at startup used to forget the event
@@ -736,7 +762,7 @@ async def resume_all(client: discord.Client):
             if attempt < MAX_CONSECUTIVE_MISSES - 1:
                 await asyncio.sleep(5)
         if not event:
-            _forget(channel_id, event_id, entity_id, stat_key)
+            _forget(channel_id, event_id, entity_id, stat_key, entry.get("direction"), entry.get("line"))
             continue
 
         # Even an already-finished event still needs to be handed to

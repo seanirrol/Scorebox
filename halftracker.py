@@ -474,7 +474,7 @@ async def _track_loop(
     finally:
         _active.pop(key, None)
         _message_owners.pop(message.id, None)
-        _forget(channel_id, game_id)
+        _forget(channel_id, game_id, picked_team, total_direction, total_line)
 
 
 def start_tracking(
@@ -517,7 +517,7 @@ async def resume_all(client: discord.Client):
             channel = await client.fetch_channel(channel_id)
             message = await channel.fetch_message(message_id)
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-            _forget(channel_id, game_id)
+            _forget(channel_id, game_id, entry.get("picked_team"), entry.get("total_direction"), entry.get("total_line"))
             continue
 
         game = None
@@ -528,7 +528,7 @@ async def resume_all(client: discord.Client):
             if attempt < MAX_CONSECUTIVE_MISSES - 1:
                 await asyncio.sleep(5)
         if not game:
-            _forget(channel_id, game_id)
+            _forget(channel_id, game_id, entry.get("picked_team"), entry.get("total_direction"), entry.get("total_line"))
             continue
 
         start_tracking(

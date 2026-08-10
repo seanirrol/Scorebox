@@ -501,7 +501,7 @@ async def _track_loop(
     finally:
         _active.pop(key, None)
         _message_owners.pop(message.id, None)
-        _forget(channel_id, competition_id)
+        _forget(channel_id, competition_id, fighter_id, total_direction, total_line)
 
 
 def start_tracking(
@@ -552,7 +552,7 @@ async def resume_all(client: discord.Client):
             channel = await client.fetch_channel(channel_id)
             message = await channel.fetch_message(entry["message_id"])
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-            _forget(channel_id, competition_id)
+            _forget(channel_id, competition_id, entry.get("fighter_id"), entry.get("total_direction"), entry.get("total_line"))
             continue
 
         # A single miss right here at startup used to forget the bout
@@ -570,7 +570,7 @@ async def resume_all(client: discord.Client):
             if attempt < MAX_CONSECUTIVE_MISSES - 1:
                 await asyncio.sleep(5)
         if not refreshed:
-            _forget(channel_id, competition_id)
+            _forget(channel_id, competition_id, entry.get("fighter_id"), entry.get("total_direction"), entry.get("total_line"))
             continue
         event_name = entry.get("event_name") or f"Event {entry['event_id']}"
 

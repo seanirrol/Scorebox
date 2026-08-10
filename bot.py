@@ -160,8 +160,8 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
         channel_id, game_id, picked_team, team_total, total_direction, total_line, _ = info
         tracker.stop_tracking(channel_id, game_id, picked_team, team_total, total_direction, total_line)
     elif kind == "prop":
-        channel_id, event_id, entity_id, stat_key, _ = info
-        proptracker.stop_tracking(channel_id, event_id, entity_id, stat_key)
+        channel_id, event_id, entity_id, stat_key, direction, line, _ = info
+        proptracker.stop_tracking(channel_id, event_id, entity_id, stat_key, direction, line)
     elif kind == "inning":
         channel_id, event_id, pick_type, _ = info
         inningtracker.stop_tracking(channel_id, event_id, pick_type)
@@ -175,8 +175,8 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
         channel_id, game_id, market, team, _ = info
         settracker.stop_tracking(channel_id, game_id, market, team)
     elif kind == "tennis_prop":
-        channel_id, game_id, competitor_id, stat_name, _ = info
-        tennispropstracker.stop_tracking(channel_id, game_id, competitor_id, stat_name)
+        channel_id, game_id, competitor_id, stat_name, direction, line, _ = info
+        tennispropstracker.stop_tracking(channel_id, game_id, competitor_id, stat_name, direction, line)
     elif kind == "ufc":
         channel_id, competition_id, fighter_id, total_direction, total_line, _ = info
         ufctracker.stop_tracking(channel_id, competition_id, fighter_id, total_direction, total_line)
@@ -184,8 +184,8 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
         channel_id, sport, team_a, team_b, market, _ = info
         esportstracker.stop_tracking(channel_id, sport, team_a, team_b, market)
     else:
-        channel_id, game_id, member_id, stat_name, _ = info
-        soccerpropstracker.stop_tracking(channel_id, game_id, member_id, stat_name)
+        channel_id, game_id, member_id, stat_name, direction, line, _ = info
+        soccerpropstracker.stop_tracking(channel_id, game_id, member_id, stat_name, direction, line)
 
     reactor = str(payload.member) if payload.member else f"user `{payload.user_id}`"
     botlog.event(f"🗑️ Untracked (🗑️ reaction, {kind}): message `{payload.message_id}` in <#{payload.channel_id}> — by **{reactor}**")
@@ -380,7 +380,7 @@ async def _auto_playerprops(
     if not event:
         botlog.event(f"❌ Not tracked (prop): **{player}** {stat} — couldn't fetch match data from ESPN")
         return
-    if proptracker.is_tracked(channel.id, event_id, entity["id"], stat_key):
+    if proptracker.is_tracked(channel.id, event_id, entity["id"], stat_key, direction, line):
         botlog.event(f"⏭️ Skipped (prop): **{player}** {stat} — already being tracked in <#{channel.id}>")
         return
 
@@ -392,7 +392,7 @@ async def _auto_playerprops(
     message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
     embed.set_footer(text=proptracker._footer_text(message.id))
     await throttle.run(channel.id, lambda: message.edit(embed=embed))
-    proptracker.register_message(message.id, channel.id, event_id, entity["id"], stat_key, None)
+    proptracker.register_message(message.id, channel.id, event_id, entity["id"], stat_key, None, direction, line)
     await message.add_reaction(TRASH_EMOJI)
 
     proptracker.start_tracking(
@@ -436,7 +436,7 @@ async def _auto_tennis_playerprops(
         competitor_id, resolved_name = home_competitor["id"], home_competitor.get("name", player)
     else:
         competitor_id, resolved_name = away_competitor["id"], away_competitor.get("name", player)
-    if tennispropstracker.is_tracked(channel.id, game_id, competitor_id, stat_name):
+    if tennispropstracker.is_tracked(channel.id, game_id, competitor_id, stat_name, direction, line):
         botlog.event(f"⏭️ Skipped (tennis prop): **{player}** {stat} — already being tracked in <#{channel.id}>")
         return
 
@@ -444,7 +444,7 @@ async def _auto_tennis_playerprops(
     message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
     embed.set_footer(text=tennispropstracker._footer_text(message.id))
     await throttle.run(channel.id, lambda: message.edit(embed=embed))
-    tennispropstracker.register_message(message.id, channel.id, game_id, competitor_id, stat_name, None)
+    tennispropstracker.register_message(message.id, channel.id, game_id, competitor_id, stat_name, None, direction, line)
     await message.add_reaction(TRASH_EMOJI)
 
     tennispropstracker.start_tracking(
@@ -488,7 +488,7 @@ async def _complete_soccer_prop_track(
     game_id, member_id, member_competitor_id = game["id"], member["id"], member.get("competitorId")
     resolved_name = member.get("name", player)
     photo_url = scores365.athlete_photo_url(member)
-    if soccerpropstracker.is_tracked(channel.id, game_id, member_id, stat_name):
+    if soccerpropstracker.is_tracked(channel.id, game_id, member_id, stat_name, direction, line):
         botlog.event(f"⏭️ Skipped (soccer prop): **{player}** {stat} — already being tracked in <#{channel.id}>")
         return
 
@@ -504,7 +504,7 @@ async def _complete_soccer_prop_track(
     message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
     embed.set_footer(text=soccerpropstracker._footer_text(message.id))
     await throttle.run(channel.id, lambda: message.edit(embed=embed))
-    soccerpropstracker.register_message(message.id, channel.id, game_id, member_id, stat_name, None)
+    soccerpropstracker.register_message(message.id, channel.id, game_id, member_id, stat_name, None, direction, line)
     await message.add_reaction(TRASH_EMOJI)
 
     soccerpropstracker.start_tracking(
@@ -1297,7 +1297,9 @@ def _untrack_one(channel_id: int, game_id: str, player: Optional[str]) -> list[s
         if player and player.lower() not in entry["player_name"].lower():
             continue
         stat_key = tuple(entry["stat_key"])
-        if proptracker.stop_tracking(channel_id, entry["event_id"], entry["entity_id"], stat_key):
+        if proptracker.stop_tracking(
+            channel_id, entry["event_id"], entry["entity_id"], stat_key, entry.get("direction"), entry.get("line"),
+        ):
             stopped.append(f"{entry['player_name']} ({entry['stat_label']})")
 
     for entry in inningtracker.list_tracked_details(channel_id):
@@ -1311,7 +1313,9 @@ def _untrack_one(channel_id: int, game_id: str, player: Optional[str]) -> list[s
             continue
         if player and player.lower() not in entry["player_name"].lower():
             continue
-        if tennispropstracker.stop_tracking(channel_id, entry["game_id"], entry["competitor_id"], entry["stat_name"]):
+        if tennispropstracker.stop_tracking(
+            channel_id, entry["game_id"], entry["competitor_id"], entry["stat_name"], entry.get("direction"), entry.get("line"),
+        ):
             stopped.append(f"{entry['player_name']} ({entry['stat_label']})")
 
     for entry in soccerpropstracker.list_tracked_details(channel_id):
@@ -1319,7 +1323,9 @@ def _untrack_one(channel_id: int, game_id: str, player: Optional[str]) -> list[s
             continue
         if player and player.lower() not in entry["player_name"].lower():
             continue
-        if soccerpropstracker.stop_tracking(channel_id, entry["game_id"], entry["member_id"], entry["stat_name"]):
+        if soccerpropstracker.stop_tracking(
+            channel_id, entry["game_id"], entry["member_id"], entry["stat_name"], entry.get("direction"), entry.get("line"),
+        ):
             stopped.append(f"{entry['player_name']} ({entry['stat_label']})")
 
     # No numeric game_id exists for esports (hawk.live/GosuGamers have none
@@ -1420,8 +1426,8 @@ async def _gather_tracked_items(channel_id: int) -> list[dict]:
         items.append({
             "kind": "prop", "label": f"{entry['player_name']} ({entry['stat_label']})", "id_label": entry["event_id"],
             "message_id": entry["message_id"],
-            "stop": lambda cid=channel_id, eid=entry["event_id"], enid=entry["entity_id"], sk=tuple(entry["stat_key"]):
-                proptracker.stop_tracking(cid, eid, enid, sk),
+            "stop": lambda cid=channel_id, eid=entry["event_id"], enid=entry["entity_id"], sk=tuple(entry["stat_key"]),
+                d=entry.get("direction"), l=entry.get("line"): proptracker.stop_tracking(cid, eid, enid, sk, d, l),
         })
 
     for entry in inningtracker.list_tracked_details(channel_id):
@@ -1468,16 +1474,16 @@ async def _gather_tracked_items(channel_id: int) -> list[dict]:
         items.append({
             "kind": "tennis_prop", "label": f"{entry['player_name']} ({entry['stat_label']})", "id_label": entry["game_id"],
             "message_id": entry["message_id"],
-            "stop": lambda cid=channel_id, gid=entry["game_id"], comp=entry["competitor_id"], sn=entry["stat_name"]:
-                tennispropstracker.stop_tracking(cid, gid, comp, sn),
+            "stop": lambda cid=channel_id, gid=entry["game_id"], comp=entry["competitor_id"], sn=entry["stat_name"],
+                d=entry.get("direction"), l=entry.get("line"): tennispropstracker.stop_tracking(cid, gid, comp, sn, d, l),
         })
 
     for entry in soccerpropstracker.list_tracked_details(channel_id):
         items.append({
             "kind": "soccer_prop", "label": f"{entry['player_name']} ({entry['stat_label']})", "id_label": entry["game_id"],
             "message_id": entry["message_id"],
-            "stop": lambda cid=channel_id, gid=entry["game_id"], mid=entry["member_id"], sn=entry["stat_name"]:
-                soccerpropstracker.stop_tracking(cid, gid, mid, sn),
+            "stop": lambda cid=channel_id, gid=entry["game_id"], mid=entry["member_id"], sn=entry["stat_name"],
+                d=entry.get("direction"), l=entry.get("line"): soccerpropstracker.stop_tracking(cid, gid, mid, sn, d, l),
         })
 
     for entry in ufctracker.list_tracked_details(channel_id):

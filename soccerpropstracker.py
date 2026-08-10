@@ -82,12 +82,21 @@ def _footer_text(message_id: Optional[int] = None) -> str:
     return f"Scorebox ({message_id}) • data via 365scores" if message_id else "Scorebox • data via 365scores"
 
 
-def prop_key(channel_id: int, game_id, member_id, stat_name: str) -> str:
-    return f"{channel_id}:{game_id}:{member_id}:{stat_name}"
+def prop_key(
+    channel_id: int, game_id, member_id, stat_name: str,
+    direction: Optional[str] = None, line: Optional[float] = None,
+) -> str:
+    """Different lines/directions on the same player+stat must never
+    collide - same fix as tracker.py's track_key (see its docstring)."""
+    market = f"{direction}:{line:g}" if direction and line is not None else "manual"
+    return f"{channel_id}:{game_id}:{member_id}:{stat_name}:{market}"
 
 
-def is_tracked(channel_id: int, game_id, member_id, stat_name: str) -> bool:
-    return prop_key(channel_id, game_id, member_id, stat_name) in _active
+def is_tracked(
+    channel_id: int, game_id, member_id, stat_name: str,
+    direction: Optional[str] = None, line: Optional[float] = None,
+) -> bool:
+    return prop_key(channel_id, game_id, member_id, stat_name, direction, line) in _active
 
 
 def list_tracked_details(channel_id: int) -> list[dict]:
@@ -95,13 +104,19 @@ def list_tracked_details(channel_id: int) -> list[dict]:
     active_keys = {k for k in _active if k.startswith(prefix)}
     return [
         entry for entry in state.load_soccer_props().values()
-        if prop_key(entry["channel_id"], entry["game_id"], entry["member_id"], entry["stat_name"]) in active_keys
+        if prop_key(
+            entry["channel_id"], entry["game_id"], entry["member_id"], entry["stat_name"],
+            entry.get("direction"), entry.get("line"),
+        ) in active_keys
     ]
 
 
-def register_message(message_id: int, channel_id: int, game_id, member_id, stat_name: str, owner_id: int):
+def register_message(
+    message_id: int, channel_id: int, game_id, member_id, stat_name: str, owner_id: int,
+    direction: Optional[str] = None, line: Optional[float] = None,
+):
     """Lets bot.py's 🗑️-reaction handler know who's allowed to delete this message."""
-    _message_owners[message_id] = (channel_id, game_id, member_id, stat_name, owner_id)
+    _message_owners[message_id] = (channel_id, game_id, member_id, stat_name, direction, line, owner_id)
 
 
 def get_message_owner(message_id: int) -> Optional[tuple]:
@@ -118,7 +133,7 @@ def _persist(
     direction: Optional[str] = None, line: Optional[float] = None, fixture_path: Optional[str] = None,
 ):
     data = state.load_soccer_props()
-    data[prop_key(channel_id, game_id, member_id, stat_name)] = {
+    data[prop_key(channel_id, game_id, member_id, stat_name, direction, line)] = {
         "channel_id": channel_id, "game_id": game_id, "member_id": member_id, "stat_name": stat_name,
         "message_id": message_id, "member_competitor_id": member_competitor_id, "photo_url": photo_url,
         "stat_label": stat_label, "player_name": player_name, "owner_id": owner_id,
@@ -127,19 +142,25 @@ def _persist(
     state.save_soccer_props(data)
 
 
-def _forget(channel_id: int, game_id, member_id, stat_name: str):
+def _forget(
+    channel_id: int, game_id, member_id, stat_name: str,
+    direction: Optional[str] = None, line: Optional[float] = None,
+):
     data = state.load_soccer_props()
-    data.pop(prop_key(channel_id, game_id, member_id, stat_name), None)
+    data.pop(prop_key(channel_id, game_id, member_id, stat_name, direction, line), None)
     state.save_soccer_props(data)
 
 
-def stop_tracking(channel_id: int, game_id, member_id, stat_name: str) -> bool:
-    key = prop_key(channel_id, game_id, member_id, stat_name)
+def stop_tracking(
+    channel_id: int, game_id, member_id, stat_name: str,
+    direction: Optional[str] = None, line: Optional[float] = None,
+) -> bool:
+    key = prop_key(channel_id, game_id, member_id, stat_name, direction, line)
     task = _active.pop(key, None)
-    _forget(channel_id, game_id, member_id, stat_name)
+    _forget(channel_id, game_id, member_id, stat_name, direction, line)
     dailylog.record_result(channel_id, "soccerpropstracker", key, "void")
-    for message_id, (c_id, g_id, m_id, s_name, _owner) in list(_message_owners.items()):
-        if c_id == channel_id and g_id == game_id and m_id == member_id and s_name == stat_name:
+    for message_id, (c_id, g_id, m_id, s_name, drct, ln, _owner) in list(_message_owners.items()):
+        if c_id == channel_id and g_id == game_id and m_id == member_id and s_name == stat_name and drct == direction and ln == line:
             _message_owners.pop(message_id, None)
     if task:
         task.cancel()
@@ -244,7 +265,7 @@ async def _track_loop(
     photo_url: Optional[str], stat_label: str, player_name: str, owner_id: int,
     direction: Optional[str] = None, line: Optional[float] = None, fixture_path: Optional[str] = None,
 ):
-    key = prop_key(channel_id, game_id, member_id, stat_name)
+    key = prop_key(channel_id, game_id, member_id, stat_name, direction, line)
     deadline = time.monotonic() + config.MAX_TRACK_HOURS * 3600
 
     consecutive_misses = 0
@@ -287,7 +308,7 @@ async def _track_loop(
         old_message = message
         message = new_message
         _message_owners.pop(old_message.id, None)
-        register_message(message.id, channel_id, game_id, member_id, stat_name, owner_id)
+        register_message(message.id, channel_id, game_id, member_id, stat_name, owner_id, direction, line)
         try:
             await old_message.delete()
         except discord.HTTPException as e:
@@ -494,7 +515,7 @@ async def _track_loop(
     finally:
         _active.pop(key, None)
         _message_owners.pop(message.id, None)
-        _forget(channel_id, game_id, member_id, stat_name)
+        _forget(channel_id, game_id, member_id, stat_name, direction, line)
 
 
 def start_tracking(
@@ -503,7 +524,7 @@ def start_tracking(
     direction: Optional[str] = None, line: Optional[float] = None, fixture_path: Optional[str] = None,
     section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
 ):
-    key = prop_key(channel_id, game_id, member_id, stat_name)
+    key = prop_key(channel_id, game_id, member_id, stat_name, direction, line)
     if key in _active:
         return
     task = asyncio.create_task(
@@ -513,7 +534,7 @@ def start_tracking(
         )
     )
     _active[key] = task
-    register_message(message.id, channel_id, game_id, member_id, stat_name, owner_id)
+    register_message(message.id, channel_id, game_id, member_id, stat_name, owner_id, direction, line)
     _persist(
         channel_id, game_id, member_id, stat_name, message.id, member_competitor_id, photo_url,
         stat_label, player_name, owner_id, direction, line, fixture_path,
@@ -541,7 +562,7 @@ async def resume_all(client: discord.Client):
             channel = await client.fetch_channel(channel_id)
             message = await channel.fetch_message(entry["message_id"])
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-            _forget(channel_id, game_id, member_id, stat_name)
+            _forget(channel_id, game_id, member_id, stat_name, entry.get("direction"), entry.get("line"))
             continue
 
         # A single miss right here at startup used to forget the game
@@ -557,7 +578,7 @@ async def resume_all(client: discord.Client):
             if attempt < MAX_CONSECUTIVE_MISSES - 1:
                 await asyncio.sleep(5)
         if not game:
-            _forget(channel_id, game_id, member_id, stat_name)
+            _forget(channel_id, game_id, member_id, stat_name, entry.get("direction"), entry.get("line"))
             continue
 
         start_tracking(
