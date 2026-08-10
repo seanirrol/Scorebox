@@ -202,9 +202,22 @@ _STATUS_RANK = {"in": 0, "pre": 1, "post": 2}
 
 def find_current_event_id(sport: str, team_id: str) -> Optional[str]:
     """Search the league's current scoreboard for an event involving this
-    team, preferring in-progress, then soonest scheduled, then most recent."""
+    team, preferring in-progress, then soonest scheduled, then most recent.
+
+    Explicitly queries a +-1 day window around today (Eastern) instead of
+    relying on ESPN's own no-date-param default - confirmed live, that
+    default can still be showing YESTERDAY's date as late as mid-morning
+    Eastern (reproduced independently for both MLB and WNBA scoreboards),
+    silently missing today's actual game from the results entirely. Every
+    tracker now grades an already-finished event immediately instead of
+    skipping it (see bot.py's _auto_* handlers) - so a fresh pick used to
+    silently resolve to a stale, already-decided game from the day before
+    and report a false result, not just fail with "no match found"."""
     sport_slug, league_slug = SPORT_PATHS[sport]
-    data = _get(f"{SITE_BASE}/{sport_slug}/{league_slug}/scoreboard")
+    today = datetime.datetime.now(tz=scores365.EASTERN).date()
+    start = (today - datetime.timedelta(days=1)).strftime("%Y%m%d")
+    end = (today + datetime.timedelta(days=1)).strftime("%Y%m%d")
+    data = _get(f"{SITE_BASE}/{sport_slug}/{league_slug}/scoreboard", dates=f"{start}-{end}")
 
     best = None
     best_rank = None
