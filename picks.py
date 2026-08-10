@@ -69,6 +69,32 @@ _HEADER_SPORT_MAP = {
 # list with a bulleted list below it, and the bulleted half silently never
 # matched at all.
 _LINE_RE = re.compile(r"^\s*(?:\d+[.)]\s*|[•\-*]\s*)?\[([^\]]+)\]\s*(.+)$")
+
+# A raw line is expected to carry at most one "[Category]" tag - but a
+# source message occasionally squeezes two separate picks onto one raw
+# line with no newline between them (confirmed live: a real message had
+# "[WNBA Props] ... (PrizePicks -100) [MLB] Team A vs Team B - ..." all on
+# one line - likely an edited pick re-pasted without its line break).
+# _LINE_RE's own description group is greedy to end-of-line, so without
+# this the second tag gets silently swallowed as literal text inside the
+# first pick's team-name search, and the second pick is lost entirely.
+_EMBEDDED_TAG_RE = re.compile(r"\[[^\]]+\]")
+
+
+def _split_merged_bracket_lines(line: str) -> list[str]:
+    """Splits a line at every "[Category]" tag beyond the first, so each
+    embedded pick still gets parsed as its own line. A no-op (returns
+    [line]) for the overwhelmingly common case of zero or one tag."""
+    positions = [m.start() for m in _EMBEDDED_TAG_RE.finditer(line)]
+    if len(positions) <= 1:
+        return [line]
+    splits = [line[positions[i]:positions[i + 1]].strip() for i in range(len(positions) - 1)]
+    splits.append(line[positions[-1]:].strip())
+    if positions[0] > 0:
+        # Any text before the first tag (e.g. a numbered/bulleted prefix
+        # _LINE_RE already handles) stays attached to the first segment.
+        splits[0] = line[:positions[0]] + splits[0]
+    return splits
 # The optional "the" handles wording like "Roki Sasaki Over the 1.5 Walks
 # Allowed" (confirmed live - a real pick worded this way silently never
 # posted, since the number wasn't immediately after Over/Under).
@@ -1501,7 +1527,12 @@ def parse_picks_message(content: str) -> list[dict]:
     """
     results = []
     current_category = None
+    expanded_lines = []
     for raw_line in content.splitlines():
+        stripped = raw_line.strip()
+        if stripped:
+            expanded_lines.extend(_split_merged_bracket_lines(stripped))
+    for raw_line in expanded_lines:
         line = raw_line.strip()
         if not line:
             continue
