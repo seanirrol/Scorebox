@@ -376,8 +376,29 @@ _BARE_TEAM_TOTAL_RE = re.compile(
 # separate batting-context "Earned Runs" to confuse it with).
 _AMBIGUOUS_STAT_DEFAULTS = {
     ("baseball", "strikeouts"): "Strikeouts (Pitching)",
+    # These three variants don't hit this dict at all without an explicit
+    # entry - they fall through to _match_stat_label's substring-fallback
+    # loop instead, which matches whichever catalog label happens to come
+    # first when two labels share a base name after stripping " (...)"
+    # ("Strikeouts (Batting)" is defined before "Strikeouts (Pitching)" in
+    # STAT_CATALOG) - confirmed live: even "Pitcher Strikeouts", a phrase
+    # that explicitly says pitcher, silently matched the batting stat and
+    # voided a fully-graded pitcher prop (pitchers never appear in the
+    # batting box-score group, so the lookup came back empty).
+    ("baseball", "player strikeouts"): "Strikeouts (Pitching)",
+    ("baseball", "total strikeouts"): "Strikeouts (Pitching)",
+    ("baseball", "pitcher strikeouts"): "Strikeouts (Pitching)",
     ("baseball", "earned runs allowed"): "Earned Runs",
     ("baseball", "walks allowed"): "Walks (Pitching)",
+    # Same ambiguity/substring-fallback issue as strikeouts above - bare
+    # "Walks" (and these two variants) silently matched the batting "Walks"
+    # stat instead of "Walks (Pitching)". Confirmed live: two real picks
+    # ("J.T. Ginn Over 2.5 Walks", "Brady Singer Over 1.5 Walks" - both
+    # pitchers) graded a "-" (never appeared in the batting group) and
+    # voided on a fully-graded start.
+    ("baseball", "walks"): "Walks (Pitching)",
+    ("baseball", "player walks"): "Walks (Pitching)",
+    ("baseball", "total walks"): "Walks (Pitching)",
     # "Rushing Yards" doesn't substring-match "rush yards" in either
     # direction (the "ing" breaks the contiguous substring) - confirmed
     # live: "Trey Benson - Over 33.5 Rush yards" silently dropped the
