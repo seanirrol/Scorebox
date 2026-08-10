@@ -1,17 +1,24 @@
 #!/usr/bin/env python3
 """
 Manages background tasks for tennis "extra markets" beyond the standard
-game moneyline/total (see tracker.py) - all four settle on some part of a
-match rather than requiring the whole thing to finish normally, and all
-four are backed by 365scores' bulk game list's own per-set `stages`
-breakdown (see scores365.tennis_first_set_result/tennis_match_games), no
-separate per-game detail call needed:
+game moneyline/total (see tracker.py) - all of these settle on some part of
+a match rather than requiring the whole thing to finish normally, and all
+are backed by 365scores' bulk game list's own per-set `stages` breakdown
+(see scores365.tennis_first_set_result/tennis_match_games), no separate
+per-game detail call needed:
 
 - "set1_moneyline": who wins Set 1 (e.g. "Naomi Osaka to win 1st Set").
 - "set1_total_games": combined games in Set 1 vs. a line.
 - "match_total_games": combined games across the WHOLE match vs. a line -
-  settles with the match itself finishing, unlike the other three, which
-  all settle once Set 1 alone is complete.
+  settles with the match itself finishing, unlike set1_moneyline/
+  set1_total_games, which both settle once Set 1 alone is complete.
+- "player_total_games": one named player's own total games won across the
+  whole match vs. a line (distinct from match_total_games, which sums both
+  sides) - also settles with the match finishing.
+- "games_handicap": a games-margin spread (e.g. "Brandon Nakashima -2.5
+  Games") - the picked player's own total games, adjusted by the
+  (already-signed) line, compared against the opponent's total games. Also
+  settles with the match finishing.
 - "win_a_set": whether a named player wins at least one set during the
   match (Yes/No) - can be graded a "Yes" win as soon as it happens, since a
   player can't un-win a set.
@@ -93,7 +100,7 @@ def _footer_text(message_id: Optional[int] = None) -> str:
 # look the match up, not part of the bet's identity, so including it in the
 # key would wrongly let the same match-total pick get double-tracked if two
 # people referenced it via different anchor names.
-_PER_PLAYER_MARKETS = {"set1_moneyline", "player_total_games", "win_a_set"}
+_PER_PLAYER_MARKETS = {"set1_moneyline", "player_total_games", "win_a_set", "games_handicap"}
 
 
 def track_key(channel_id: int, game_id, market: str, team: Optional[str] = None) -> str:
@@ -168,6 +175,8 @@ def pick_label(market: str, team: Optional[str], direction: Optional[str], line:
         return f"{direction.title()} {line:g} Total Games"
     if market == "player_total_games":
         return f"{team} {direction.title()} {line:g} Total Games"
+    if market == "games_handicap":
+        return f"{team} {line:+g} Games"
     return f"{team} {'to Win a Set' if direction == 'yes' else 'Not to Win a Set'}"  # win_a_set
 
 
@@ -224,6 +233,13 @@ async def build_embed(
         player_games = home_games if scores365.names_match(home_competitor.get("name", ""), team) else away_games
         if decided:
             result = scores365.grade_over_under(player_games, direction, line)
+        frozen_cols = (scores365.fmt_score(home_games), scores365.fmt_score(away_games))  # live-running, shown whether decided or not
+
+    elif market == "games_handicap":
+        decided = scores365.is_finished(game)
+        home_games, away_games = scores365.tennis_match_games(game)
+        if decided:
+            result = scores365.grade_games_handicap(game, team, line)
         frozen_cols = (scores365.fmt_score(home_games), scores365.fmt_score(away_games))  # live-running, shown whether decided or not
 
     else:  # win_a_set
@@ -323,6 +339,10 @@ def grade_now(game: dict, market: str, team: Optional[str], direction: Optional[
         home_games, away_games = scores365.tennis_match_games(game)
         player_games = home_games if scores365.names_match(home_competitor.get("name", ""), team) else away_games
         return True, scores365.grade_over_under(player_games, direction, line)
+    if market == "games_handicap":
+        if not scores365.is_finished(game):
+            return False, None
+        return True, scores365.grade_games_handicap(game, team, line)
     # win_a_set
     result = scores365.grade_win_a_set(game, team, direction)
     return result is not None, result

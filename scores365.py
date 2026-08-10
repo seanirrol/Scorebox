@@ -260,6 +260,29 @@ def grade_tennis_set(game: dict, home_games: int, away_games: int, picked_team: 
     return "won" if picked_games > other_games else "lost"
 
 
+def grade_games_handicap(game: dict, team: str, line: float) -> Optional[str]:
+    """Grades a tennis games-margin handicap pick (e.g. "Brandon Nakashima
+    -2.5 Games") - the line is added to the picked player's own total games
+    won across the whole match before comparing against the opponent's
+    (player -2.5 needs to win the match by 3+ games; player +2.5 wins as
+    long as they don't lose by 3+). Same adjust-then-compare shape as
+    grade_f5_handicap - a whole-number line can land on an exact tie after
+    adjustment (push); a half-point line never can."""
+    home_games, away_games = tennis_match_games(game)
+    home = (game.get("homeCompetitor") or {}).get("name", "")
+    away = (game.get("awayCompetitor") or {}).get("name", "")
+    if names_match(home, team):
+        picked_games, other_games = home_games, away_games
+    elif names_match(away, team):
+        picked_games, other_games = away_games, home_games
+    else:
+        return None
+    adjusted = picked_games + line
+    if adjusted == other_games:
+        return "push"
+    return "won" if adjusted > other_games else "lost"
+
+
 def tennis_match_games(game: dict) -> tuple[int, int]:
     """(home_games, away_games) running totals across every set so far -
     unlike tennis_first_set_result, not gated on each set being fully

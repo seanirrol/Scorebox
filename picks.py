@@ -232,6 +232,19 @@ _PLAYER_TOTAL_GAMES_NOMATCHUP_AFTER_RE = re.compile(
     r"^(.+?)\s*(?:-\s*)?(Over|Under)\s+([\d.]+)\s*(?:total\s+)?games\b", re.IGNORECASE,
 )
 
+# "Brandon Nakashima -2.5 Games" - a games-margin HANDICAP (spread), not an
+# Over/Under total - confirmed live, a real pick worded this way (no
+# opponent named at all, same no-matchup shape as
+# _PLAYER_TOTAL_GAMES_NOMATCHUP_*_RE above). Distinguished from every other
+# Games market in this file by a signed number directly after the player's
+# name instead of an "Over"/"Under" marker - checked ahead of the no-
+# matchup total-games parsers below since those would otherwise never match
+# a bare signed number anyway (they require the literal word Over/Under),
+# but ordering it first keeps the two shapes clearly separated.
+_GAMES_HANDICAP_NOMATCHUP_RE = re.compile(
+    r"^(.+?)\s+([+-]\d+(?:\.\d+)?)\s*(?:total\s+)?games\b", re.IGNORECASE,
+)
+
 # "Team A vs Team B - Venus Williams to Win a Set" (Yes) / "... - Venus
 # Williams No to Win a Set" / "... - Not Venus Williams to Win a Set" (No,
 # either word order) - whether the named player wins at least one set
@@ -849,6 +862,19 @@ def _parse_player_total_games_nomatchup_pick(description: str) -> Optional[dict]
     return {"kind": "tennis_player_total_games", "team": player, "direction": m.group(2).lower(), "line": float(m.group(3))}
 
 
+def _parse_games_handicap_nomatchup_pick(description: str) -> Optional[dict]:
+    """"Player -2.5 Games" - a games-margin handicap, no opponent named at
+    all (see _GAMES_HANDICAP_NOMATCHUP_RE)."""
+    text = _clean_line(description)
+    m = _GAMES_HANDICAP_NOMATCHUP_RE.match(text)
+    if not m:
+        return None
+    player = m.group(1).strip()
+    if not player:
+        return None
+    return {"kind": "tennis_games_handicap", "team": player, "line": float(m.group(2))}
+
+
 def _parse_match_total_games_pick(description: str) -> Optional[dict]:
     text = _clean_line(description)
     m = _MATCH_TOTAL_GAMES_BEFORE_RE.match(text) or _MATCH_TOTAL_GAMES_AFTER_RE.match(text)
@@ -1408,6 +1434,10 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
             player_total_games_nomatchup = _parse_player_total_games_nomatchup_pick(description)
             if player_total_games_nomatchup:
                 return player_total_games_nomatchup
+
+            games_handicap_nomatchup = _parse_games_handicap_nomatchup_pick(description)
+            if games_handicap_nomatchup:
+                return games_handicap_nomatchup
 
             tennis_prop = _parse_tennis_player_prop(description)
             if tennis_prop:
