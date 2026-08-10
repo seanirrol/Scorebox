@@ -1773,12 +1773,13 @@ async def _reject_summary_wrong_channel(interaction: discord.Interaction):
 def _summary_status_line(entry: dict) -> str:
     """Never blank, per the report's whole point: a resolved pick gets its
     win/loss/push/void mark; anything still pending gets a neutral mark plus
-    whatever live detail its tracker last reported (LIVE/Postponed), so a
-    reader can see *why* it has no result yet instead of the line just
-    vanishing or looking unfinished. A pick that hadn't kicked off yet by
-    report time reads as "Postponed" here too, same as an actual
-    postponement - from a day's report perspective a match not yet underway
-    reads the same either way."""
+    whatever live detail its tracker last reported (LIVE/Not Started/an
+    actual Postponed), so a reader can see *why* it has no result yet
+    instead of the line just vanishing or looking unfinished. Distinct from
+    the "⏸️ Postponed" branch below, which is a real postponement (rain
+    delay, etc.) reported mid-tracking - a pick that just hasn't kicked off
+    yet reads as "Not Started" instead, not conflated with an actual
+    postponement."""
     if dailylog.is_final(entry["status"]):
         line = f"{dailylog.result_mark(entry['status'])} {entry['label']}"
         if entry["status"] == "push":
@@ -1790,7 +1791,7 @@ def _summary_status_line(entry: dict) -> str:
     elif detail.startswith("⏸️"):
         mark, detail = "⏸️", detail[2:].strip()
     elif detail.startswith("NOT STARTED"):
-        mark, detail = "⏸️", "Postponed" + detail[len("NOT STARTED"):]
+        mark, detail = "⏸️", "Not Started" + detail[len("NOT STARTED"):]
     else:
         mark = "⏳"
     return f"{mark} {entry['label']} — {detail}"
