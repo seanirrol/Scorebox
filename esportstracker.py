@@ -136,6 +136,15 @@ def _forget(channel_id: int, sport: str, team_a: str, team_b: str, market: str):
     state.save_esports(data)
 
 
+def _forget_key(key: str):
+    """Same cleanup as _forget, but pops the exact persisted dict key
+    directly instead of reconstructing it via track_key() - see
+    tracker.py's identical _forget_key for why this matters."""
+    data = state.load_esports()
+    data.pop(key, None)
+    state.save_esports(data)
+
+
 def stop_tracking(channel_id: int, sport: str, team_a: str, team_b: str, market: str) -> bool:
     key = track_key(channel_id, sport, team_a, team_b, market)
     task = _active.pop(key, None)
@@ -539,7 +548,7 @@ async def resume_all(client: discord.Client):
     last stopped and either picks the tracking loop back up on the same
     message, or - if the message/channel/match is gone - cleans up instead.
     """
-    for entry in list(state.load_esports().values()):
+    for key, entry in list(state.load_esports().items()):
         try:
             channel_id, sport, team_a, team_b, market, message_id = (
                 entry["channel_id"], entry["sport"], entry["team_a"], entry["team_b"], entry["market"], entry["message_id"]
@@ -555,7 +564,7 @@ async def resume_all(client: discord.Client):
             # Silent before this fix - see tracker.py's identical resume_all
             # fix for why this matters.
             botlog.event(f"⚠️ Dropped on resume (esports {market}): **{team_a} v {team_b}** — message/channel no longer reachable, in <#{channel_id}>")
-            _forget(channel_id, sport, team_a, team_b, market)
+            _forget_key(key)
             continue
 
         # hawk.live/GosuGamers are flaky scrapers (bot-challenge pages,
@@ -576,7 +585,7 @@ async def resume_all(client: discord.Client):
                 await asyncio.sleep(5)
         if not series_data:
             botlog.event(f"⚠️ Dropped on resume (esports {market}): **{team_a} v {team_b}** not found after {MAX_CONSECUTIVE_MISSES} attempts, in <#{channel_id}>")
-            _forget(channel_id, sport, team_a, team_b, market)
+            _forget_key(key)
             continue
 
         start_tracking(

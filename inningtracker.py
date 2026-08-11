@@ -110,6 +110,15 @@ def _forget(channel_id: int, event_id, pick_type: str):
     state.save_innings(data)
 
 
+def _forget_key(key: str):
+    """Same cleanup as _forget, but pops the exact persisted dict key
+    directly instead of reconstructing it via track_key() - see
+    tracker.py's identical _forget_key for why this matters."""
+    data = state.load_innings()
+    data.pop(key, None)
+    state.save_innings(data)
+
+
 def stop_tracking(channel_id: int, event_id, pick_type: str) -> bool:
     key = track_key(channel_id, event_id, pick_type)
     task = _active.pop(key, None)
@@ -515,7 +524,7 @@ async def resume_all(client: discord.Client):
     last stopped and either picks the tracking loop back up on the same
     message, or - if the message/channel/event is gone - cleans up instead.
     """
-    for entry in list(state.load_innings().values()):
+    for key, entry in list(state.load_innings().items()):
         try:
             channel_id, event_id, pick_type = entry["channel_id"], entry["event_id"], entry["pick_type"]
         except KeyError:
@@ -528,7 +537,7 @@ async def resume_all(client: discord.Client):
             # Silent before this fix - see tracker.py's identical resume_all
             # fix for why this matters.
             botlog.event(f"⚠️ Dropped on resume ({pick_type}): event `{event_id}` — message/channel no longer reachable, in <#{channel_id}>")
-            _forget(channel_id, event_id, pick_type)
+            _forget_key(key)
             continue
 
         # A single miss right here at startup used to forget the event
@@ -545,7 +554,7 @@ async def resume_all(client: discord.Client):
                 await asyncio.sleep(5)
         if not event:
             botlog.event(f"⚠️ Dropped on resume ({pick_type}): event `{event_id}` not found on ESPN after {MAX_CONSECUTIVE_MISSES} attempts, in <#{channel_id}>")
-            _forget(channel_id, event_id, pick_type)
+            _forget_key(key)
             continue
 
         start_tracking(message, channel_id, event_id, pick_type, entry["team_id"], entry.get("owner_id"))

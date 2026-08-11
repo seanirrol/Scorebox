@@ -136,6 +136,19 @@ def _forget(
     state.save_props(data)
 
 
+def _forget_key(key: str):
+    """Same cleanup as _forget, but pops the exact persisted dict key
+    directly instead of reconstructing it via prop_key() - see tracker.py's
+    identical _forget_key for why this matters (prop_key's own docstring
+    already notes its shape changed once before, from a bare
+    channel:event:entity:stat key to one with a direction/line
+    discriminator added - any entry persisted before that change can never
+    be matched by _forget()'s reconstruction, only by its original key)."""
+    data = state.load_props()
+    data.pop(key, None)
+    state.save_props(data)
+
+
 def stop_tracking(
     channel_id: int, event_id, entity_id: str, stat_key: tuple,
     direction: Optional[str] = None, line: Optional[float] = None,
@@ -732,7 +745,7 @@ async def resume_all(client: discord.Client):
     last stopped and either picks the tracking loop back up on the same
     message, or - if the message/channel/event is gone - cleans up instead.
     """
-    for entry in list(state.load_props().values()):
+    for key, entry in list(state.load_props().items()):
         try:
             stat_key = tuple(entry["stat_key"])
             channel_id, event_id, entity_id = entry["channel_id"], entry["event_id"], entry["entity_id"]
@@ -749,7 +762,7 @@ async def resume_all(client: discord.Client):
             # Silent before this fix - see tracker.py's identical resume_all
             # fix for why this matters.
             botlog.event(f"⚠️ Dropped on resume (prop): **{entry.get('player_name', entity_id)}** — message/channel no longer reachable, in <#{channel_id}>")
-            _forget(channel_id, event_id, entity_id, stat_key, entry.get("direction"), entry.get("line"))
+            _forget_key(key)
             continue
 
         # A single miss right here at startup used to forget the event
@@ -766,7 +779,7 @@ async def resume_all(client: discord.Client):
                 await asyncio.sleep(5)
         if not event:
             botlog.event(f"⚠️ Dropped on resume (prop): **{entry.get('player_name', entity_id)}** — event `{event_id}` not found on ESPN after {MAX_CONSECUTIVE_MISSES} attempts, in <#{channel_id}>")
-            _forget(channel_id, event_id, entity_id, stat_key, entry.get("direction"), entry.get("line"))
+            _forget_key(key)
             continue
 
         # Even an already-finished event still needs to be handed to

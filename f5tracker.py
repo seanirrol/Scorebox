@@ -151,6 +151,15 @@ def _forget(
     state.save_f5(data)
 
 
+def _forget_key(key: str):
+    """Same cleanup as _forget, but pops the exact persisted dict key
+    directly instead of reconstructing it via track_key() - see
+    tracker.py's identical _forget_key for why this matters."""
+    data = state.load_f5()
+    data.pop(key, None)
+    state.save_f5(data)
+
+
 def stop_tracking(
     channel_id: int, game_id, picked_team: Optional[str] = None, total_direction: Optional[str] = None,
     total_line: Optional[float] = None, handicap_line: Optional[float] = None,
@@ -587,7 +596,7 @@ async def resume_all(client: discord.Client):
     last stopped and either picks the tracking loop back up on the same
     message, or - if the message/channel/game is gone - cleans up instead.
     """
-    for entry in list(state.load_f5().values()):
+    for key, entry in list(state.load_f5().items()):
         try:
             channel_id, game_id, message_id, sport_id = (
                 entry["channel_id"], entry["game_id"], entry["message_id"], entry["sport_id"]
@@ -605,7 +614,7 @@ async def resume_all(client: discord.Client):
             # with zero trace, and reads as brand new instead of a duplicate
             # the next time the same pick text comes through).
             botlog.event(f"⚠️ Dropped on resume (F5): game `{game_id}` — message/channel no longer reachable, in <#{channel_id}>")
-            _forget(channel_id, game_id, entry.get("picked_team"), entry.get("total_direction"), entry.get("total_line"), entry.get("handicap_line"))
+            _forget_key(key)
             continue
 
         # A single miss right here at startup used to forget the game
@@ -622,7 +631,7 @@ async def resume_all(client: discord.Client):
                 await asyncio.sleep(5)
         if not game:
             botlog.event(f"⚠️ Dropped on resume (F5): game `{game_id}` not found on 365scores after {MAX_CONSECUTIVE_MISSES} attempts, in <#{channel_id}>")
-            _forget(channel_id, game_id, entry.get("picked_team"), entry.get("total_direction"), entry.get("total_line"), entry.get("handicap_line"))
+            _forget_key(key)
             continue
 
         start_tracking(

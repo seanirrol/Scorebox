@@ -155,6 +155,18 @@ def _forget(channel_id: int, game_id, market: str, team: Optional[str] = None):
     state.save_set1(data)
 
 
+def _forget_key(key: str):
+    """Same cleanup as _forget, but pops the exact persisted dict key
+    directly instead of reconstructing it via track_key() - see
+    tracker.py's identical _forget_key for why this matters. Confirmed
+    live: an old set1_total_games entry had no trailing disambiguator
+    segment at all (missing entirely, not just a different value), so
+    _forget()'s reconstruction could never match it."""
+    data = state.load_set1()
+    data.pop(key, None)
+    state.save_set1(data)
+
+
 def stop_tracking(channel_id: int, game_id, market: str, team: Optional[str] = None) -> bool:
     key = track_key(channel_id, game_id, market, team)
     task = _active.pop(key, None)
@@ -627,7 +639,7 @@ async def resume_all(client: discord.Client):
     last stopped and either picks the tracking loop back up on the same
     message, or - if the message/channel/game is gone - cleans up instead.
     """
-    for entry in list(state.load_set1().values()):
+    for key, entry in list(state.load_set1().items()):
         try:
             channel_id, game_id, market, message_id, sport_id = (
                 entry["channel_id"], entry["game_id"], entry["market"], entry["message_id"], entry["sport_id"]
@@ -647,7 +659,7 @@ async def resume_all(client: discord.Client):
             # Silent before this fix - see tracker.py's identical resume_all
             # fix for why this matters.
             botlog.event(f"⚠️ Dropped on resume ({market}): game `{game_id}` — message/channel no longer reachable, in <#{channel_id}>")
-            _forget(channel_id, game_id, market, team)
+            _forget_key(key)
             continue
 
         # A single miss right here at startup used to forget the game
@@ -664,7 +676,7 @@ async def resume_all(client: discord.Client):
                 await asyncio.sleep(5)
         if not game:
             botlog.event(f"⚠️ Dropped on resume ({market}): game `{game_id}` not found on 365scores after {MAX_CONSECUTIVE_MISSES} attempts, in <#{channel_id}>")
-            _forget(channel_id, game_id, market, team)
+            _forget_key(key)
             continue
 
         start_tracking(

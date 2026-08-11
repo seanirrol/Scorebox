@@ -138,6 +138,15 @@ def _forget(channel_id: int, competition_id, fighter_id=None, total_direction: O
     state.save_ufc(data)
 
 
+def _forget_key(key: str):
+    """Same cleanup as _forget, but pops the exact persisted dict key
+    directly instead of reconstructing it via track_key() - see
+    tracker.py's identical _forget_key for why this matters."""
+    data = state.load_ufc()
+    data.pop(key, None)
+    state.save_ufc(data)
+
+
 def stop_tracking(
     channel_id: int, competition_id, fighter_id=None, total_direction: Optional[str] = None, total_line: Optional[float] = None,
 ) -> bool:
@@ -541,7 +550,7 @@ async def resume_all(client: discord.Client):
     last stopped and either picks the tracking loop back up on the same
     message, or - if the message/channel/bout is gone - cleans up instead.
     """
-    for entry in list(state.load_ufc().values()):
+    for key, entry in list(state.load_ufc().items()):
         try:
             channel_id, competition_id = entry["channel_id"], entry["competition_id"]
         except KeyError:
@@ -555,7 +564,7 @@ async def resume_all(client: discord.Client):
             # Silent before this fix - see tracker.py's identical resume_all
             # fix for why this matters.
             botlog.event(f"⚠️ Dropped on resume (UFC): bout `{competition_id}` — message/channel no longer reachable, in <#{channel_id}>")
-            _forget(channel_id, competition_id, entry.get("fighter_id"), entry.get("total_direction"), entry.get("total_line"))
+            _forget_key(key)
             continue
 
         # A single miss right here at startup used to forget the bout
@@ -574,7 +583,7 @@ async def resume_all(client: discord.Client):
                 await asyncio.sleep(5)
         if not refreshed:
             botlog.event(f"⚠️ Dropped on resume (UFC): bout `{competition_id}` not found on ESPN after {MAX_CONSECUTIVE_MISSES} attempts, in <#{channel_id}>")
-            _forget(channel_id, competition_id, entry.get("fighter_id"), entry.get("total_direction"), entry.get("total_line"))
+            _forget_key(key)
             continue
         event_name = entry.get("event_name") or f"Event {entry['event_id']}"
 

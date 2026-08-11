@@ -140,6 +140,15 @@ def _forget(
     state.save_half(data)
 
 
+def _forget_key(key: str):
+    """Same cleanup as _forget, but pops the exact persisted dict key
+    directly instead of reconstructing it via track_key() - see
+    tracker.py's identical _forget_key for why this matters."""
+    data = state.load_half()
+    data.pop(key, None)
+    state.save_half(data)
+
+
 def stop_tracking(
     channel_id: int, game_id, picked_team: Optional[str] = None, total_direction: Optional[str] = None,
     total_line: Optional[float] = None,
@@ -504,7 +513,7 @@ async def resume_all(client: discord.Client):
     """Called once from on_ready. Reads whatever was still active when the
     bot last stopped and either picks the tracking loop back up on the same
     message, or - if the message/channel/game is gone - cleans up instead."""
-    for entry in list(state.load_half().values()):
+    for key, entry in list(state.load_half().items()):
         try:
             channel_id, game_id, message_id, sport_id = (
                 entry["channel_id"], entry["game_id"], entry["message_id"], entry["sport_id"]
@@ -520,7 +529,7 @@ async def resume_all(client: discord.Client):
             # Silent before this fix - see tracker.py's identical resume_all
             # fix for why this matters.
             botlog.event(f"⚠️ Dropped on resume (1H): game `{game_id}` — message/channel no longer reachable, in <#{channel_id}>")
-            _forget(channel_id, game_id, entry.get("picked_team"), entry.get("total_direction"), entry.get("total_line"))
+            _forget_key(key)
             continue
 
         game = None
@@ -532,7 +541,7 @@ async def resume_all(client: discord.Client):
                 await asyncio.sleep(5)
         if not game:
             botlog.event(f"⚠️ Dropped on resume (1H): game `{game_id}` not found on 365scores after {MAX_CONSECUTIVE_MISSES} attempts, in <#{channel_id}>")
-            _forget(channel_id, game_id, entry.get("picked_team"), entry.get("total_direction"), entry.get("total_line"))
+            _forget_key(key)
             continue
 
         start_tracking(

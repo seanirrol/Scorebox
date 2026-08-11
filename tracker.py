@@ -293,6 +293,22 @@ def _forget(
     state.save_tracks(data)
 
 
+def _forget_key(key: str):
+    """Same cleanup as _forget, but pops the exact persisted dict key
+    directly instead of reconstructing it via track_key() - only resume_all
+    has that original key on hand (from iterating state.load_tracks()
+    itself). Confirmed live: track_key()'s shape has changed over time (a
+    team_total/direction/line discriminator was added after some entries
+    were already persisted), so _forget()'s reconstructed key can silently
+    fail to match an old-format entry - it never raises, .pop(key, None)
+    just quietly finds nothing, so the "dropped" entry actually stays in
+    state forever and re-fails on every future restart. Reusing the exact
+    key resume_all already has sidesteps any future schema drift entirely."""
+    data = state.load_tracks()
+    data.pop(key, None)
+    state.save_tracks(data)
+
+
 def stop_tracking(
     channel_id: int, game_id, picked_team: Optional[str] = None, team_total: Optional[str] = None,
     total_direction: Optional[str] = None, total_line: Optional[float] = None,
@@ -622,7 +638,7 @@ async def resume_all(client: discord.Client):
     last stopped and either picks the tracking loop back up on the same
     message, or - if the message/channel/game is gone - cleans up instead.
     """
-    for entry in list(state.load_tracks().values()):
+    for key, entry in list(state.load_tracks().items()):
         try:
             channel_id, game_id, message_id, sport_id = (
                 entry["channel_id"], entry["game_id"], entry["message_id"], entry["sport_id"]
@@ -647,7 +663,7 @@ async def resume_all(client: discord.Client):
             # live-odds repost) reads as brand new rather than a duplicate,
             # silently resetting its /summary progress.
             botlog.event(f"⚠️ Dropped on resume: game `{game_id}` — message/channel no longer reachable, in <#{channel_id}>")
-            _forget(channel_id, game_id, entry.get("picked_team"), entry.get("team_total"), entry.get("total_direction"), entry.get("total_line"))
+            _forget_key(key)
             continue
 
         # 365scores' pagination can transiently return an incomplete list
@@ -665,7 +681,7 @@ async def resume_all(client: discord.Client):
                 await asyncio.sleep(5)
         if not game:
             botlog.event(f"⚠️ Dropped on resume: game `{game_id}` not found on 365scores after {MAX_CONSECUTIVE_MISSES} attempts, in <#{channel_id}>")
-            _forget(channel_id, game_id, entry.get("picked_team"), entry.get("team_total"), entry.get("total_direction"), entry.get("total_line"))
+            _forget_key(key)
             continue
 
         # Even an already-finished game still needs to be handed to
