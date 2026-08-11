@@ -214,6 +214,12 @@ async def build_embed(
     result = None
     if status == "finished" and direction is not None and line is not None:
         result = scores365.grade_over_under(current_value, direction, line)
+        if result is None and scores365.is_cancelled(game):
+            # The match will never produce a real stat value - see
+            # tracker.py's identical fix for why this matters (falling
+            # through to the generic "finished, nothing to grade" green
+            # fallback misleadingly looked like the match settled normally).
+            result = "void"
 
     early_win = False
     if not result and status == "inprogress" and direction == "over" and line is not None:
@@ -442,6 +448,8 @@ async def _track_loop(
                 if direction is not None and line is not None:
                     current_value = _current_value(game, member_id, player_name, stat_name, psf_match)
                     result = scores365.grade_over_under(current_value, direction, line)
+                    if result is None and scores365.is_cancelled(game):
+                        result = "void"
                     reaction = _RESULT_REACTIONS.get(result)
                     if reaction:
                         try:

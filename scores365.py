@@ -565,6 +565,24 @@ def is_interrupted(game: dict) -> bool:
     return (game.get("statusText") or "").strip().lower() in _IRREGULAR_TERMINAL_STATUS_TEXTS
 
 
+_CANCELLED_STATUS_TEXTS = {"cancelled", "canceled"}
+
+
+def is_cancelled(game: dict) -> bool:
+    """A match that will never be played at all - unlike is_interrupted
+    (which might still resume) or a postponement (which waits for a new
+    schedule), a cancelled match has definitively nothing left to wait for.
+    Confirmed live: map_status_type maps this statusText the same as any
+    other terminal state (only "interrupted" gets special treatment), so
+    with no score ever recorded (main_scores stays at 365scores' -1 "no
+    score yet" sentinel forever), a cancelled pick fell through to the
+    generic "finished, nothing to grade" green fallback color - the same
+    one meant for a manual /track with no pick attached - misleadingly
+    showing green as if the match had settled normally. Trackers check
+    this to force an immediate void instead."""
+    return (game.get("statusText") or "").strip().lower() in _CANCELLED_STATUS_TEXTS
+
+
 # --- fuzzy team-name matching ----------------------------------------------
 
 def _normalize(name: str) -> str:

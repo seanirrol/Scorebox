@@ -380,6 +380,30 @@ async def _track_loop(
                     )
                 break
 
+            if scores365.is_cancelled(game):
+                # A cancelled game will never produce a 1st-inning
+                # breakdown - see f5tracker.py's identical fix for why this
+                # matters (the loop above would otherwise wait here forever,
+                # showing a misleading "LIVE" detail on a match that's never
+                # resuming).
+                void_embed, void_file = await build_embed(
+                    game, sport_id, team, pick, force_result="void", message_id=message.id,
+                )
+                void_embed.title = _RESULT_TITLES["void"]
+                await _repost_final(void_embed, void_file)
+                try:
+                    await message.add_reaction(_RESULT_REACTIONS["void"])
+                except discord.HTTPException as e:
+                    log.warning("Failed to add void reaction: %s", e)
+                pendingdelete.start(channel_id, message, void_embed.description or "")
+                dailylog.record_result(channel_id, "inning1tracker", key, "void")
+                group_ids = parlaytracker.groups_for_leg(channel_id, "inning1tracker", key)
+                await parlaytracker.handle_leg_result(
+                    message.channel, channel_id, message, "inning1tracker", key, leg_label, "void", group_ids,
+                )
+                botlog.event(f"➖ Voided (1st inning result, cancelled): game `{game_id}` in <#{channel_id}>")
+                break
+
             kickoff = scores365.start_epoch(game)
             if scores365.map_status_type(game.get("statusGroup")) == "notstarted":
                 detail = f"NOT STARTED - <t:{int(kickoff)}:f>" if kickoff else "NOT STARTED"

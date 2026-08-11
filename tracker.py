@@ -93,6 +93,9 @@ async def build_embed(
     status = scores365.map_status_type(game.get("statusGroup"), game.get("statusText"))
 
     result = _grade(game, picked_team, team_total, total_direction, total_line) if status == "finished" else None
+    has_pick = picked_team or (total_direction and total_line is not None)
+    if not result and has_pick and scores365.is_cancelled(game):
+        result = "void"
 
     early_win = False
     if not result and status == "inprogress" and total_direction == "over" and total_line is not None:
@@ -515,6 +518,12 @@ async def _track_loop(
 
                 if picked_team or (total_direction and total_line is not None):
                     result = _grade(game, picked_team, team_total, total_direction, total_line)
+                    if not result and scores365.is_cancelled(game):
+                        # The match will never produce a real score to grade
+                        # against - matches build_embed's own cancelled
+                        # handling so the card's void color/title and the
+                        # actual recorded result never disagree.
+                        result = "void"
                     reaction = _RESULT_REACTIONS.get(result)
                     if reaction:
                         try:
