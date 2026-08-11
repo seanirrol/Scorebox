@@ -212,7 +212,17 @@ def find_current_event_id(sport: str, team_id: str) -> Optional[str]:
     tracker now grades an already-finished event immediately instead of
     skipping it (see bot.py's _auto_* handlers) - so a fresh pick used to
     silently resolve to a stale, already-decided game from the day before
-    and report a false result, not just fail with "no match found"."""
+    and report a false result, not just fail with "no match found".
+
+    That +-1 day window reintroduces the same trap one level up: confirmed
+    live, a team's next game can still be entirely missing from ESPN's feed
+    as late as mid-morning Eastern on gameday itself, leaving that team's
+    already-FINISHED game from the day before as the only candidate in the
+    window - silently winning by default even though a real future/live game
+    exists, it just hasn't been published yet. So a "post" (finished)
+    candidate is only accepted if it actually finished today (Eastern) -
+    yesterday's final is never eligible, matching this function's whole
+    purpose of finding what a FRESH pick should attach to."""
     sport_slug, league_slug = SPORT_PATHS[sport]
     today = datetime.datetime.now(tz=scores365.EASTERN).date()
     start = (today - datetime.timedelta(days=1)).strftime("%Y%m%d")
@@ -227,6 +237,16 @@ def find_current_event_id(sport: str, team_id: str) -> Optional[str]:
         if not any(c.get("team", {}).get("id") == team_id for c in competitors):
             continue
         state = event.get("status", {}).get("type", {}).get("state")
+        if state == "post":
+            comp_date = event.get("competitions", [{}])[0].get("date")
+            try:
+                event_date = datetime.datetime.fromisoformat(
+                    comp_date.replace("Z", "+00:00")
+                ).astimezone(scores365.EASTERN).date()
+            except (AttributeError, ValueError):
+                continue
+            if event_date != today:
+                continue
         rank = _STATUS_RANK.get(state, 3)
         if best is None or rank < best_rank:
             best, best_rank = event, rank
