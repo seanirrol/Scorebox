@@ -614,7 +614,7 @@ def start_tracking(
         channel_id, game_id, message.id, sport_id, owner_id, picked_team, total_direction, total_line, handicap_line,
         section, label, origin_channel_id,
     )
-    dailylog.record_pick(channel_id, "f5tracker", key, section, label, message.id, origin_channel_id)
+    dailylog.record_pick(channel_id, "f5tracker", key, section, label, message.id, origin_channel_id, sport="MLB")
 
 
 async def resume_all(client: discord.Client):

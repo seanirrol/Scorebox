@@ -520,6 +520,7 @@ def start_tracking(
     _persist(channel_id, game_id, competitor_id, stat_name, message.id, sport_id, stat_label, player_name, owner_id, direction, line)
     dailylog.record_pick(
         channel_id, "tennispropstracker", key, section, label or player_name, message.id, origin_channel_id,
+        sport="Tennis",
     )
 
 

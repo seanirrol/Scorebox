@@ -64,18 +64,27 @@ def today_str() -> str:
 
 def record_pick(
     channel_id: int, module: str, track_key_str: str, section: Optional[str], label: str, message_id: int,
-    origin_channel_id: Optional[int] = None,
+    origin_channel_id: Optional[int] = None, sport: Optional[str] = None,
 ):
     """Called once, right alongside each tracker's start_tracking. No-op if
     section is None - i.e. this pick didn't come from the auto-track
     pipeline (a bare picks-channel header to attribute it to), so it has no
-    place in a per-section daily report."""
+    place in a per-section daily report.
+
+    sport is each tracker's own canonical label (e.g. "MLB", "Tennis"),
+    independent of whatever raw header text the picks-source message used
+    for `section` - confirmed live, the same market (e.g. YRFI/NRFI) shows
+    up under wildly different headers across different picks providers
+    ("YRFI/NRFI Slate" vs. a plain "MLB" header), splitting what should be
+    one /summary section into several. /summary groups by this when
+    present, falling back to `section` for entries logged before this
+    field existed."""
     if not section:
         return
     data = state.load_daily_log()
     data[_key(channel_id, module, track_key_str)] = {
         "channel_id": channel_id, "origin_channel_id": origin_channel_id, "module": module, "date": today_str(),
-        "section": section, "label": label, "message_id": message_id,
+        "section": section, "sport": sport, "label": label, "message_id": message_id,
         "status": "pending", "detail": _PENDING_DETAIL,
     }
     state.save_daily_log(data)

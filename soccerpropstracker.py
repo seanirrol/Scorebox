@@ -558,6 +558,7 @@ def start_tracking(
     )
     dailylog.record_pick(
         channel_id, "soccerpropstracker", key, section, label or player_name, message.id, origin_channel_id,
+        sport="Soccer",
     )
 
 

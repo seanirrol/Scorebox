@@ -538,7 +538,7 @@ def start_tracking(
     dailylog.record_pick(
         channel_id, "esportstracker", key, section,
         label or pick_label(market, picked_team, direction, line, map_number, picked_maps, other_maps), message.id,
-        origin_channel_id,
+        origin_channel_id, sport="Esports",
     )
 
 

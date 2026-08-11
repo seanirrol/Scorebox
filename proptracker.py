@@ -736,7 +736,10 @@ def start_tracking(
         channel_id, event_id, entity_id, stat_key, message.id, sport, team_id, photo_url, stat_label,
         player_name, owner_id, direction, line, known_team_name,
     )
-    dailylog.record_pick(channel_id, "proptracker", key, section, label or player_name, message.id, origin_channel_id)
+    dailylog.record_pick(
+        channel_id, "proptracker", key, section, label or player_name, message.id, origin_channel_id,
+        sport=espn.SPORT_DISPLAY_LABELS.get(sport, sport.upper()),
+    )
 
 
 async def resume_all(client: discord.Client):

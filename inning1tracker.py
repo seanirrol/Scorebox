@@ -486,7 +486,7 @@ def start_tracking(
     pick_label = "Draw" if pick.upper() == "DRAW" else pick
     dailylog.record_pick(
         channel_id, "inning1tracker", key, section, label or f"1st Inning Result: {pick_label}", message.id,
-        origin_channel_id,
+        origin_channel_id, sport="MLB",
     )
 
 

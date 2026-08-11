@@ -1830,7 +1830,14 @@ def _normalize_summary_section(section: str) -> str:
 def _build_summary_embed(date_str: str, picks_list: list[dict]) -> discord.Embed:
     sections: dict[str, list[dict]] = {}
     for entry in picks_list:
-        section = _normalize_summary_section(entry["section"])
+        # Group by each tracker's own canonical sport label (dailylog.
+        # record_pick's "sport" param) when present - independent of
+        # whatever raw header text the picks-source message used, so the
+        # same market (e.g. YRFI/NRFI) always lands in one section even
+        # when different providers label it differently ("YRFI/NRFI Slate"
+        # vs. a plain "MLB" header). Falls back to the old text-based
+        # normalization for entries logged before this field existed.
+        section = entry.get("sport") or _normalize_summary_section(entry["section"])
         sections.setdefault(section, []).append(entry)
 
     blocks = []

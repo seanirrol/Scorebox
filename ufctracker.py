@@ -541,7 +541,7 @@ def start_tracking(
         channel_id, league_slug, event_id, competition_id, competition_date, message.id, owner_id,
         event_name, fighter_id, fighter_name, total_direction, total_line, section, label, origin_channel_id,
     )
-    dailylog.record_pick(channel_id, "ufctracker", key, section, label, message.id, origin_channel_id)
+    dailylog.record_pick(channel_id, "ufctracker", key, section, label, message.id, origin_channel_id, sport="UFC")
 
 
 async def resume_all(client: discord.Client):
