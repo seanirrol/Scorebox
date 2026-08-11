@@ -283,6 +283,31 @@ def grade_games_handicap(game: dict, team: str, line: float) -> Optional[str]:
     return "won" if adjusted > other_games else "lost"
 
 
+def grade_sets_handicap(game: dict, team: str, line: float) -> Optional[str]:
+    """Grades a tennis sets-margin handicap pick (e.g. "Wang Xiyu +1.5
+    Sets") - same adjust-then-compare shape as grade_games_handicap, but
+    against sets won (main_scores, tennis's own win/loss score) rather than
+    games won. Only call once the match has actually finished - main_scores
+    mid-match reflects sets won so far, not the final tally, so grading
+    early would be premature."""
+    scores = main_scores(game)
+    if not scores:
+        return None
+    home_sets, away_sets = scores
+    home = (game.get("homeCompetitor") or {}).get("name", "")
+    away = (game.get("awayCompetitor") or {}).get("name", "")
+    if names_match(home, team):
+        picked_sets, other_sets = home_sets, away_sets
+    elif names_match(away, team):
+        picked_sets, other_sets = away_sets, home_sets
+    else:
+        return None
+    adjusted = picked_sets + line
+    if adjusted == other_sets:
+        return "push"
+    return "won" if adjusted > other_sets else "lost"
+
+
 def tennis_match_games(game: dict) -> tuple[int, int]:
     """(home_games, away_games) running totals across every set so far -
     unlike tennis_first_set_result, not gated on each set being fully

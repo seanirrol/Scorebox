@@ -886,6 +886,11 @@ async def on_message(message: discord.Message):
                     target_channel, pick["team"], "games_handicap", None, pick["line"],
                     section=section, label=label, origin_channel_id=origin_channel_id,
                 )
+            elif pick["kind"] == "tennis_sets_handicap":
+                await _auto_tennis_market(
+                    target_channel, pick["team"], "sets_handicap", None, pick["line"],
+                    section=section, label=label, origin_channel_id=origin_channel_id,
+                )
             elif pick["kind"] == "tennis_playerprops":
                 await _auto_tennis_playerprops(
                     target_channel, pick["player"], pick["stat"], pick.get("direction"), pick.get("line"),

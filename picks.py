@@ -245,6 +245,15 @@ _GAMES_HANDICAP_NOMATCHUP_RE = re.compile(
     r"^(.+?)\s+([+-]\d+(?:\.\d+)?)\s*(?:total\s+)?games\b", re.IGNORECASE,
 )
 
+# "Wang Xiyu +1.5 Sets" - a sets-margin HANDICAP, same no-matchup shape as
+# _GAMES_HANDICAP_NOMATCHUP_RE above but against sets won instead of games
+# won - confirmed live, a real pick worded this way went completely
+# unparsed (no regex matched "Sets" at all, only "Games"), silently
+# vanishing from the picks count with no botlog trace whatsoever.
+_SETS_HANDICAP_NOMATCHUP_RE = re.compile(
+    r"^(.+?)\s+([+-]\d+(?:\.\d+)?)\s*sets\b", re.IGNORECASE,
+)
+
 # "Team A vs Team B - Venus Williams to Win a Set" (Yes) / "... - Venus
 # Williams No to Win a Set" / "... - Not Venus Williams to Win a Set" (No,
 # either word order) - whether the named player wins at least one set
@@ -875,6 +884,19 @@ def _parse_games_handicap_nomatchup_pick(description: str) -> Optional[dict]:
     return {"kind": "tennis_games_handicap", "team": player, "line": float(m.group(2))}
 
 
+def _parse_sets_handicap_nomatchup_pick(description: str) -> Optional[dict]:
+    """"Player +1.5 Sets" - a sets-margin handicap, no opponent named at
+    all (see _SETS_HANDICAP_NOMATCHUP_RE)."""
+    text = _clean_line(description)
+    m = _SETS_HANDICAP_NOMATCHUP_RE.match(text)
+    if not m:
+        return None
+    player = m.group(1).strip()
+    if not player:
+        return None
+    return {"kind": "tennis_sets_handicap", "team": player, "line": float(m.group(2))}
+
+
 def _parse_match_total_games_pick(description: str) -> Optional[dict]:
     text = _clean_line(description)
     m = _MATCH_TOTAL_GAMES_BEFORE_RE.match(text) or _MATCH_TOTAL_GAMES_AFTER_RE.match(text)
@@ -1438,6 +1460,10 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
             games_handicap_nomatchup = _parse_games_handicap_nomatchup_pick(description)
             if games_handicap_nomatchup:
                 return games_handicap_nomatchup
+
+            sets_handicap_nomatchup = _parse_sets_handicap_nomatchup_pick(description)
+            if sets_handicap_nomatchup:
+                return sets_handicap_nomatchup
 
             tennis_prop = _parse_tennis_player_prop(description)
             if tennis_prop:

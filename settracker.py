@@ -19,6 +19,9 @@ per-game detail call needed:
   Games") - the picked player's own total games, adjusted by the
   (already-signed) line, compared against the opponent's total games. Also
   settles with the match finishing.
+- "sets_handicap": a sets-margin spread (e.g. "Wang Xiyu +1.5 Sets") - same
+  shape as games_handicap but against sets won (main_scores) instead of
+  games won.
 - "win_a_set": whether a named player wins at least one set during the
   match (Yes/No) - can be graded a "Yes" win as soon as it happens, since a
   player can't un-win a set.
@@ -100,7 +103,7 @@ def _footer_text(message_id: Optional[int] = None) -> str:
 # look the match up, not part of the bet's identity, so including it in the
 # key would wrongly let the same match-total pick get double-tracked if two
 # people referenced it via different anchor names.
-_PER_PLAYER_MARKETS = {"set1_moneyline", "player_total_games", "win_a_set", "games_handicap"}
+_PER_PLAYER_MARKETS = {"set1_moneyline", "player_total_games", "win_a_set", "games_handicap", "sets_handicap"}
 
 
 def track_key(channel_id: int, game_id, market: str, team: Optional[str] = None) -> str:
@@ -177,6 +180,8 @@ def pick_label(market: str, team: Optional[str], direction: Optional[str], line:
         return f"{team} {direction.title()} {line:g} Total Games"
     if market == "games_handicap":
         return f"{team} {line:+g} Games"
+    if market == "sets_handicap":
+        return f"{team} {line:+g} Sets"
     return f"{team} {'to Win a Set' if direction == 'yes' else 'Not to Win a Set'}"  # win_a_set
 
 
@@ -241,6 +246,14 @@ async def build_embed(
         if decided:
             result = scores365.grade_games_handicap(game, team, line)
         frozen_cols = (scores365.fmt_score(home_games), scores365.fmt_score(away_games))  # live-running, shown whether decided or not
+
+    elif market == "sets_handicap":
+        decided = scores365.is_finished(game)
+        if decided:
+            result = scores365.grade_sets_handicap(game, team, line)
+        # frozen_cols left None - falls through to the live main_scores
+        # (sets-won) display below, same score that's already shown for a
+        # plain moneyline pick, no separate freeze needed for this market.
 
     else:  # win_a_set
         decided_result = scores365.grade_win_a_set(game, team, direction)
@@ -343,6 +356,10 @@ def grade_now(game: dict, market: str, team: Optional[str], direction: Optional[
         if not scores365.is_finished(game):
             return False, None
         return True, scores365.grade_games_handicap(game, team, line)
+    if market == "sets_handicap":
+        if not scores365.is_finished(game):
+            return False, None
+        return True, scores365.grade_sets_handicap(game, team, line)
     # win_a_set
     result = scores365.grade_win_a_set(game, team, direction)
     return result is not None, result
