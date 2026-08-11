@@ -117,7 +117,10 @@ _COMBO_STAT_BEFORE_RE = re.compile(
 # the 1st inning, not the whole game, so it's routed to inningtracker.py
 # rather than /track's kind="track" (see _parse_yrfi_line). Only one of the
 # two team names is captured - either one is enough to look the game up.
-_YRFI_LINE_RE = re.compile(r"^(.+?)\s+vs\.?\s+.+?-\s*(YRFI|NRFI)\b", re.IGNORECASE)
+# Confirmed live: a real picks message used "Team A vs Team B: NRFI - ..."
+# (colon instead of dash before the market name) and every line silently
+# failed to parse - accepting either separator here covers both.
+_YRFI_LINE_RE = re.compile(r"^(.+?)\s+vs\.?\s+.+?[-:]\s*(YRFI|NRFI)\b", re.IGNORECASE)
 
 # "Team A vs Team B - Over 0.5 1st Inning (...)" means exactly the same bet
 # as YRFI ("at least 1 run scores in the 1st inning") worded differently -
