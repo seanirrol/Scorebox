@@ -105,10 +105,18 @@ def touch(channel_id: int, module: str, track_key_str: str, detail: str):
     state.save_daily_log(data)
 
 
-def record_result(channel_id: int, module: str, track_key_str: str, status: str):
+def record_result(channel_id: int, module: str, track_key_str: str, status: str, reason: Optional[str] = None):
     """status is one of won/lost/push/void - called once, at the same
     moment each tracker grades the pick and reports it to its parlay
-    group (if any)."""
+    group (if any).
+
+    reason is a short human-readable explanation, shown as a /summary
+    suffix (see bot.py's _summary_status_line) - meant for "void" (a plain
+    "Voided" with no explanation was confirmed live to be confusing when
+    several different give-up paths - postponed, interrupted, cancelled,
+    rescheduled, manually untracked, etc. - all collapse into the same
+    bare mark with no way to tell them apart). Ignored for won/lost/push,
+    which are always self-explanatory from the result mark alone."""
     if status not in _RESULT_MARKS:
         log.warning("dailylog.record_result got unknown status %r for %s/%s", status, module, track_key_str)
         return
@@ -117,7 +125,7 @@ def record_result(channel_id: int, module: str, track_key_str: str, status: str)
     if not entry:
         return
     entry["status"] = status
-    entry["detail"] = status.upper()
+    entry["detail"] = f"{status.upper()} - {reason}" if status == "void" and reason else status.upper()
     state.save_daily_log(data)
 
 

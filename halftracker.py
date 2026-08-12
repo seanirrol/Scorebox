@@ -156,7 +156,7 @@ def stop_tracking(
     key = track_key(channel_id, game_id, picked_team, total_direction, total_line)
     task = _active.pop(key, None)
     _forget(channel_id, game_id, picked_team, total_direction, total_line)
-    dailylog.record_result(channel_id, "halftracker", key, "void")
+    dailylog.record_result(channel_id, "halftracker", key, "void", "Manually untracked")
     for message_id, (c_id, g_id, pt, td, tl, _owner) in list(_message_owners.items()):
         if c_id == channel_id and g_id == game_id and pt == picked_team and td == total_direction and tl == total_line:
             _message_owners.pop(message_id, None)
@@ -319,8 +319,10 @@ async def _track_loop(
             log.warning("Failed to delete old 1H tracking message after final repost: %s", e)
         return carry_emojis
 
-    async def _void_leg_and_give_up():
-        dailylog.record_result(channel_id, "halftracker", key, "void")
+    async def _void_leg_and_give_up(reason: str):
+        # reason is shown in /summary - see tracker.py's identical helper
+        # for why this matters.
+        dailylog.record_result(channel_id, "halftracker", key, "void", reason)
         group_ids = parlaytracker.groups_for_leg(channel_id, "halftracker", key)
         if not group_ids:
             return
@@ -383,7 +385,7 @@ async def _track_loop(
                 )
                 if consecutive_misses >= MAX_CONSECUTIVE_MISSES:
                     botlog.event(f"⚠️ Auto-stopped tracking (1H): game `{game_id}` not found {MAX_CONSECUTIVE_MISSES}x in a row, in <#{channel_id}>")
-                    await _void_leg_and_give_up()
+                    await _void_leg_and_give_up("Game not found on 365scores")
                     break
                 continue
             consecutive_misses = 0
@@ -438,7 +440,7 @@ async def _track_loop(
                 except discord.HTTPException as e:
                     log.warning("Failed to add void reaction: %s", e)
                 pendingdelete.start(channel_id, message, void_embed.description or "")
-                dailylog.record_result(channel_id, "halftracker", key, "void")
+                dailylog.record_result(channel_id, "halftracker", key, "void", "Cancelled")
                 group_ids = parlaytracker.groups_for_leg(channel_id, "halftracker", key)
                 await parlaytracker.handle_leg_result(
                     message.channel, channel_id, message, "halftracker", key, leg_label, "void", group_ids,
@@ -469,7 +471,7 @@ async def _track_loop(
                 )
                 if consecutive_edit_failures >= MAX_CONSECUTIVE_MISSES:
                     botlog.event(f"⚠️ Auto-stopped tracking (1H): game `{game_id}` message edit failed {MAX_CONSECUTIVE_MISSES}x in a row, in <#{channel_id}>")
-                    await _void_leg_and_give_up()
+                    await _void_leg_and_give_up("Message edit failed repeatedly")
                     break
                 continue
         else:
@@ -489,7 +491,7 @@ async def _track_loop(
                 except discord.HTTPException as e:
                     log.warning("Failed to add void reaction: %s", e)
                 pendingdelete.start(channel_id, message, embed.description or "")
-                dailylog.record_result(channel_id, "halftracker", key, "void")
+                dailylog.record_result(channel_id, "halftracker", key, "void", "Interrupted, never resumed")
                 group_ids = parlaytracker.groups_for_leg(channel_id, "halftracker", key)
                 await parlaytracker.handle_leg_result(
                     message.channel, channel_id, message, "halftracker", key, leg_label, "void", group_ids,
@@ -497,14 +499,14 @@ async def _track_loop(
                 botlog.event(f"➖ Voided (1H, interrupted, never resumed): game `{game_id}` in <#{channel_id}>")
             else:
                 botlog.event(f"⚠️ Auto-stopped tracking (1H): game `{game_id}` never settled within {config.MAX_TRACK_HOURS}h, in <#{channel_id}>")
-                await _void_leg_and_give_up()
+                await _void_leg_and_give_up("Timed out without settling")
     except asyncio.CancelledError:
         raise
     except Exception:
         # See tracker.py's identical handler for why this exists.
         log.exception("1H tracker crashed unexpectedly for game %s in channel %s", game_id, channel_id)
         botlog.event(f"⚠️ Auto-stopped tracking (1H): game `{game_id}` crashed unexpectedly (see server logs), in <#{channel_id}>")
-        await _void_leg_and_give_up()
+        await _void_leg_and_give_up("Crashed unexpectedly")
     finally:
         _active.pop(key, None)
         _message_owners.pop(message.id, None)

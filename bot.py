@@ -1904,6 +1904,13 @@ def _summary_status_line(entry: dict) -> str:
         line = f"{dailylog.result_mark(entry['status'])} {entry['label']}"
         if entry["status"] == "push":
             line += " — Push - Tie"
+        elif entry["status"] == "void" and entry["detail"].startswith("VOID - "):
+            # A bare "Voided" with no explanation was confirmed live to be
+            # confusing - postponed, interrupted, cancelled, rescheduled,
+            # and manually-untracked picks all used to collapse into the
+            # exact same mark with no way to tell them apart (see
+            # dailylog.record_result's reason param).
+            line += f" — Void - {entry['detail'][len('VOID - '):]}"
         return line
     detail = entry["detail"]
     if detail.startswith("LIVE"):

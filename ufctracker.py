@@ -153,7 +153,7 @@ def stop_tracking(
     key = track_key(channel_id, competition_id, fighter_id, total_direction, total_line)
     task = _active.pop(key, None)
     _forget(channel_id, competition_id, fighter_id, total_direction, total_line)
-    dailylog.record_result(channel_id, "ufctracker", key, "void")
+    dailylog.record_result(channel_id, "ufctracker", key, "void", "Manually untracked")
     for message_id, (c_id, comp_id, fid, td, tl, _owner) in list(_message_owners.items()):
         if c_id == channel_id and comp_id == competition_id and fid == fighter_id and td == total_direction and tl == total_line:
             _message_owners.pop(message_id, None)
@@ -301,14 +301,15 @@ async def _track_loop(
             log.warning("Failed to delete old UFC tracking message after final repost: %s", e)
         return carry_emojis
 
-    async def _void_leg_and_give_up():
+    async def _void_leg_and_give_up(reason: str):
         """Called on every path where this tracker gives up without ever
         reaching a real result (bout never found again, Discord edits
         failing repeatedly, MAX_TRACK_HOURS exhausted) - reports the leg as
         Voided to its parlay group instead of leaving the summary card
         frozen on whatever pending detail it last reported, forever, once
-        this task quietly stops polling."""
-        dailylog.record_result(channel_id, "ufctracker", key, "void")
+        this task quietly stops polling. reason is shown in /summary - see
+        tracker.py's identical helper for why this matters."""
+        dailylog.record_result(channel_id, "ufctracker", key, "void", reason)
         group_ids = parlaytracker.groups_for_leg(channel_id, "ufctracker", key)
         if not group_ids:
             return
@@ -400,7 +401,7 @@ async def _track_loop(
                 )
                 if consecutive_misses >= MAX_CONSECUTIVE_MISSES:
                     botlog.event(f"⚠️ Auto-stopped tracking (UFC): bout `{competition_id}` not found {MAX_CONSECUTIVE_MISSES}x in a row, in <#{channel_id}>")
-                    await _void_leg_and_give_up()
+                    await _void_leg_and_give_up("Bout not found on ESPN")
                     break
                 continue
             consecutive_misses = 0
@@ -489,7 +490,7 @@ async def _track_loop(
                 )
                 if consecutive_edit_failures >= MAX_CONSECUTIVE_MISSES:
                     botlog.event(f"⚠️ Auto-stopped tracking (UFC): bout `{competition_id}` message edit failed {MAX_CONSECUTIVE_MISSES}x in a row, in <#{channel_id}>")
-                    await _void_leg_and_give_up()
+                    await _void_leg_and_give_up("Message edit failed repeatedly")
                     break
                 continue
         else:
@@ -499,14 +500,14 @@ async def _track_loop(
             # docstring), so it's left alone, but a parlay leg still gets
             # Voided so its summary card isn't stuck forever.
             botlog.event(f"⚠️ Auto-stopped tracking (UFC): bout `{competition_id}` never settled within {config.MAX_TRACK_HOURS}h, in <#{channel_id}>")
-            await _void_leg_and_give_up()
+            await _void_leg_and_give_up("Timed out without settling")
     except asyncio.CancelledError:
         raise
     except Exception:
         # See tracker.py's identical handler for why this exists.
         log.exception("UFC tracker crashed unexpectedly for bout %s in channel %s", competition_id, channel_id)
         botlog.event(f"⚠️ Auto-stopped tracking (UFC): bout `{competition_id}` crashed unexpectedly (see server logs), in <#{channel_id}>")
-        await _void_leg_and_give_up()
+        await _void_leg_and_give_up("Crashed unexpectedly")
     finally:
         _active.pop(key, None)
         _message_owners.pop(message.id, None)

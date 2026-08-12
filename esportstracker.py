@@ -149,7 +149,7 @@ def stop_tracking(channel_id: int, sport: str, team_a: str, team_b: str, market:
     key = track_key(channel_id, sport, team_a, team_b, market)
     task = _active.pop(key, None)
     _forget(channel_id, sport, team_a, team_b, market)
-    dailylog.record_result(channel_id, "esportstracker", key, "void")
+    dailylog.record_result(channel_id, "esportstracker", key, "void", "Manually untracked")
     for message_id, (c_id, s, a, b, m, _owner) in list(_message_owners.items()):
         if c_id == channel_id and s == sport and a == team_a and b == team_b and m == market:
             _message_owners.pop(message_id, None)
@@ -337,14 +337,16 @@ async def _track_loop(
             log.warning("Failed to delete old esports tracking message after final repost: %s", e)
         return carry_emojis
 
-    async def _void_leg_and_give_up():
+    async def _void_leg_and_give_up(reason: str):
         """Called on every path where this tracker gives up without ever
         reaching a real result (match never found again, Discord edits
         failing repeatedly, MAX_TRACK_HOURS exhausted) - reports the leg as
         Voided to its parlay group instead of leaving the summary card
         frozen on whatever pending detail ("NOT STARTED"/"LIVE, Game N") it
-        last reported, forever, once this task quietly stops polling."""
-        dailylog.record_result(channel_id, "esportstracker", key, "void")
+        last reported, forever, once this task quietly stops polling.
+        reason is shown in /summary - see tracker.py's identical helper
+        for why this matters."""
+        dailylog.record_result(channel_id, "esportstracker", key, "void", reason)
         group_ids = parlaytracker.groups_for_leg(channel_id, "esportstracker", key)
         if group_ids:
             leg_label = f"{team_a} vs {team_b} - {pick_label(market, picked_team, direction, line, map_number, picked_maps, other_maps)}"
@@ -407,7 +409,7 @@ async def _track_loop(
                         f"⚠️ Auto-stopped tracking (esports {market}): "
                         f"{team_a} v {team_b} not found {MAX_CONSECUTIVE_MISSES}x in a row, in <#{channel_id}>"
                     )
-                    await _void_leg_and_give_up()
+                    await _void_leg_and_give_up("Match not found on hawk.live/GosuGamers")
                     break
                 continue
             consecutive_misses = 0
@@ -445,7 +447,7 @@ async def _track_loop(
                     leg_matchup = f"{series_data.get('home_team') or '?'} vs {series_data.get('away_team') or '?'}"
                     leg_pick = pick_label(market, picked_team, direction, line, map_number, picked_maps, other_maps)
                     leg_label = f"{leg_matchup} - {leg_pick}"
-                    dailylog.record_result(channel_id, "esportstracker", key, result)
+                    dailylog.record_result(channel_id, "esportstracker", key, result, "Unplayed map" if result == "void" else None)
                     group_ids = parlaytracker.groups_for_leg(channel_id, "esportstracker", key)
                     await parlaytracker.handle_leg_result(
                         message.channel, channel_id, message, "esportstracker", key, leg_label, result, group_ids,
@@ -482,7 +484,7 @@ async def _track_loop(
                         f"⚠️ Auto-stopped tracking (esports {market}): "
                         f"{team_a} v {team_b} message edit failed {MAX_CONSECUTIVE_MISSES}x in a row, in <#{channel_id}>"
                     )
-                    await _void_leg_and_give_up()
+                    await _void_leg_and_give_up("Message edit failed repeatedly")
                     break
                 continue
         else:
@@ -500,7 +502,7 @@ async def _track_loop(
                 f"⚠️ Auto-stopped tracking (esports {market}): "
                 f"{team_a} v {team_b} never settled within {config.MAX_TRACK_HOURS}h, in <#{channel_id}>"
             )
-            await _void_leg_and_give_up()
+            await _void_leg_and_give_up("Timed out without settling")
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -510,7 +512,7 @@ async def _track_loop(
             f"⚠️ Auto-stopped tracking (esports {market}): "
             f"{team_a} v {team_b} crashed unexpectedly (see server logs), in <#{channel_id}>"
         )
-        await _void_leg_and_give_up()
+        await _void_leg_and_give_up("Crashed unexpectedly")
     finally:
         _active.pop(key, None)
         _message_owners.pop(message.id, None)

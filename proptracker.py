@@ -156,7 +156,7 @@ def stop_tracking(
     key = prop_key(channel_id, event_id, entity_id, stat_key, direction, line)
     task = _active_props.pop(key, None)
     _forget(channel_id, event_id, entity_id, stat_key, direction, line)
-    dailylog.record_result(channel_id, "proptracker", key, "void")
+    dailylog.record_result(channel_id, "proptracker", key, "void", "Manually untracked")
     for message_id, (c_id, e_id, ent_id, s_key, drct, ln, _owner) in list(_message_owners.items()):
         if c_id == channel_id and e_id == event_id and ent_id == entity_id and s_key == stat_key and drct == direction and ln == line:
             _message_owners.pop(message_id, None)
@@ -407,14 +407,15 @@ async def _track_loop(
             log.warning("Failed to delete old prop tracking message after final repost: %s", e)
         return carry_emojis
 
-    async def _void_leg_and_give_up():
+    async def _void_leg_and_give_up(reason: str):
         """Called on every path where this tracker gives up without ever
         reaching a real result (event never found again, Discord edits
         failing repeatedly, MAX_TRACK_HOURS exhausted) - reports the leg as
         Voided to its parlay group instead of leaving the summary card
         frozen on whatever pending detail it last reported, forever, once
-        this task quietly stops polling."""
-        dailylog.record_result(channel_id, "proptracker", key, "void")
+        this task quietly stops polling. reason is shown in /summary - see
+        tracker.py's identical helper for why this matters."""
+        dailylog.record_result(channel_id, "proptracker", key, "void", reason)
         group_ids = parlaytracker.groups_for_leg(channel_id, "proptracker", key)
         if not group_ids:
             return
@@ -524,7 +525,7 @@ async def _track_loop(
                 )
                 if consecutive_misses >= MAX_CONSECUTIVE_MISSES:
                     botlog.event(f"⚠️ Auto-stopped tracking (prop): **{player_name}** — event `{event_id}` not found {MAX_CONSECUTIVE_MISSES}x in a row, in <#{channel_id}>")
-                    await _void_leg_and_give_up()
+                    await _void_leg_and_give_up("Event not found on ESPN")
                     break
                 continue
             consecutive_misses = 0
@@ -577,7 +578,7 @@ async def _track_loop(
                         except discord.HTTPException as e:
                             log.warning("Failed to add result reaction: %s", e)
                 if result:
-                    dailylog.record_result(channel_id, "proptracker", key, result)
+                    dailylog.record_result(channel_id, "proptracker", key, result, "No usable stat value" if result == "void" else None)
                     group_ids = parlaytracker.groups_for_leg(channel_id, "proptracker", key)
                     await parlaytracker.handle_leg_result(
                         message.channel, channel_id, message, "proptracker", key, leg_label, result, group_ids,
@@ -616,7 +617,7 @@ async def _track_loop(
                         await message.add_reaction(_RESULT_REACTIONS["void"])
                     except discord.HTTPException as e:
                         log.warning("Failed to add void reaction: %s", e)
-                    dailylog.record_result(channel_id, "proptracker", key, "void")
+                    dailylog.record_result(channel_id, "proptracker", key, "void", "Postponed, no new schedule published")
                     group_ids = parlaytracker.groups_for_leg(channel_id, "proptracker", key)
                     await parlaytracker.handle_leg_result(
                         message.channel, channel_id, message, "proptracker", key, leg_label, "void", group_ids,
@@ -677,7 +678,7 @@ async def _track_loop(
                 )
                 if consecutive_edit_failures >= MAX_CONSECUTIVE_MISSES:
                     botlog.event(f"⚠️ Auto-stopped tracking (prop): **{player_name}** — message edit failed {MAX_CONSECUTIVE_MISSES}x in a row, in <#{channel_id}>")
-                    await _void_leg_and_give_up()
+                    await _void_leg_and_give_up("Message edit failed repeatedly")
                     break
                 continue
         else:
@@ -686,7 +687,7 @@ async def _track_loop(
             # alone, but a parlay leg still gets Voided so its summary card
             # isn't stuck forever.
             botlog.event(f"⚠️ Auto-stopped tracking (prop): **{player_name}** — event `{event_id}` never settled within {config.MAX_TRACK_HOURS}h, in <#{channel_id}>")
-            await _void_leg_and_give_up()
+            await _void_leg_and_give_up("Timed out without settling")
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -695,7 +696,7 @@ async def _track_loop(
         # the card forever with no Discord/botlog signal.
         log.exception("Prop tracker crashed unexpectedly for event %s (%s) in channel %s", event_id, player_name, channel_id)
         botlog.event(f"⚠️ Auto-stopped tracking (prop): **{player_name}** — event `{event_id}` crashed unexpectedly (see server logs), in <#{channel_id}>")
-        await _void_leg_and_give_up()
+        await _void_leg_and_give_up("Crashed unexpectedly")
     finally:
         _active_props.pop(key, None)
         _message_owners.pop(message.id, None)
