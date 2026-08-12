@@ -660,10 +660,26 @@ async def resume_all(client: discord.Client):
             log.warning("Dropping track entry from an incompatible state schema: %r", entry)
             continue
         owner_id = entry.get("owner_id")
-        try:
-            channel = await client.fetch_channel(channel_id)
-            message = await channel.fetch_message(message_id)
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+        message = None
+        for attempt in range(MAX_CONSECUTIVE_MISSES):
+            try:
+                channel = await client.fetch_channel(channel_id)
+                message = await channel.fetch_message(message_id)
+                break
+            except (discord.NotFound, discord.Forbidden):
+                # Genuinely gone (deleted message/channel, revoked access) -
+                # no point retrying, this will never succeed.
+                break
+            except discord.HTTPException:
+                # A bare HTTPException here (rate limit, transient 5xx) used
+                # to drop the pick on the very first hit with zero retry -
+                # confirmed live this is a real risk right at startup, where
+                # every active pick across every module fetches its message
+                # in a tight burst. Retrying closes that gap the same way
+                # the event-lookup miss below already does.
+                if attempt < MAX_CONSECUTIVE_MISSES - 1:
+                    await asyncio.sleep(5)
+        if message is None:
             # Silent before this fix - confirmed live this made a pick
             # vanish from tracking on restart with zero trace anywhere,
             # unlike every other give-up path in this module, which always

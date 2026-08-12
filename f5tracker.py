@@ -632,10 +632,21 @@ async def resume_all(client: discord.Client):
             log.warning("Dropping F5 entry from an incompatible state schema: %r", entry)
             continue
         owner_id = entry.get("owner_id")
-        try:
-            channel = await client.fetch_channel(channel_id)
-            message = await channel.fetch_message(message_id)
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+        message = None
+        for attempt in range(MAX_CONSECUTIVE_MISSES):
+            try:
+                channel = await client.fetch_channel(channel_id)
+                message = await channel.fetch_message(message_id)
+                break
+            except (discord.NotFound, discord.Forbidden):
+                break
+            except discord.HTTPException:
+                # A bare HTTPException (rate limit, transient 5xx) used to
+                # drop the pick with zero retry - see tracker.py's identical
+                # resume_all fix for why this matters.
+                if attempt < MAX_CONSECUTIVE_MISSES - 1:
+                    await asyncio.sleep(5)
+        if message is None:
             # Silent before this fix - see tracker.py's identical resume_all
             # fix for why this matters (a dropped-on-resume pick vanishes
             # with zero trace, and reads as brand new instead of a duplicate

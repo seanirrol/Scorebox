@@ -542,10 +542,21 @@ async def resume_all(client: discord.Client):
             # it rather than crashing the rest of startup.
             log.warning("Dropping tennis prop entry from an old state schema: %r", entry)
             continue
-        try:
-            channel = await client.fetch_channel(channel_id)
-            message = await channel.fetch_message(entry["message_id"])
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+        message = None
+        for attempt in range(MAX_CONSECUTIVE_MISSES):
+            try:
+                channel = await client.fetch_channel(channel_id)
+                message = await channel.fetch_message(entry["message_id"])
+                break
+            except (discord.NotFound, discord.Forbidden):
+                break
+            except discord.HTTPException:
+                # A bare HTTPException (rate limit, transient 5xx) used to
+                # drop the pick with zero retry - see tracker.py's identical
+                # resume_all fix for why this matters.
+                if attempt < MAX_CONSECUTIVE_MISSES - 1:
+                    await asyncio.sleep(5)
+        if message is None:
             # Silent before this fix - see tracker.py's identical resume_all
             # fix for why this matters.
             botlog.event(f"⚠️ Dropped on resume (tennis prop): **{entry.get('player_name', competitor_id)}** — message/channel no longer reachable, in <#{channel_id}>")
