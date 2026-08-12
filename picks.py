@@ -119,8 +119,12 @@ _COMBO_STAT_BEFORE_RE = re.compile(
 # two team names is captured - either one is enough to look the game up.
 # Confirmed live: a real picks message used "Team A vs Team B: NRFI - ..."
 # (colon instead of dash before the market name) and every line silently
-# failed to parse - accepting either separator here covers both.
-_YRFI_LINE_RE = re.compile(r"^(.+?)\s+vs\.?\s+.+?[-:]\s*(YRFI|NRFI)\b", re.IGNORECASE)
+# failed to parse - accepting either separator here covers both. Also
+# accepts "@" as the matchup separator (the away-@-home convention used
+# instead of "vs" for some picks) - same separator set as
+# _INNING_RUN_TOTAL_RE just below - confirmed live: "Philadelphia Phillies
+# @ St. Louis Cardinals - NRFI - ..." silently parsed to zero picks.
+_YRFI_LINE_RE = re.compile(r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b)\s*.+?[-:]\s*(YRFI|NRFI)\b", re.IGNORECASE)
 
 # "Team A vs Team B - Over 0.5 1st Inning (...)" means exactly the same bet
 # as YRFI ("at least 1 run scores in the 1st inning") worded differently -
@@ -1347,6 +1351,18 @@ def _parse_bare_team_total_pick(sport: str, description: str) -> Optional[dict]:
     }
 
 
+# "Team A vs Team B - <rest>" - strips a leading matchup used purely as
+# context (see _parse_description's is_prop_category+has_matchup handling)
+# so <rest> can be re-parsed on its own, e.g. as a player prop. Same
+# separator set as _TOTAL_LINE_RE and friends.
+_MATCHUP_PREFIX_RE = re.compile(r"^.+?\s*(?:@|\bvs\.?\b|\bv\.?\b)\s*.+?\s*-\s*(.+)$", re.IGNORECASE)
+
+
+def _strip_matchup_prefix(description: str) -> Optional[str]:
+    m = _MATCHUP_PREFIX_RE.match(description)
+    return m.group(1).strip() if m else None
+
+
 def _parse_description(sport: str, sport_key: str, description: str, is_prop_category: bool) -> Optional[dict]:
     if sport in ("dota2", "cs2"):
         # None of the generic total/player-prop/track fallback logic below
@@ -1422,10 +1438,6 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
     if named_total:
         return named_total
 
-    total = _parse_total_pick(sport, description)
-    if total:
-        return total
-
     # A description shaped like "Player Over/Under N Stat" is a player prop
     # even when the category itself is bare (e.g. "[MLB]" rather than
     # "[MLB Props]") - confirmed live that real messages mix both taggings
@@ -1433,7 +1445,40 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
     # Giants - Over 8.5 Total Runs") is excluded even though it also matches
     # the Over/Under shape, since that's a game total (handled above), not a
     # single player's stat.
-    has_matchup = any(sep in description for sep in (" vs. ", " vs ", " v. ", " v "))
+    has_matchup = any(sep in description for sep in (" vs. ", " vs ", " v. ", " v ", " @ "))
+
+    # Skipped entirely for an explicitly-tagged prop category - _TOTAL_LINE_RE
+    # doesn't validate its "team_b" capture at all (unlike named_total above),
+    # so on a matchup-prefixed prop line (see the is_prop_category+has_matchup
+    # block below) it would otherwise greedily swallow everything up to the
+    # first Over/Under - including the actual player's name - as if it were
+    # part of a combined game total. Confirmed live: "[MLB Props] Colorado
+    # Rockies vs Arizona Diamondbacks - Corbin Carroll Over 0.5 Total Bases"
+    # silently mistracked as "did Colorado Rockies+Diamondbacks combined
+    # score over 0.5" - a nonsense, guaranteed-to-grade bet - instead of
+    # Corbin Carroll's actual prop.
+    if not is_prop_category:
+        total = _parse_total_pick(sport, description)
+        if total:
+            return total
+
+    if is_prop_category and has_matchup:
+        # A matchup prefix ("Team A vs Team B - ") is sometimes used purely
+        # for game context ahead of a player prop, not to describe a team/
+        # game total - named_total above already rejects this shape (the
+        # player's name doesn't match either matchup side), and the
+        # has_matchup guard right below skips player-prop parsing entirely,
+        # so re-parsing just the part after the matchup dash recovers the
+        # intended prop instead of guessing or dropping the whole pick.
+        remainder = _strip_matchup_prefix(description)
+        if remainder:
+            combo_prop = _parse_combo_stat_prop(sport_key, sport, remainder)
+            if combo_prop:
+                return combo_prop
+            prop = _parse_player_prop(sport_key, sport, remainder)
+            if prop:
+                return prop
+
     if not has_matchup:
         f5_total = _parse_f5_total_pick(description, sport)
         if f5_total:
@@ -1505,17 +1550,21 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
             if bare_total:
                 return bare_total
 
-        # mma is exempt: this source tags every combat pick "Combat Props"
-        # regardless of bet type (confirmed live - a plain fighter moneyline
-        # came tagged that way, not just stat props), and ESPN has no
-        # player-prop lookup for mma at all (see espn.SPORT_PATHS) so
-        # _parse_player_prop above always fails here - bailing out on
-        # is_prop_category would wrongly swallow every mma moneyline/round-
-        # total pick before reaching mma's own authoritative fallback below,
-        # which already guards against genuinely-unparseable wording
-        # (Method of Victory) rather than blindly guessing.
-        if is_prop_category and sport != "mma":
-            return None  # explicitly tagged as a prop but couldn't be confidently parsed - don't guess it's a team pick
+    # mma is exempt: this source tags every combat pick "Combat Props"
+    # regardless of bet type (confirmed live - a plain fighter moneyline
+    # came tagged that way, not just stat props), and ESPN has no
+    # player-prop lookup for mma at all (see espn.SPORT_PATHS) so
+    # _parse_player_prop above always fails here - bailing out on
+    # is_prop_category would wrongly swallow every mma moneyline/round-
+    # total pick before reaching mma's own authoritative fallback below,
+    # which already guards against genuinely-unparseable wording
+    # (Method of Victory) rather than blindly guessing. Checked outside the
+    # has_matchup block (not just inside it) - a Props-tagged matchup line
+    # that didn't recover as a prop above (see is_prop_category+has_matchup
+    # block) shouldn't fall through to the generic team-pick guess at the
+    # bottom of this function either.
+    if is_prop_category and sport != "mma":
+        return None  # explicitly tagged as a prop but couldn't be confidently parsed - don't guess it's a team pick
 
     if sport == "mma":
         if _METHOD_OF_VICTORY_RE.search(description):
