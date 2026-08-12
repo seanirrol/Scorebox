@@ -716,9 +716,32 @@ def main_scores(game: dict) -> Optional[tuple]:
 def grade_moneyline(game: dict, picked_team: str) -> Optional[str]:
     """Grades a moneyline pick against a finished game's final score.
     Returns "won"/"lost"/"push" (a tie), or None if there's no final score
-    yet or picked_team doesn't match either side."""
-    home = (game.get("homeCompetitor") or {}).get("name", "")
-    away = (game.get("awayCompetitor") or {}).get("name", "")
+    yet or picked_team doesn't match either side.
+
+    Confirmed live: a tennis WalkOver has both competitors' score sitting
+    at 0-0 (no sets ever played) - naively comparing those as equal scores
+    graded it a "push", when 365scores' own homeCompetitor/awayCompetitor
+    "isWinner" flag already correctly says who actually won (the player
+    who didn't withdraw). Checked first, ahead of the score comparison -
+    exactly one side being flagged the winner settles it regardless of
+    score; a genuine tie (neither side flagged, e.g. a soccer draw) falls
+    through to the existing score-based push logic unaffected."""
+    home_competitor = game.get("homeCompetitor") or {}
+    away_competitor = game.get("awayCompetitor") or {}
+    home, away = home_competitor.get("name", ""), away_competitor.get("name", "")
+    home_is_winner, away_is_winner = home_competitor.get("isWinner"), away_competitor.get("isWinner")
+    if home_is_winner and not away_is_winner:
+        winner = home
+    elif away_is_winner and not home_is_winner:
+        winner = away
+    else:
+        winner = None
+    if winner is not None:
+        if names_match(winner, picked_team):
+            return "won"
+        if names_match(home, picked_team) or names_match(away, picked_team):
+            return "lost"
+        return None
     scores = main_scores(game)
     if not scores:
         return None
