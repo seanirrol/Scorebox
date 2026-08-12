@@ -54,7 +54,19 @@ SPORT_ID_LABELS = {
 }
 
 
-def sport_label(sport_id: Optional[int]) -> Optional[str]:
+def sport_label(sport_id: Optional[int], competition_name: Optional[str] = None) -> Optional[str]:
+    """competition_name (a game's own competitionDisplayName) lets basketball
+    resolve to "WNBA" specifically instead of the generic "Basketball" -
+    365scores' sport_id doesn't distinguish NBA from WNBA at all (both are
+    sport_id 2), which used to split a WNBA game's moneyline/spread pick
+    (tracker.py, generic across every sport) into a different /summary
+    section than that same league's player props (proptracker.py, which
+    already had "wnba" as an explicit string) - the same real league
+    showing up under both "Basketball" and "WNBA" for no reason a bettor
+    would expect. Confirmed live: competitionDisplayName is literally
+    "WNBA" for a WNBA game."""
+    if sport_id == SPORT_IDS["basketball"] and competition_name and "wnba" in competition_name.lower():
+        return "WNBA"
     return SPORT_ID_LABELS.get(sport_id)
 
 

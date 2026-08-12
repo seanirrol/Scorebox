@@ -638,7 +638,10 @@ def start_tracking(
         channel_id, game_id, message.id, sport_id, owner_id, picked_team, total_direction, total_line, team_total,
         section, label, origin_channel_id,
     )
-    dailylog.record_pick(channel_id, "tracker", key, section, label, message.id, origin_channel_id, sport=scores365.sport_label(sport_id))
+    dailylog.record_pick(
+        channel_id, "tracker", key, section, label, message.id, origin_channel_id,
+        sport=scores365.sport_label(sport_id, game.get("competitionDisplayName")),
+    )
 
 
 async def resume_all(client: discord.Client):
