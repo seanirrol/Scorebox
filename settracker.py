@@ -140,11 +140,13 @@ def unregister_message(message_id: int):
 def _persist(
     channel_id: int, game_id, market: str, message_id: int, sport_id, owner_id: int,
     team: Optional[str] = None, direction: Optional[str] = None, line: Optional[float] = None,
+    original_kickoff: Optional[float] = None,
 ):
     data = state.load_set1()
     data[track_key(channel_id, game_id, market, team)] = {
         "channel_id": channel_id, "game_id": game_id, "market": market, "message_id": message_id,
         "sport_id": sport_id, "owner_id": owner_id, "team": team, "direction": direction, "line": line,
+        "original_kickoff": original_kickoff,
     }
     state.save_set1(data)
 
@@ -380,6 +382,7 @@ def grade_now(game: dict, market: str, team: Optional[str], direction: Optional[
 async def _track_loop(
     message: discord.Message, sport_id: int, game_id, channel_id: int, market: str, owner_id: int,
     team: Optional[str] = None, direction: Optional[str] = None, line: Optional[float] = None,
+    original_kickoff: Optional[float] = None,
 ):
     key = track_key(channel_id, game_id, market, team)
     deadline = time.monotonic() + config.MAX_TRACK_HOURS * 3600
@@ -468,6 +471,25 @@ async def _track_loop(
                 kickoff = scores365.start_epoch(game)
                 if not kickoff:
                     break
+
+                if original_kickoff and scores365.eastern_date(kickoff) != scores365.eastern_date(original_kickoff):
+                    # Genuinely rescheduled to a different day - see
+                    # tracker.py's identical fix for why this matters.
+                    void_embed, void_file = await build_embed(
+                        game, sport_id, market, team, direction, line,
+                        force_result="void", message_id=message.id,
+                    )
+                    void_embed.title = _RESULT_TITLES["void"]
+                    await _repost_final(void_embed, void_file)
+                    try:
+                        await message.add_reaction(_RESULT_REACTIONS["void"])
+                    except discord.HTTPException as e:
+                        log.warning("Failed to add void reaction: %s", e)
+                    pendingdelete.start(channel_id, message, void_embed.description or "")
+                    await _void_leg_and_give_up()
+                    botlog.event(f"➖ Voided ({market}, rescheduled to a different day): game `{game_id}` in <#{channel_id}>")
+                    return
+
                 seconds_until_kickoff = kickoff - time.time()
                 if seconds_until_kickoff <= 90:
                     break
@@ -641,17 +663,23 @@ def start_tracking(
     message: discord.Message, sport_id: int, game: dict, channel_id: int, market: str, owner_id: int,
     team: Optional[str] = None, direction: Optional[str] = None, line: Optional[float] = None,
     section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
+    original_kickoff: Optional[float] = None,
 ):
+    # See tracker.py's identical start_tracking for why a fresh track
+    # takes the current kickoff as its baseline while a resumed one keeps
+    # its own already-persisted value.
+    if original_kickoff is None:
+        original_kickoff = scores365.start_epoch(game) or None
     game_id = game["id"]
     key = track_key(channel_id, game_id, market, team)
     if key in _active:
         return
     task = asyncio.create_task(
-        _track_loop(message, sport_id, game_id, channel_id, market, owner_id, team, direction, line)
+        _track_loop(message, sport_id, game_id, channel_id, market, owner_id, team, direction, line, original_kickoff)
     )
     _active[key] = task
     register_message(message.id, channel_id, game_id, market, team, owner_id)
-    _persist(channel_id, game_id, market, message.id, sport_id, owner_id, team, direction, line)
+    _persist(channel_id, game_id, market, message.id, sport_id, owner_id, team, direction, line, original_kickoff)
     dailylog.record_pick(
         channel_id, "settracker", key, section, label or pick_label(market, team, direction, line), message.id,
         origin_channel_id, sport="Tennis",
@@ -718,5 +746,6 @@ async def resume_all(client: discord.Client):
         start_tracking(
             message, sport_id, game, channel_id, market, owner_id,
             team, entry.get("direction"), entry.get("line"),
+            original_kickoff=entry.get("original_kickoff"),
         )
         log.info("Resumed tennis-market (%s) tracking for game %s in channel %s", market, game_id, channel_id)

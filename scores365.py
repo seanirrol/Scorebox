@@ -1097,6 +1097,14 @@ def next_eastern_midnight_epoch(from_ts: float) -> float:
     return next_midnight.timestamp()
 
 
+def eastern_date(epoch: float) -> datetime.date:
+    """The Eastern-time calendar date for an epoch timestamp - used to
+    detect a genuine reschedule (kickoff moved to a different day) versus
+    a match that's simply still hours away on the same day it was always
+    scheduled for."""
+    return datetime.datetime.fromtimestamp(epoch, tz=EASTERN).date()
+
+
 def status_line(game: dict, sport_id: Optional[int] = None) -> str:
     status = map_status_type(game.get("statusGroup"))
     if status == "notstarted":
