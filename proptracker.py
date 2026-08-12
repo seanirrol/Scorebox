@@ -362,6 +362,7 @@ async def _track_loop(
 
     consecutive_misses = 0
     consecutive_edit_failures = 0
+    early_win_recorded = False
 
     async def _repost_final(embed: discord.Embed, file: discord.File):
         """Bumps the card to the bottom of the channel (pre-kickoff or
@@ -544,6 +545,26 @@ async def _track_loop(
                 else player_name
             )
             leg_label = f"{leg_home} v {leg_away} - {leg_pick}"
+
+            if not early_win_recorded and not hibernated and not espn.is_finished(event) and direction == "over" and line is not None:
+                # Same "safe to call it a win early" reasoning as build_embed's
+                # own early_win check just above (a counting stat only ever
+                # climbs during a game, so a cleared Over line can't un-clear
+                # by the time the game actually ends) - extended here to
+                # /summary's dailylog too, not just the card's color/title,
+                # so a pick that's mathematically already won doesn't sit
+                # showing "LIVE" for however much longer the game runs.
+                # Overwritten harmlessly by the official grade below once the
+                # game actually finishes - the rare exception is an official
+                # scorer correction retroactively reducing the stat (e.g. a
+                # hit reclassified as an error), which would only self-correct
+                # at that point, not before.
+                try:
+                    if current_value is not None and float(current_value) > line:
+                        dailylog.record_result(channel_id, "proptracker", key, "won")
+                        early_win_recorded = True
+                except (TypeError, ValueError):
+                    pass
 
             if hibernated:
                 # The final wake right before start - bump the card to the
