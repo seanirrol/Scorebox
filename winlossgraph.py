@@ -38,7 +38,7 @@ _WIN_COLOR = (46, 204, 113, 255)  # matches scoreimage._PALETTE["won"]
 _LOSS_COLOR = (231, 76, 60, 255)  # matches scoreimage._PALETTE["lost"]
 _LABEL_COLOR = (185, 187, 190, 255)
 _TITLE_COLOR = (220, 221, 222, 255)
-_PCT_TEXT_COLOR = (255, 255, 255, 255)
+_PCT_TEXT_COLOR = (60, 60, 60, 255)  # matches scoreimage._PILL_TEXT_COLOR
 
 _BOLD_FONT_PATHS = [
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",

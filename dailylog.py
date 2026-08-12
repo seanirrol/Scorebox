@@ -166,18 +166,34 @@ def is_final(status: str) -> bool:
     return status in _RESULT_MARKS
 
 
+# Earliest date /winlossgraph will report for a given "YYYY-MM" month -
+# August 2026 had several picks-parsing bugs (mis-parsed matchup-prefixed
+# props, unrecognized "@"-separated NRFI lines, unmatched WNBA stat
+# wording) that silently produced wrong or missing results until they were
+# found and fixed between Aug 10-12, so days before the floor are excluded
+# rather than plotted as if their numbers were trustworthy. Months not
+# listed here have no floor - every date with a decision is included.
+_RELIABLE_FROM = {
+    "2026-08": "2026-08-10",
+}
+
+
 def daily_win_loss(origin_channel_ids: Iterable[int], year_month: str) -> list[tuple[str, int, int]]:
     """(date_str, won_count, lost_count) for every date in year_month
     ("YYYY-MM") that has at least one won/lost decision from these origin
     channels, oldest first - the data behind /winlossgraph's monthly chart.
     Push/void/pending picks are excluded entirely (same "decided only" rule
     as bot.py's _win_rate_line) - a day with only pushes/voids has no
-    meaningful win rate to plot."""
+    meaningful win rate to plot. Dates before _RELIABLE_FROM's floor for
+    this month (if any) are excluded too."""
     ids = {origin_channel_ids} if isinstance(origin_channel_ids, int) else set(origin_channel_ids)
+    floor = _RELIABLE_FROM.get(year_month)
     data = state.load_daily_log()
     counts: dict[str, list[int]] = {}
     for entry in data.values():
         if entry.get("origin_channel_id") not in ids or not entry["date"].startswith(year_month):
+            continue
+        if floor and entry["date"] < floor:
             continue
         if entry["status"] == "won":
             counts.setdefault(entry["date"], [0, 0])[0] += 1
