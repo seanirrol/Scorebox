@@ -1872,13 +1872,15 @@ async def parlay(
     await interaction.followup.send(summary, ephemeral=True)
 
 
-def _summary_route(interaction_channel_id: int) -> Optional[tuple[int, ...]]:
-    """/summary only runs in - and only ever posts to - a destination
-    channel configured in config.SUMMARY_ROUTES; the returned tuple is
-    every picks-source channel whose dailylog entries get combined into
-    that destination's report. None means this channel isn't a configured
-    destination at all, regardless of ALLOWED_CHANNEL_ID - /summary has its
-    own, separate channel restriction from every other command."""
+def _summary_route(interaction_channel_id: int) -> Optional[config.SummaryRoute]:
+    """/summary only runs in a channel configured as an invoke channel in
+    config.SUMMARY_ROUTES; the returned route carries both every picks-source
+    channel whose dailylog entries get combined into the report (.origins)
+    and where the report actually gets posted (.post_channel_id - usually
+    the same invoke channel, but can be a different shared channel). None
+    means this channel isn't a configured invoke channel at all, regardless
+    of ALLOWED_CHANNEL_ID - /summary has its own, separate channel
+    restriction from every other command."""
     return config.SUMMARY_ROUTES.get(interaction_channel_id)
 
 
@@ -1983,9 +1985,10 @@ class SummaryPostView(discord.ui.View):
     that's since gone final. Posting (or reposting) a date is entirely the
     caller's call - nothing here prevents publishing the same date twice."""
 
-    def __init__(self, origin_ids: tuple[int, ...], date_strs: list[str], requester_id: int):
+    def __init__(self, origin_ids: tuple[int, ...], post_channel_id: int, date_strs: list[str], requester_id: int):
         super().__init__(timeout=900)
         self.origin_ids = origin_ids
+        self.post_channel_id = post_channel_id
         self.date_strs = date_strs
         self.requester_id = requester_id
 
@@ -2011,9 +2014,13 @@ class SummaryPostView(discord.ui.View):
             )
             self.stop()
             return
-        await interaction.channel.send(embeds=embeds)
+        target = client.get_channel(self.post_channel_id) or await client.fetch_channel(self.post_channel_id)
+        await target.send(embeds=embeds)
         dates_label = ", ".join(posted_dates)
-        botlog.event(f"📋 Summary report ({dates_label}) posted in <#{interaction.channel_id}> by **{interaction.user}**")
+        botlog.event(
+            f"📋 Summary report ({dates_label}) posted to <#{self.post_channel_id}> "
+            f"(previewed in <#{interaction.channel_id}>) by **{interaction.user}**"
+        )
         await interaction.response.edit_message(content="Posted.", embed=None, view=None)
         self.stop()
 
@@ -2023,7 +2030,9 @@ class SummaryPostView(discord.ui.View):
         self.stop()
 
 
-async def _send_summary_preview(interaction: discord.Interaction, origin_ids: tuple[int, ...], date_strs: list[str], *, edit: bool):
+async def _send_summary_preview(
+    interaction: discord.Interaction, origin_ids: tuple[int, ...], post_channel_id: int, date_strs: list[str], *, edit: bool,
+):
     """Renders the date-picker's selection (one or more dates) as a
     preview - re-reads dailylog at click time (not the picker's own
     snapshot) since a pending pick can resolve, or someone else can
@@ -2033,8 +2042,12 @@ async def _send_summary_preview(interaction: discord.Interaction, origin_ids: tu
     if not embeds:
         content, view = f"No picks logged for {', '.join(date_strs)}.", None
     else:
-        content = "Preview only - not posted yet. Click below to publish it to this channel."
-        view = SummaryPostView(origin_ids, date_strs, interaction.user.id)
+        content = (
+            "Preview only - not posted yet. Click below to publish it."
+            if post_channel_id == interaction.channel_id
+            else f"Preview only - not posted yet. Click below to publish it to <#{post_channel_id}>."
+        )
+        view = SummaryPostView(origin_ids, post_channel_id, date_strs, interaction.user.id)
     if edit:
         await interaction.response.edit_message(content=content, embeds=embeds, view=view)
     else:
@@ -2050,7 +2063,7 @@ class _SummaryDateSelect(discord.ui.Select):
     Discord's 10-embeds-per-message cap); the resulting preview/post covers
     all of them together."""
 
-    def __init__(self, origin_ids: tuple[int, ...], dates: list[str], requester_id: int):
+    def __init__(self, origin_ids: tuple[int, ...], post_channel_id: int, dates: list[str], requester_id: int):
         options = [
             discord.SelectOption(
                 label=d, description=f"{len(dailylog.picks_for_date(origin_ids, d))} pick(s) logged",
@@ -2061,6 +2074,7 @@ class _SummaryDateSelect(discord.ui.Select):
             placeholder="Pick one or more dates to preview...", min_values=1, max_values=min(len(dates), 10), options=options,
         )
         self.origin_ids = origin_ids
+        self.post_channel_id = post_channel_id
         self.dates = dates
         self.requester_id = requester_id
 
@@ -2069,19 +2083,19 @@ class _SummaryDateSelect(discord.ui.Select):
             await interaction.response.send_message("Only the person who ran /summary can use this.", ephemeral=True)
             return
         selected = [d for d in self.dates if d in self.values]
-        await _send_summary_preview(interaction, self.origin_ids, selected, edit=True)
+        await _send_summary_preview(interaction, self.origin_ids, self.post_channel_id, selected, edit=True)
 
 
 class SummaryDatePickView(discord.ui.View):
-    def __init__(self, origin_ids: tuple[int, ...], dates: list[str], requester_id: int):
+    def __init__(self, origin_ids: tuple[int, ...], post_channel_id: int, dates: list[str], requester_id: int):
         super().__init__(timeout=300)
-        self.add_item(_SummaryDateSelect(origin_ids, dates, requester_id))
+        self.add_item(_SummaryDateSelect(origin_ids, post_channel_id, dates, requester_id))
 
 
 @tree.command(name="summary", description="Preview an end-of-day picks report for a date, then optionally post it")
 async def summary(interaction: discord.Interaction):
-    origin_ids = _summary_route(interaction.channel_id)
-    if not origin_ids:
+    route = _summary_route(interaction.channel_id)
+    if not route:
         await _reject_summary_wrong_channel(interaction)
         return
     if not _summary_allowed(interaction):
@@ -2090,11 +2104,11 @@ async def summary(interaction: discord.Interaction):
     _log_command(interaction)
     await interaction.response.defer(ephemeral=True)
 
-    dates = dailylog.available_dates(origin_ids, limit=25)
+    dates = dailylog.available_dates(route.origins, limit=25)
     if not dates:
         await interaction.followup.send("No picks logged for any date yet.", ephemeral=True)
         return
-    view = SummaryDatePickView(origin_ids, dates, interaction.user.id)
+    view = SummaryDatePickView(route.origins, route.post_channel_id, dates, interaction.user.id)
     await interaction.followup.send("Pick a date to preview:", view=view, ephemeral=True)
 
 
