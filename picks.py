@@ -1658,6 +1658,18 @@ def parse_picks_message(content: str) -> list[dict]:
         if current_category == "__yrfi__":
             pick = _parse_yrfi_line(bare)
             if pick:
+                # Every other append site in this loop tags section/raw
+                # from current_category - this is the one other path
+                # (besides the bare-inference fallback above) where that
+                # doesn't work directly, since current_category was
+                # overwritten to this sentinel rather than keeping the
+                # literal header text. Confirmed live: without this, a
+                # pick posted under a bare (non-bracket-tagged) "YRFI/NRFI
+                # Slate"-style header tracked and graded fine but never
+                # made it into /summary (dailylog.record_pick no-ops on a
+                # missing section) - and separately, never had a "raw"
+                # line to diff a later message edit against either.
+                pick["section"], pick["raw"] = "YRFI/NRFI", bare
                 results.append(pick)
             continue
 

@@ -67,6 +67,15 @@ SPORT_CHOICES = [
 
 TRASH_EMOJI = "🗑️"
 
+# message_id (the picks-channel source message) -> {raw_line: card_message_id}
+# for every pick successfully tracked from it - lets on_message_edit diff a
+# later edit against what was originally tracked (see on_message_edit).
+# In-memory only, not persisted - an edit made while the bot is offline
+# can't be detected anyway (there's nothing to diff against once this
+# dict is gone), same limitation as every other in-memory registry in
+# this bot (_message_owners, _active_tracks, etc).
+_tracked_lines: dict[int, dict[str, int]] = {}
+
 
 async def _safe_resume(name: str, coro):
     """Isolates one module's resume_all() from every other - previously a
@@ -103,59 +112,38 @@ async def on_ready():
     await _safe_resume("pendingsoccerprops", pendingsoccerprops.resume_all(_resolve_pending_soccer_prop))
 
 
-@client.event
-async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
-    if payload.user_id == client.user.id or str(payload.emoji) != TRASH_EMOJI:
-        return
+def _find_message_owner(card_message_id: int) -> Optional[tuple[str, tuple]]:
+    """Looks up which tracker (if any) owns a posted score card, across
+    every module - shared by the 🗑️-reaction handler and the picks-message-
+    edit handler (see on_message_edit), both of which need to go from "a
+    card's message id" to "which tracker's stop_tracking to call"."""
+    for kind, getter in (
+        ("track", tracker.get_message_owner),
+        ("prop", proptracker.get_message_owner),
+        ("inning", inningtracker.get_message_owner),
+        ("f5", f5tracker.get_message_owner),
+        ("inning1", inning1tracker.get_message_owner),
+        ("set1", settracker.get_message_owner),
+        ("tennis_prop", tennispropstracker.get_message_owner),
+        ("ufc", ufctracker.get_message_owner),
+        ("soccer_prop", soccerpropstracker.get_message_owner),
+        ("esports", esportstracker.get_message_owner),
+    ):
+        info = getter(card_message_id)
+        if info:
+            return kind, info
+    return None
 
-    info = tracker.get_message_owner(payload.message_id)
-    kind = "track"
-    if not info:
-        info = proptracker.get_message_owner(payload.message_id)
-        kind = "prop"
-    if not info:
-        info = inningtracker.get_message_owner(payload.message_id)
-        kind = "inning"
-    if not info:
-        info = f5tracker.get_message_owner(payload.message_id)
-        kind = "f5"
-    if not info:
-        info = inning1tracker.get_message_owner(payload.message_id)
-        kind = "inning1"
-    if not info:
-        info = settracker.get_message_owner(payload.message_id)
-        kind = "set1"
-    if not info:
-        info = tennispropstracker.get_message_owner(payload.message_id)
-        kind = "tennis_prop"
-    if not info:
-        info = ufctracker.get_message_owner(payload.message_id)
-        kind = "ufc"
-    if not info:
-        info = soccerpropstracker.get_message_owner(payload.message_id)
-        kind = "soccer_prop"
-    if not info:
-        info = esportstracker.get_message_owner(payload.message_id)
-        kind = "esports"
-    if not info:
-        return
 
-    owner_id = info[-1]
-    is_admin = bool(payload.member and payload.member.guild_permissions.administrator)
-
-    try:
-        channel = client.get_channel(payload.channel_id) or await client.fetch_channel(payload.channel_id)
-        message = await channel.fetch_message(payload.message_id)
-    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-        return
-
-    if not is_admin and payload.user_id != owner_id:
-        try:
-            await message.remove_reaction(TRASH_EMOJI, discord.Object(id=payload.user_id))
-        except discord.HTTPException:
-            pass
-        return
-
+def _stop_tracking_by_card_message(card_message_id: int) -> Optional[str]:
+    """Stops whichever tracker owns this card (see _find_message_owner) and
+    returns its kind, or None if no tracker owns it (already resolved,
+    already untracked, etc). Doesn't touch the Discord message itself -
+    callers decide separately whether to delete/edit it."""
+    found = _find_message_owner(card_message_id)
+    if not found:
+        return None
+    kind, info = found
     if kind == "track":
         channel_id, game_id, picked_team, team_total, total_direction, total_line, _ = info
         tracker.stop_tracking(channel_id, game_id, picked_team, team_total, total_direction, total_line)
@@ -186,6 +174,35 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     else:
         channel_id, game_id, member_id, stat_name, direction, line, _ = info
         soccerpropstracker.stop_tracking(channel_id, game_id, member_id, stat_name, direction, line)
+    return kind
+
+
+@client.event
+async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
+    if payload.user_id == client.user.id or str(payload.emoji) != TRASH_EMOJI:
+        return
+
+    found = _find_message_owner(payload.message_id)
+    if not found:
+        return
+    kind, info = found
+    owner_id = info[-1]
+    is_admin = bool(payload.member and payload.member.guild_permissions.administrator)
+
+    try:
+        channel = client.get_channel(payload.channel_id) or await client.fetch_channel(payload.channel_id)
+        message = await channel.fetch_message(payload.message_id)
+    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+        return
+
+    if not is_admin and payload.user_id != owner_id:
+        try:
+            await message.remove_reaction(TRASH_EMOJI, discord.Object(id=payload.user_id))
+        except discord.HTTPException:
+            pass
+        return
+
+    _stop_tracking_by_card_message(payload.message_id)
 
     reactor = str(payload.member) if payload.member else f"user `{payload.user_id}`"
     botlog.event(f"🗑️ Untracked (🗑️ reaction, {kind}): message `{payload.message_id}` in <#{payload.channel_id}> — by **{reactor}**")
@@ -241,6 +258,7 @@ async def _auto_track(
     )
     log.info("Auto-tracked pick '%s' -> game %s", team, game_id)
     botlog.event(f"✅ Tracked: **{team}** ({sport_value}) — game `{game_id}` in <#{channel.id}>")
+    return message.id
 
 
 async def _auto_f5(
@@ -284,6 +302,7 @@ async def _auto_f5(
     )
     log.info("Auto-tracked F5 pick '%s' -> game %s", team, game_id)
     botlog.event(f"✅ Tracked (F5): **{team}** ({sport_value}) — game `{game_id}` in <#{channel.id}>")
+    return message.id
 
 
 async def _auto_1h_total(
@@ -324,6 +343,7 @@ async def _auto_1h_total(
     )
     log.info("Auto-tracked 1H pick '%s' -> game %s", team, game_id)
     botlog.event(f"✅ Tracked (1H): **{team}** ({sport_value}) — game `{game_id}` in <#{channel.id}>")
+    return message.id
 
 
 async def _auto_playerprops(
@@ -402,6 +422,7 @@ async def _auto_playerprops(
     )
     log.info("Auto-tracked player prop pick: %s - %s", player, stat)
     botlog.event(f"✅ Tracked (prop): **{player}** {stat} ({sport_value}) in <#{channel.id}>")
+    return message.id
 
 
 async def _auto_tennis_playerprops(
@@ -453,6 +474,7 @@ async def _auto_tennis_playerprops(
     )
     log.info("Auto-tracked tennis player prop pick: %s - %s", player, stat)
     botlog.event(f"✅ Tracked (tennis prop): **{player}** {stat} in <#{channel.id}>")
+    return message.id
 
 
 async def _resolve_soccer_psf_match(game: dict, stat_name: str) -> tuple[Optional[str], Optional[dict]]:
@@ -513,6 +535,7 @@ async def _complete_soccer_prop_track(
     )
     log.info("Auto-tracked soccer player prop pick: %s - %s", player, stat)
     botlog.event(f"✅ Tracked (soccer prop): **{player}** {stat} in <#{channel.id}>")
+    return message.id
 
 
 async def _resolve_pending_soccer_prop(entry: dict) -> bool:
@@ -575,7 +598,7 @@ async def _auto_soccer_playerprops(
             f"will retry automatically as kickoff nears"
         )
         return
-    await _complete_soccer_prop_track(channel, player, stat, stat_name, direction, line, result, section, label, origin_channel_id)
+    return await _complete_soccer_prop_track(channel, player, stat, stat_name, direction, line, result, section, label, origin_channel_id)
 
 
 async def _auto_inning_runs(
@@ -619,6 +642,7 @@ async def _auto_inning_runs(
     )
     log.info("Auto-tracked inning-runs pick '%s' (%s) -> event %s", team, pick_type, event_id)
     botlog.event(f"✅ Tracked ({pick_type}): **{team}** — event `{event_id}` in <#{channel.id}>")
+    return message.id
 
 
 async def _auto_inning1_result(
@@ -656,6 +680,7 @@ async def _auto_inning1_result(
     )
     log.info("Auto-tracked 1st-inning-result pick '%s' (%s) -> game %s", team, pick, game_id)
     botlog.event(f"✅ Tracked (1st inning result): **{team}** ({pick}) — game `{game_id}` in <#{channel.id}>")
+    return message.id
 
 
 async def _auto_tennis_market(
@@ -698,6 +723,7 @@ async def _auto_tennis_market(
     )
     log.info("Auto-tracked tennis-market (%s) pick '%s' -> game %s", market, team, game_id)
     botlog.event(f"✅ Tracked ({market}): **{team}** — game `{game_id}` in <#{channel.id}>")
+    return message.id
 
 
 async def _auto_ufc(
@@ -742,6 +768,7 @@ async def _auto_ufc(
     )
     log.info("Auto-tracked UFC pick '%s' -> bout %s", fighter, competition_id)
     botlog.event(f"✅ Tracked ({category_label}): **{fighter}** — bout `{competition_id}` in <#{channel.id}>")
+    return message.id
 
 
 async def _auto_esports(
@@ -780,6 +807,7 @@ async def _auto_esports(
     )
     log.info("Auto-tracked esports (%s) pick '%s v %s' -> %s", market, team_a, team_b, sport)
     botlog.event(f"✅ Tracked ({category_label}): **{team_a} v {team_b}** in <#{channel.id}>")
+    return message.id
 
 
 @client.event
@@ -814,154 +842,241 @@ async def on_message(message: discord.Message):
         # target_channel, which is where the card actually gets posted) -
         # lets /summary group/route reports by config.SUMMARY_ROUTES
         # regardless of which target channel a pick ends up tracked into.
-        section, label = pick.get("section"), pick.get("raw")
-        origin_channel_id = message.channel.id
-        try:
-            if pick["kind"] == "track":
-                await _auto_track(target_channel, pick["sport"], pick["team"], section=section, label=label, origin_channel_id=origin_channel_id)
-            elif pick["kind"] == "total":
-                await _auto_track(
-                    target_channel, pick["sport"], pick["team"], pick["direction"], pick["line"],
-                    section=section, label=label, origin_channel_id=origin_channel_id,
-                )
-            elif pick["kind"] == "team_total":
-                await _auto_track(
-                    target_channel, pick["sport"], pick["team"], pick["direction"], pick["line"], pick["team"],
-                    section=section, label=label, origin_channel_id=origin_channel_id,
-                )
-            elif pick["kind"] == "f5_moneyline":
-                await _auto_f5(target_channel, pick["sport"], pick["team"], section=section, label=label, origin_channel_id=origin_channel_id)
-            elif pick["kind"] == "f5_total":
-                await _auto_f5(
-                    target_channel, pick["sport"], pick["team"], pick["direction"], pick["line"],
-                    section=section, label=label, origin_channel_id=origin_channel_id,
-                )
-            elif pick["kind"] == "f5_combined_total":
-                await _auto_f5(
-                    target_channel, pick["sport"], pick["team"], pick["direction"], pick["line"], combined=True,
-                    section=section, label=label, origin_channel_id=origin_channel_id,
-                )
-            elif pick["kind"] == "f5_handicap":
-                await _auto_f5(
-                    target_channel, pick["sport"], pick["team"], handicap_line=pick["line"],
-                    section=section, label=label, origin_channel_id=origin_channel_id,
-                )
-            elif pick["kind"] == "1h_total":
-                await _auto_1h_total(
-                    target_channel, pick["sport"], pick["team"], pick["direction"], pick["line"],
-                    section=section, label=label, origin_channel_id=origin_channel_id,
-                )
-            elif pick["kind"] == "1h_combined_total":
-                await _auto_1h_total(
-                    target_channel, pick["sport"], pick["team"], pick["direction"], pick["line"], combined=True,
-                    section=section, label=label, origin_channel_id=origin_channel_id,
-                )
-            elif pick["kind"] == "inning_runs":
-                await _auto_inning_runs(target_channel, pick["team"], pick["pick_type"], section=section, label=label, origin_channel_id=origin_channel_id)
-            elif pick["kind"] == "inning1_result":
-                await _auto_inning1_result(target_channel, pick["team"], pick["pick"], section=section, label=label, origin_channel_id=origin_channel_id)
-            elif pick["kind"] == "set1_moneyline":
-                await _auto_tennis_market(target_channel, pick["team"], "set1_moneyline", section=section, label=label, origin_channel_id=origin_channel_id)
-            elif pick["kind"] == "tennis_set1_total_games":
-                await _auto_tennis_market(
-                    target_channel, pick["team"], "set1_total_games", pick["direction"], pick["line"],
-                    section=section, label=label, origin_channel_id=origin_channel_id,
-                )
-            elif pick["kind"] == "tennis_match_total_games":
-                await _auto_tennis_market(
-                    target_channel, pick["team"], "match_total_games", pick["direction"], pick["line"],
-                    section=section, label=label, origin_channel_id=origin_channel_id,
-                )
-            elif pick["kind"] == "tennis_player_total_games":
-                await _auto_tennis_market(
-                    target_channel, pick["team"], "player_total_games", pick["direction"], pick["line"],
-                    section=section, label=label, origin_channel_id=origin_channel_id,
-                )
-            elif pick["kind"] == "tennis_win_a_set":
-                await _auto_tennis_market(
-                    target_channel, pick["team"], "win_a_set", pick["direction"], section=section, label=label, origin_channel_id=origin_channel_id,
-                )
-            elif pick["kind"] == "tennis_games_handicap":
-                await _auto_tennis_market(
-                    target_channel, pick["team"], "games_handicap", None, pick["line"],
-                    section=section, label=label, origin_channel_id=origin_channel_id,
-                )
-            elif pick["kind"] == "tennis_sets_handicap":
-                await _auto_tennis_market(
-                    target_channel, pick["team"], "sets_handicap", None, pick["line"],
-                    section=section, label=label, origin_channel_id=origin_channel_id,
-                )
-            elif pick["kind"] == "tennis_playerprops":
-                await _auto_tennis_playerprops(
-                    target_channel, pick["player"], pick["stat"], pick.get("direction"), pick.get("line"),
-                    section=section, label=label, origin_channel_id=origin_channel_id,
-                )
-            elif pick["kind"] == "soccer_playerprops":
-                await _auto_soccer_playerprops(
-                    target_channel, pick["player"], pick["stat"], pick.get("direction"), pick.get("line"),
-                    section=section, label=label, origin_channel_id=origin_channel_id,
-                )
-            elif pick["kind"] == "ufc_moneyline":
-                await _auto_ufc(target_channel, pick["team"], section=section, label=label, origin_channel_id=origin_channel_id)
-            elif pick["kind"] == "ufc_round_total":
-                await _auto_ufc(
-                    target_channel, pick["team"], pick["direction"], pick["line"], section=section, label=label, origin_channel_id=origin_channel_id,
-                )
-            elif pick["kind"] == "esports_match_winner":
-                await _auto_esports(
-                    target_channel, pick["sport"], pick["team_a"], pick["team_b"], "match_winner",
-                    picked_team=pick["team"], section=section, label=label, origin_channel_id=origin_channel_id,
-                )
-            elif pick["kind"] == "esports_map_handicap":
-                await _auto_esports(
-                    target_channel, pick["sport"], pick["team_a"], pick["team_b"], "map_handicap",
-                    picked_team=pick["team"], line=pick["line"], section=section, label=label, origin_channel_id=origin_channel_id,
-                )
-            elif pick["kind"] == "esports_total_maps":
-                await _auto_esports(
-                    target_channel, pick["sport"], pick["team_a"], pick["team_b"], "total_maps",
-                    direction=pick["direction"], line=pick["line"], section=section, label=label, origin_channel_id=origin_channel_id,
-                )
-            elif pick["kind"] == "esports_map_winner":
-                await _auto_esports(
-                    target_channel, pick["sport"], pick["team_a"], pick["team_b"], "map_winner",
-                    picked_team=pick["team"], map_number=pick["map_number"], section=section, label=label, origin_channel_id=origin_channel_id,
-                )
-            elif pick["kind"] == "esports_match_and_map_winner":
-                await _auto_esports(
-                    target_channel, pick["sport"], pick["team_a"], pick["team_b"], "match_and_map_winner",
-                    picked_team=pick["team"], map_number=pick["map_number"], section=section, label=label, origin_channel_id=origin_channel_id,
-                )
-            elif pick["kind"] == "esports_win_at_least_one_map":
-                await _auto_esports(
-                    target_channel, pick["sport"], pick["team_a"], pick["team_b"], "win_at_least_one_map",
-                    picked_team=pick["team"], direction=pick["direction"], section=section, label=label, origin_channel_id=origin_channel_id,
-                )
-            elif pick["kind"] == "esports_correct_score":
-                await _auto_esports(
-                    target_channel, pick["sport"], pick["team_a"], pick["team_b"], "correct_score",
-                    picked_team=pick["team"], picked_maps=pick["picked_maps"], other_maps=pick["other_maps"],
-                    section=section, label=label, origin_channel_id=origin_channel_id,
-                )
-            elif pick["kind"] == "esports_total_kills":
-                await _auto_esports(
-                    target_channel, pick["sport"], pick["team_a"], pick["team_b"], "total_kills",
-                    direction=pick["direction"], line=pick["line"], section=section, label=label, origin_channel_id=origin_channel_id,
-                )
-            elif pick["kind"] == "esports_team_total_kills":
-                await _auto_esports(
-                    target_channel, pick["sport"], pick["team_a"], pick["team_b"], "team_total_kills",
-                    picked_team=pick["team"], direction=pick["direction"], line=pick["line"],
-                    section=section, label=label, origin_channel_id=origin_channel_id,
-                )
-            else:
-                await _auto_playerprops(
-                    target_channel, pick["sport"], pick["player"], pick["stat"],
-                    pick.get("direction"), pick.get("line"), section=section, label=label, origin_channel_id=origin_channel_id,
-                )
-        except Exception as e:
-            log.warning("Failed to auto-track pick %s: %s", pick, e)
-            botlog.event(f"❌ Not tracked: pick `{pick}` — unexpected error: {e}")
+        raw_line = pick.get("raw")
+        card_id = await _dispatch_pick(target_channel, pick, pick.get("section"), raw_line, message.channel.id)
+        if card_id is not None and raw_line:
+            _tracked_lines.setdefault(message.id, {})[raw_line] = card_id
+
+
+async def _dispatch_pick(
+    target_channel: discord.abc.Messageable, pick: dict,
+    section: Optional[str], label: Optional[str], origin_channel_id: Optional[int],
+) -> Optional[int]:
+    """Routes one already-parsed pick to its tracker, mirroring exactly
+    which _auto_* function on_message would have called - shared with
+    on_message_edit so a newly-added line (from editing an existing picks
+    message) gets tracked through the identical path a brand new message
+    would use. Returns the posted card's message id (each _auto_* function
+    returns this on success now, purely so on_message/on_message_edit can
+    remember "this raw line -> this card" for later - see _tracked_lines),
+    or None if nothing got tracked (skipped/failed/queued)."""
+    try:
+        if pick["kind"] == "track":
+            return await _auto_track(target_channel, pick["sport"], pick["team"], section=section, label=label, origin_channel_id=origin_channel_id)
+        elif pick["kind"] == "total":
+            return await _auto_track(
+                target_channel, pick["sport"], pick["team"], pick["direction"], pick["line"],
+                section=section, label=label, origin_channel_id=origin_channel_id,
+            )
+        elif pick["kind"] == "team_total":
+            return await _auto_track(
+                target_channel, pick["sport"], pick["team"], pick["direction"], pick["line"], pick["team"],
+                section=section, label=label, origin_channel_id=origin_channel_id,
+            )
+        elif pick["kind"] == "f5_moneyline":
+            return await _auto_f5(target_channel, pick["sport"], pick["team"], section=section, label=label, origin_channel_id=origin_channel_id)
+        elif pick["kind"] == "f5_total":
+            return await _auto_f5(
+                target_channel, pick["sport"], pick["team"], pick["direction"], pick["line"],
+                section=section, label=label, origin_channel_id=origin_channel_id,
+            )
+        elif pick["kind"] == "f5_combined_total":
+            return await _auto_f5(
+                target_channel, pick["sport"], pick["team"], pick["direction"], pick["line"], combined=True,
+                section=section, label=label, origin_channel_id=origin_channel_id,
+            )
+        elif pick["kind"] == "f5_handicap":
+            return await _auto_f5(
+                target_channel, pick["sport"], pick["team"], handicap_line=pick["line"],
+                section=section, label=label, origin_channel_id=origin_channel_id,
+            )
+        elif pick["kind"] == "1h_total":
+            return await _auto_1h_total(
+                target_channel, pick["sport"], pick["team"], pick["direction"], pick["line"],
+                section=section, label=label, origin_channel_id=origin_channel_id,
+            )
+        elif pick["kind"] == "1h_combined_total":
+            return await _auto_1h_total(
+                target_channel, pick["sport"], pick["team"], pick["direction"], pick["line"], combined=True,
+                section=section, label=label, origin_channel_id=origin_channel_id,
+            )
+        elif pick["kind"] == "inning_runs":
+            return await _auto_inning_runs(target_channel, pick["team"], pick["pick_type"], section=section, label=label, origin_channel_id=origin_channel_id)
+        elif pick["kind"] == "inning1_result":
+            return await _auto_inning1_result(target_channel, pick["team"], pick["pick"], section=section, label=label, origin_channel_id=origin_channel_id)
+        elif pick["kind"] == "set1_moneyline":
+            return await _auto_tennis_market(target_channel, pick["team"], "set1_moneyline", section=section, label=label, origin_channel_id=origin_channel_id)
+        elif pick["kind"] == "tennis_set1_total_games":
+            return await _auto_tennis_market(
+                target_channel, pick["team"], "set1_total_games", pick["direction"], pick["line"],
+                section=section, label=label, origin_channel_id=origin_channel_id,
+            )
+        elif pick["kind"] == "tennis_match_total_games":
+            return await _auto_tennis_market(
+                target_channel, pick["team"], "match_total_games", pick["direction"], pick["line"],
+                section=section, label=label, origin_channel_id=origin_channel_id,
+            )
+        elif pick["kind"] == "tennis_player_total_games":
+            return await _auto_tennis_market(
+                target_channel, pick["team"], "player_total_games", pick["direction"], pick["line"],
+                section=section, label=label, origin_channel_id=origin_channel_id,
+            )
+        elif pick["kind"] == "tennis_win_a_set":
+            return await _auto_tennis_market(
+                target_channel, pick["team"], "win_a_set", pick["direction"], section=section, label=label, origin_channel_id=origin_channel_id,
+            )
+        elif pick["kind"] == "tennis_games_handicap":
+            return await _auto_tennis_market(
+                target_channel, pick["team"], "games_handicap", None, pick["line"],
+                section=section, label=label, origin_channel_id=origin_channel_id,
+            )
+        elif pick["kind"] == "tennis_sets_handicap":
+            return await _auto_tennis_market(
+                target_channel, pick["team"], "sets_handicap", None, pick["line"],
+                section=section, label=label, origin_channel_id=origin_channel_id,
+            )
+        elif pick["kind"] == "tennis_playerprops":
+            return await _auto_tennis_playerprops(
+                target_channel, pick["player"], pick["stat"], pick.get("direction"), pick.get("line"),
+                section=section, label=label, origin_channel_id=origin_channel_id,
+            )
+        elif pick["kind"] == "soccer_playerprops":
+            return await _auto_soccer_playerprops(
+                target_channel, pick["player"], pick["stat"], pick.get("direction"), pick.get("line"),
+                section=section, label=label, origin_channel_id=origin_channel_id,
+            )
+        elif pick["kind"] == "ufc_moneyline":
+            return await _auto_ufc(target_channel, pick["team"], section=section, label=label, origin_channel_id=origin_channel_id)
+        elif pick["kind"] == "ufc_round_total":
+            return await _auto_ufc(
+                target_channel, pick["team"], pick["direction"], pick["line"], section=section, label=label, origin_channel_id=origin_channel_id,
+            )
+        elif pick["kind"] == "esports_match_winner":
+            return await _auto_esports(
+                target_channel, pick["sport"], pick["team_a"], pick["team_b"], "match_winner",
+                picked_team=pick["team"], section=section, label=label, origin_channel_id=origin_channel_id,
+            )
+        elif pick["kind"] == "esports_map_handicap":
+            return await _auto_esports(
+                target_channel, pick["sport"], pick["team_a"], pick["team_b"], "map_handicap",
+                picked_team=pick["team"], line=pick["line"], section=section, label=label, origin_channel_id=origin_channel_id,
+            )
+        elif pick["kind"] == "esports_total_maps":
+            return await _auto_esports(
+                target_channel, pick["sport"], pick["team_a"], pick["team_b"], "total_maps",
+                direction=pick["direction"], line=pick["line"], section=section, label=label, origin_channel_id=origin_channel_id,
+            )
+        elif pick["kind"] == "esports_map_winner":
+            return await _auto_esports(
+                target_channel, pick["sport"], pick["team_a"], pick["team_b"], "map_winner",
+                picked_team=pick["team"], map_number=pick["map_number"], section=section, label=label, origin_channel_id=origin_channel_id,
+            )
+        elif pick["kind"] == "esports_match_and_map_winner":
+            return await _auto_esports(
+                target_channel, pick["sport"], pick["team_a"], pick["team_b"], "match_and_map_winner",
+                picked_team=pick["team"], map_number=pick["map_number"], section=section, label=label, origin_channel_id=origin_channel_id,
+            )
+        elif pick["kind"] == "esports_win_at_least_one_map":
+            return await _auto_esports(
+                target_channel, pick["sport"], pick["team_a"], pick["team_b"], "win_at_least_one_map",
+                picked_team=pick["team"], direction=pick["direction"], section=section, label=label, origin_channel_id=origin_channel_id,
+            )
+        elif pick["kind"] == "esports_correct_score":
+            return await _auto_esports(
+                target_channel, pick["sport"], pick["team_a"], pick["team_b"], "correct_score",
+                picked_team=pick["team"], picked_maps=pick["picked_maps"], other_maps=pick["other_maps"],
+                section=section, label=label, origin_channel_id=origin_channel_id,
+            )
+        elif pick["kind"] == "esports_total_kills":
+            return await _auto_esports(
+                target_channel, pick["sport"], pick["team_a"], pick["team_b"], "total_kills",
+                direction=pick["direction"], line=pick["line"], section=section, label=label, origin_channel_id=origin_channel_id,
+            )
+        elif pick["kind"] == "esports_team_total_kills":
+            return await _auto_esports(
+                target_channel, pick["sport"], pick["team_a"], pick["team_b"], "team_total_kills",
+                picked_team=pick["team"], direction=pick["direction"], line=pick["line"],
+                section=section, label=label, origin_channel_id=origin_channel_id,
+            )
+        else:
+            return await _auto_playerprops(
+                target_channel, pick["sport"], pick["player"], pick["stat"],
+                pick.get("direction"), pick.get("line"), section=section, label=label, origin_channel_id=origin_channel_id,
+            )
+    except Exception as e:
+        log.warning("Failed to auto-track pick %s: %s", pick, e)
+        botlog.event(f"❌ Not tracked: pick `{pick}` — unexpected error: {e}")
+        return None
+
+
+@client.event
+async def on_message_edit(before: discord.Message, after: discord.Message):
+    """Confirmed live: a picks-channel message got edited after some of its
+    lines were already tracked (a provider corrected/retracted a pick) -
+    the bot had no way to notice, so the retracted pick just kept tracking
+    to completion anyway, invisibly. Diffs the edit's raw pick lines
+    against what _tracked_lines remembers tracking from this message's
+    previous version:
+      - a line present before but gone now -> untrack it (see
+        _stop_tracking_by_card_message).
+      - a line that's new -> track it via the exact same dispatch a fresh
+        message would use (_dispatch_pick).
+      - a line whose text changed even slightly (different odds, a
+        flipped YRFI/NRFI call, etc.) is NOT specially diffed word-by-word
+        - it's simply absent from one side and present in the other, so it
+          falls out as an untrack-old + track-new pair automatically.
+      - a line that's byte-identical in both versions is left alone.
+    """
+    target_channel_id = config.PICKS_CHANNEL_MAP.get(before.channel.id)
+    if target_channel_id is None or after.author.id == client.user.id:
+        return
+
+    old_lines = _tracked_lines.get(before.id)
+    if not old_lines:
+        # Nothing was tracked from this message's previous version (never
+        # parsed anything, or the bot restarted since - _tracked_lines is
+        # in-memory only) - no baseline to diff this edit against.
+        return
+
+    try:
+        target_channel = client.get_channel(target_channel_id) or await client.fetch_channel(target_channel_id)
+    except discord.HTTPException as e:
+        log.warning("Picks message edit: couldn't reach scores channel %s: %s", target_channel_id, e)
+        botlog.event(f"❌ Couldn't reach target scores channel `{target_channel_id}` to process a picks message edit: {e}")
+        return
+
+    new_parsed = picks.parse_picks_message(after.content)
+    new_raw_to_pick = {p["raw"]: p for p in new_parsed if p.get("raw")}
+
+    removed_lines = [line for line in old_lines if line not in new_raw_to_pick]
+    added_lines = [line for line in new_raw_to_pick if line not in old_lines]
+
+    if not removed_lines and not added_lines:
+        return  # every previously-tracked line is still there, word-for-word
+
+    botlog.event(
+        f"✏️ Picks message edited by **{after.author}** in <#{before.channel.id}>: "
+        f"{len(removed_lines)} pick line(s) removed, {len(added_lines)} added"
+    )
+
+    for line in removed_lines:
+        card_id = old_lines.pop(line)
+        kind = _stop_tracking_by_card_message(card_id)
+        if kind:
+            botlog.event(f"🗑️ Untracked (message edit removed this pick, {kind}): \"{line}\" in <#{before.channel.id}>")
+        else:
+            botlog.event(f"⚠️ Message edit removed a pick line, but its card was already gone (nothing to untrack): \"{line}\" in <#{before.channel.id}>")
+
+    for line in added_lines:
+        pick = new_raw_to_pick[line]
+        card_id = await _dispatch_pick(target_channel, pick, pick.get("section"), line, before.channel.id)
+        if card_id is not None:
+            old_lines[line] = card_id
+
+    if old_lines:
+        _tracked_lines[before.id] = old_lines
+    else:
+        _tracked_lines.pop(before.id, None)
 
 
 def _channel_allowed(interaction: discord.Interaction) -> bool:
