@@ -164,3 +164,36 @@ def result_mark(status: str) -> str:
 
 def is_final(status: str) -> bool:
     return status in _RESULT_MARKS
+
+
+def daily_win_loss(origin_channel_ids: Iterable[int], year_month: str) -> list[tuple[str, int, int]]:
+    """(date_str, won_count, lost_count) for every date in year_month
+    ("YYYY-MM") that has at least one won/lost decision from these origin
+    channels, oldest first - the data behind /winlossgraph's monthly chart.
+    Push/void/pending picks are excluded entirely (same "decided only" rule
+    as bot.py's _win_rate_line) - a day with only pushes/voids has no
+    meaningful win rate to plot."""
+    ids = {origin_channel_ids} if isinstance(origin_channel_ids, int) else set(origin_channel_ids)
+    data = state.load_daily_log()
+    counts: dict[str, list[int]] = {}
+    for entry in data.values():
+        if entry.get("origin_channel_id") not in ids or not entry["date"].startswith(year_month):
+            continue
+        if entry["status"] == "won":
+            counts.setdefault(entry["date"], [0, 0])[0] += 1
+        elif entry["status"] == "lost":
+            counts.setdefault(entry["date"], [0, 0])[1] += 1
+    return [(d, w, l) for d, (w, l) in sorted(counts.items())]
+
+
+def available_months(origin_channel_ids: Iterable[int], limit: int = 12) -> list[str]:
+    """Most-recent-first distinct "YYYY-MM" months with at least one
+    won/lost decision logged from these origin channels - used for
+    /winrate's month dropdown."""
+    ids = {origin_channel_ids} if isinstance(origin_channel_ids, int) else set(origin_channel_ids)
+    data = state.load_daily_log()
+    months = {
+        entry["date"][:7] for entry in data.values()
+        if entry.get("origin_channel_id") in ids and entry["status"] in ("won", "lost")
+    }
+    return sorted(months, reverse=True)[:limit]

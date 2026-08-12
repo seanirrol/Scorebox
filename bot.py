@@ -13,6 +13,7 @@ Commands:
 """
 
 import asyncio
+import io
 import logging
 import re
 from typing import Optional
@@ -44,6 +45,7 @@ import tennispropstracker
 import throttle
 import tracker
 import ufctracker
+import winlossgraph
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("scorebox.bot")
@@ -1884,10 +1886,10 @@ def _summary_route(interaction_channel_id: int) -> Optional[config.SummaryRoute]
     return config.SUMMARY_ROUTES.get(interaction_channel_id)
 
 
-async def _reject_summary_wrong_channel(interaction: discord.Interaction):
+async def _reject_summary_wrong_channel(interaction: discord.Interaction, command_name: str = "summary"):
     channels = ", ".join(f"<#{cid}>" for cid in config.SUMMARY_ROUTES)
     await interaction.response.send_message(
-        f"/summary only works in {channels}." if channels else "/summary isn't configured for any channel yet.",
+        f"/{command_name} only works in {channels}." if channels else f"/{command_name} isn't configured for any channel yet.",
         ephemeral=True,
     )
 
@@ -2110,6 +2112,128 @@ async def summary(interaction: discord.Interaction):
         return
     view = SummaryDatePickView(route.origins, route.post_channel_id, dates, interaction.user.id)
     await interaction.followup.send("Pick a date to preview:", view=view, ephemeral=True)
+
+
+def _build_winlossgraph_embed_and_file(image_bytes: bytes) -> tuple[discord.Embed, discord.File]:
+    file = discord.File(io.BytesIO(image_bytes), filename="winlossgraph.png")
+    embed = discord.Embed(color=0x2B2D31)
+    embed.set_image(url="attachment://winlossgraph.png")
+    return embed, file
+
+
+class WinLossGraphPostView(discord.ui.View):
+    """Same preview-then-post pattern as SummaryPostView - re-renders the
+    chart at click time (not the preview-time snapshot) since a pending
+    pick can resolve in the time between preview and click."""
+
+    def __init__(self, origin_ids: tuple[int, ...], post_channel_id: int, year_month: str, requester_id: int):
+        super().__init__(timeout=900)
+        self.origin_ids = origin_ids
+        self.post_channel_id = post_channel_id
+        self.year_month = year_month
+        self.requester_id = requester_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.requester_id:
+            await interaction.response.send_message("Only the person who ran /winlossgraph can use this.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="Post to channel", style=discord.ButtonStyle.success)
+    async def post(self, interaction: discord.Interaction, button: discord.ui.Button):
+        rows = dailylog.daily_win_loss(self.origin_ids, self.year_month)
+        if not rows:
+            await interaction.response.edit_message(
+                content="Nothing to post — no decided picks logged for that month.", embed=None, attachments=[], view=None,
+            )
+            self.stop()
+            return
+        image_bytes = await asyncio.to_thread(winlossgraph.render_month_chart, self.year_month, rows)
+        embed, file = _build_winlossgraph_embed_and_file(image_bytes)
+        target = client.get_channel(self.post_channel_id) or await client.fetch_channel(self.post_channel_id)
+        await target.send(embed=embed, file=file)
+        botlog.event(
+            f"📊 Win/loss graph ({self.year_month}) posted to <#{self.post_channel_id}> "
+            f"(previewed in <#{interaction.channel_id}>) by **{interaction.user}**"
+        )
+        await interaction.response.edit_message(content="Posted.", embed=None, attachments=[], view=None)
+        self.stop()
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content="Cancelled - nothing posted.", embed=None, attachments=[], view=None)
+        self.stop()
+
+
+async def _send_winlossgraph_preview(
+    interaction: discord.Interaction, origin_ids: tuple[int, ...], post_channel_id: int, year_month: str, *, edit: bool,
+):
+    rows = dailylog.daily_win_loss(origin_ids, year_month)
+    if not rows:
+        content, embed, file, view = f"No decided picks logged for {year_month}.", None, None, None
+    else:
+        image_bytes = await asyncio.to_thread(winlossgraph.render_month_chart, year_month, rows)
+        embed, file = _build_winlossgraph_embed_and_file(image_bytes)
+        content = (
+            "Preview only - not posted yet. Click below to publish it."
+            if post_channel_id == interaction.channel_id
+            else f"Preview only - not posted yet. Click below to publish it to <#{post_channel_id}>."
+        )
+        view = WinLossGraphPostView(origin_ids, post_channel_id, year_month, interaction.user.id)
+    if edit:
+        await interaction.response.edit_message(content=content, embed=embed, attachments=[file] if file else [], view=view)
+    else:
+        await interaction.followup.send(content=content, embed=embed, file=file, view=view, ephemeral=True)
+
+
+class _WinLossGraphMonthSelect(discord.ui.Select):
+    """One option per month with at least one decided (won/lost) pick
+    logged for this route - the same "reachable dropdown" idea as
+    _SummaryDateSelect, just grouped by month instead of by day."""
+
+    def __init__(self, origin_ids: tuple[int, ...], post_channel_id: int, months: list[str], requester_id: int):
+        options = [
+            discord.SelectOption(
+                label=m, description=f"{len(dailylog.daily_win_loss(origin_ids, m))} day(s) with a decided pick",
+            )
+            for m in months
+        ]
+        super().__init__(placeholder="Pick a month to preview...", min_values=1, max_values=1, options=options)
+        self.origin_ids = origin_ids
+        self.post_channel_id = post_channel_id
+        self.requester_id = requester_id
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.requester_id:
+            await interaction.response.send_message("Only the person who ran /winlossgraph can use this.", ephemeral=True)
+            return
+        await _send_winlossgraph_preview(interaction, self.origin_ids, self.post_channel_id, self.values[0], edit=True)
+
+
+class WinLossGraphMonthPickView(discord.ui.View):
+    def __init__(self, origin_ids: tuple[int, ...], post_channel_id: int, months: list[str], requester_id: int):
+        super().__init__(timeout=300)
+        self.add_item(_WinLossGraphMonthSelect(origin_ids, post_channel_id, months, requester_id))
+
+
+@tree.command(name="winlossgraph", description="Preview a monthly win/loss rate chart, then optionally post it")
+async def winlossgraph_command(interaction: discord.Interaction):
+    route = _summary_route(interaction.channel_id)
+    if not route:
+        await _reject_summary_wrong_channel(interaction, command_name="winlossgraph")
+        return
+    if not _summary_allowed(interaction):
+        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+        return
+    _log_command(interaction)
+    await interaction.response.defer(ephemeral=True)
+
+    months = dailylog.available_months(route.origins, limit=12)
+    if not months:
+        await interaction.followup.send("No decided picks logged for any month yet.", ephemeral=True)
+        return
+    view = WinLossGraphMonthPickView(route.origins, route.post_channel_id, months, interaction.user.id)
+    await interaction.followup.send("Pick a month to preview:", view=view, ephemeral=True)
 
 
 def main():
