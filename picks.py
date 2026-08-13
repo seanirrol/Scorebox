@@ -459,6 +459,16 @@ _AMBIGUOUS_STAT_DEFAULTS = {
     # live: "Trey Benson - Over 33.5 Rush yards" silently dropped the
     # whole pick.
     ("nfl", "rush yards"): "Rushing Yards",
+    # "Pass Yds"/"Rush Yds" (this source's own abbreviated wording, distinct
+    # from the "Rush yards" variant above) share no substring with "Passing
+    # Yards"/"Rushing Yards" either - confirmed live, "Tyrod Taylor Over
+    # 75.5 Pass Yds" and "Emanuel Wilson Over 15.5 Rush Yds" both silently
+    # fell through to a bare team-pick attempt on the player's own name
+    # instead of tracking the prop.
+    ("nfl", "pass yds"): "Passing Yards",
+    ("nfl", "rush yds"): "Rushing Yards",
+    ("nfl", "rec yds"): "Receiving Yards",
+    ("nfl", "receiving yds"): "Receiving Yards",
     # "3-Pointers Made" shares no substring with any of these (confirmed
     # live: "A'ja Wilson Over 0.5 player threes" silently dropped the whole
     # pick), unlike most other stat wording variants this module already
@@ -684,6 +694,12 @@ def _bullet_strip(line: str) -> str:
     # then tripped _is_simple_pick_name's digit-rejection check meant for
     # actual prop bets, not list numbering).
     return re.sub(r"^(?:\d+[.)]\s*)?[•\-\*]?\s*", "", line).strip()
+
+
+# Same marker shape as _bullet_strip, but the marker itself is *mandatory* -
+# used to tell an actual pick bullet apart from a bare, un-bulleted standalone
+# line (a section sub-header, going by every real source's own formatting).
+_LIST_MARKER_RE = re.compile(r"^(?:\d+[.)]\s*[•\-\*]?|[•\-\*])")
 
 
 def _is_simple_pick_name(text: str) -> Optional[str]:
@@ -1701,6 +1717,30 @@ def parse_picks_message(content: str) -> list[dict]:
                         prop["section"] = espn.SPORT_DISPLAY_LABELS.get(sport, sport.upper())
                         prop["raw"] = bare
                         results.append(prop)
+            continue
+
+        if not _LIST_MARKER_RE.match(line):
+            # A bare, un-bulleted standalone line under an already-set
+            # category is some other section title this bot doesn't
+            # specifically recognize (e.g. "MLB Home Run Predictor",
+            # "Cricket") rather than a pick - confirmed live, both silently
+            # got parsed as a literal team-name search on the header text
+            # itself instead. If it's still thematically under a known
+            # sport (its leading word(s) match a _HEADER_SPORT_MAP key,
+            # e.g. the "MLB" in "MLB Home Run Predictor"), current_category
+            # is re-resolved to that sport so the real picks underneath
+            # still track; otherwise (e.g. "Cricket", not a supported sport
+            # at all) it's reset to None instead of left stale on whatever
+            # sport was set before - confirmed live, that's what let
+            # "Australia ML" under a "Cricket" header get searched as a
+            # SOCCER team instead of being skipped as unsupported.
+            bare_lower = _bullet_strip(line).lower()
+            matched = next((k for k in _HEADER_SPORT_MAP if bare_lower.startswith(k + " ")), None)
+            # Stored as the bare matched key (e.g. "mlb"), not the full
+            # header text - current_category is looked up directly against
+            # _HEADER_SPORT_MAP.lower() everywhere else in this loop, so the
+            # full "MLB Home Run Predictor" text would never resolve.
+            current_category = matched
             continue
 
         if current_category.lower().endswith("props"):
