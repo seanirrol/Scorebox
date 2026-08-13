@@ -1345,10 +1345,23 @@ def _parse_named_team_total_pick(sport: str, description: str) -> Optional[dict]
     team_a, team_b, named_team = m.group(1).strip(), m.group(2).strip(), m.group(3).strip()
     if not team_a or not team_b or not named_team:
         return None
-    if not (scores365.names_match(named_team, team_a) or scores365.names_match(named_team, team_b)):
+    # The regex's own capture is greedy-enough to sometimes pull in trailing
+    # wording along with the team name (e.g. "Club America Team Total" for
+    # "Austin FC vs Club America - Club America Team Total OVER 1.5 Goals") -
+    # names_match's fuzzy comparison still validates it against team_a/
+    # team_b correctly (the real team name is a big chunk of the match), but
+    # returning the raw captured text as-is downstream would send that
+    # trailing junk straight into the actual team search and fail there
+    # instead. Returning whichever canonical side it matched keeps the team
+    # name clean regardless of what got tacked onto the capture.
+    if scores365.names_match(named_team, team_a):
+        team = team_a
+    elif scores365.names_match(named_team, team_b):
+        team = team_b
+    else:
         return None  # doesn't look like either matchup side - don't guess
     return {
-        "kind": "team_total", "sport": sport, "team": named_team,
+        "kind": "team_total", "sport": sport, "team": team,
         "direction": m.group(4).lower(), "line": float(m.group(5)),
     }
 
