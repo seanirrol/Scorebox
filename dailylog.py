@@ -129,6 +129,18 @@ def record_result(channel_id: int, module: str, track_key_str: str, status: str,
     state.save_daily_log(data)
 
 
+def forget(channel_id: int, module: str, track_key_str: str):
+    """Removes a pick's dailylog entry outright - used when a placeholder
+    entry (e.g. pendingsoccerprops' "still queued" placeholder, logged so
+    a not-yet-found pick isn't invisible in /summary while it waits) gets
+    superseded by a real one under a different key once the pick actually
+    resolves, so the placeholder doesn't linger on forever as a stale
+    duplicate "pending" line."""
+    data = state.load_daily_log()
+    if data.pop(_key(channel_id, module, track_key_str), None) is not None:
+        state.save_daily_log(data)
+
+
 def picks_for_date(origin_channel_ids: Iterable[int], date_str: str) -> list[dict]:
     """Every pick whose origin_channel_id is in origin_channel_ids, logged
     on this date, in original tracking order (insertion order - both dict

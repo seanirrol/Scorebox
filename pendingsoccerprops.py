@@ -11,13 +11,20 @@ succeeds exactly like a normal auto-track would have) or the day it was
 queued ends (Eastern midnight) without ever finding a match (typo'd name,
 or the match never materializes) - a pick is always about the day it was
 posted, so it's voided rather than left silently retrying into the next
-day. Voiding records a dailylog entry (with a reason) for the first time
-at give-up - a still-queued pick has no game/event id yet to key a normal
-"pending" entry on, so there's nothing to show in /summary until either it
-resolves (a normal entry gets created then, same as any other auto-track)
-or it's given up on. The queue is persisted so a bot restart mid-wait
-doesn't lose it - same approach as pendingdelete.py, and for the same
-reason: an in-memory-only asyncio.sleep can't survive a deploy.
+day.
+
+A queued pick gets its own placeholder dailylog entry the moment it's
+queued (keyed on the same channel:player:stat:queued-at-ms id used
+internally), so it shows up in /summary as pending instead of being
+invisible for however long it takes to resolve - confirmed live, a picks
+poster had no way to tell "still waiting on this one" apart from "silently
+dropped" without checking the log channel by hand. Once the real lookup
+succeeds, the normal event-id-keyed entry it creates takes over and this
+placeholder is deleted; if it times out instead, the exact same
+placeholder is updated to void (with a reason) rather than replaced. The
+queue is persisted so a bot restart mid-wait doesn't lose it - same
+approach as pendingdelete.py, and for the same reason: an in-memory-only
+asyncio.sleep can't survive a deploy.
 """
 
 import asyncio
@@ -55,16 +62,10 @@ def list_pending() -> list[dict]:
 
 
 def _give_up(entry_id: str, entry: dict):
-    """Records a void dailylog entry for a pick that never resolved before
-    its day ended - the first (and only) dailylog entry this pick ever
-    gets, since it never had a game/event id to key a normal "pending" one
-    on while still queued. Keyed on entry_id (the same
-    channel:player:stat:queued-at-ms id queue() already generated), which
-    never collides with a real proptracker key (event-id-based)."""
-    dailylog.record_pick(
-        entry["channel_id"], "pendingsoccerprops", entry_id, entry["section"], entry["label"],
-        message_id=0, origin_channel_id=entry["origin_channel_id"], sport="Soccer",
-    )
+    """Voids the placeholder dailylog entry queue() already created for a
+    pick that never resolved before its day ended - updated in place
+    rather than created fresh here, same as any other tracker grading its
+    own already-logged pending pick."""
     dailylog.record_result(
         entry["channel_id"], "pendingsoccerprops", entry_id, "void",
         "Match not found before end of day",
@@ -95,6 +96,11 @@ async def _retry_loop(entry_id: str, entry: dict, resolve: Callable[[dict], Awai
             log.exception("Pending soccer prop resolve callback failed for %s %s", entry.get("player"), entry.get("stat"))
             found = False
         if found:
+            # resolve() already created the real, event-id-keyed dailylog
+            # entry (same path a normal auto-track uses) - drop the
+            # placeholder queue() logged at queue time so it doesn't linger
+            # as a stale duplicate "pending" line in /summary forever.
+            dailylog.forget(entry["channel_id"], "pendingsoccerprops", entry_id)
             _forget(entry_id)
             return
     _give_up(entry_id, entry)
@@ -117,6 +123,11 @@ def queue(
         "origin_channel_id": origin_channel_id, "queued_at": time.time(),
     }
     _persist(entry_id, entry)
+    dailylog.record_pick(
+        channel_id, "pendingsoccerprops", entry_id, section, label,
+        message_id=0, origin_channel_id=origin_channel_id, sport="Soccer",
+    )
+    dailylog.touch(channel_id, "pendingsoccerprops", entry_id, "Queued - waiting for match lineup to be published")
     asyncio.create_task(_retry_loop(entry_id, entry, resolve))
     return entry
 
