@@ -232,7 +232,7 @@ async def _complete_track(
     picked_team = team if total_direction is None and team_total is None else None
     if tracker.is_tracked(channel.id, game_id, picked_team, team_total, total_direction, total_line):
         botlog.event(f"⏭️ Skipped: **{team}** — game `{game_id}` already being tracked in <#{channel.id}>")
-        return
+        return "skipped"
 
     embed, file = await tracker.build_embed(game, sport_id, picked_team, total_direction, total_line, team_total)
     message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
@@ -338,7 +338,7 @@ async def _auto_f5(
     picked_team = None if combined else team
     if f5tracker.is_tracked(channel.id, game_id, picked_team, total_direction, total_line, handicap_line):
         botlog.event(f"⏭️ Skipped (F5): **{team}** — game `{game_id}` already being tracked in <#{channel.id}>")
-        return
+        return "skipped"
 
     embed, file = await f5tracker.build_embed(game, sport_id, picked_team, total_direction, total_line, handicap_line)
     message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
@@ -380,7 +380,7 @@ async def _auto_1h_total(
     picked_team = None if combined else team
     if halftracker.is_tracked(channel.id, game_id, picked_team, total_direction, total_line):
         botlog.event(f"⏭️ Skipped (1H): **{team}** — game `{game_id}` already being tracked in <#{channel.id}>")
-        return
+        return "skipped"
 
     embed, file = await halftracker.build_embed(game, sport_id, picked_team, total_direction, total_line)
     message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
@@ -453,7 +453,7 @@ async def _auto_playerprops(
         return
     if proptracker.is_tracked(channel.id, event_id, entity["id"], stat_key, direction, line):
         botlog.event(f"⏭️ Skipped (prop): **{player}** {stat} — already being tracked in <#{channel.id}>")
-        return
+        return "skipped"
 
     current_value, is_home, team = await asyncio.to_thread(espn.get_stat_value, event, entity["id"], stat_key)
     embed, file = await proptracker.build_embed(
@@ -510,7 +510,7 @@ async def _auto_tennis_playerprops(
         competitor_id, resolved_name = away_competitor["id"], away_competitor.get("name", player)
     if tennispropstracker.is_tracked(channel.id, game_id, competitor_id, stat_name, direction, line):
         botlog.event(f"⏭️ Skipped (tennis prop): **{player}** {stat} — already being tracked in <#{channel.id}>")
-        return
+        return "skipped"
 
     embed, file = await tennispropstracker.build_embed(game, sport_id, competitor_id, resolved_name, stat, stat_name, direction, line)
     message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
@@ -563,7 +563,7 @@ async def _complete_soccer_prop_track(
     photo_url = scores365.athlete_photo_url(member)
     if soccerpropstracker.is_tracked(channel.id, game_id, member_id, stat_name, direction, line):
         botlog.event(f"⏭️ Skipped (soccer prop): **{player}** {stat} — already being tracked in <#{channel.id}>")
-        return
+        return "skipped"
 
     fixture_path, psf_match = await _resolve_soccer_psf_match(game, stat_name)
     if stat_name in playerstatsfootball.STAT_CATALOG and not fixture_path:
@@ -679,7 +679,7 @@ async def _auto_inning_runs(
         return
     if inningtracker.is_tracked(channel.id, event_id, pick_type):
         botlog.event(f"⏭️ Skipped ({pick_type}): **{team}** — already being tracked in <#{channel.id}>")
-        return
+        return "skipped"
 
     embed, file = await inningtracker.build_embed(event, pick_type)
     message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
@@ -717,7 +717,7 @@ async def _auto_inning1_result(
     game_id = game["id"]
     if inning1tracker.is_tracked(channel.id, game_id):
         botlog.event(f"⏭️ Skipped (1st inning result): **{team}** — game `{game_id}` already being tracked in <#{channel.id}>")
-        return
+        return "skipped"
 
     embed, file = await inning1tracker.build_embed(game, sport_id, team, pick)
     message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
@@ -760,7 +760,7 @@ async def _auto_tennis_market(
     game_id = game["id"]
     if settracker.is_tracked(channel.id, game_id, market, team):
         botlog.event(f"⏭️ Skipped ({market}): **{team}** — game `{game_id}` already being tracked in <#{channel.id}>")
-        return
+        return "skipped"
 
     embed, file = await settracker.build_embed(game, sport_id, market, team, direction, line)
     message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
@@ -804,7 +804,7 @@ async def _auto_ufc(
     fighter_name = None if total_direction else fighter_competitor["athlete"]["displayName"]
     if ufctracker.is_tracked(channel.id, competition_id, fighter_id, total_direction, total_line):
         botlog.event(f"⏭️ Skipped ({category_label}): **{fighter}** — bout `{competition_id}` already being tracked in <#{channel.id}>")
-        return
+        return "skipped"
 
     embed, file = await ufctracker.build_embed(competition, league_slug, event["name"], fighter_id, fighter_name, total_direction, total_line)
     message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
@@ -841,7 +841,7 @@ async def _auto_esports(
         return
     if esportstracker.is_tracked(channel.id, sport, team_a, team_b, market):
         botlog.event(f"⏭️ Skipped ({category_label}): **{team_a} v {team_b}** — already being tracked in <#{channel.id}>")
-        return
+        return "skipped"
 
     embed, file = await esportstracker.build_embed(
         series_data, market, picked_team, direction, line, map_number, picked_maps, other_maps
@@ -896,9 +896,11 @@ async def on_message(message: discord.Message):
         # regardless of which target channel a pick ends up tracked into.
         raw_line = pick.get("raw")
         card_id = await _dispatch_pick(target_channel, pick, pick.get("section"), raw_line, message.channel.id)
-        if card_id is not None and raw_line:
+        if isinstance(card_id, int) and raw_line:
             _tracked_lines.setdefault(message.id, {})[raw_line] = card_id
-        elif raw_line:
+        elif card_id is None and raw_line:
+            # Excludes "skipped" (a duplicate of a pick already being
+            # tracked elsewhere) - that's expected, not something to check.
             not_tracked_lines.append(raw_line)
     await _report_not_tracked_lines(message, not_tracked_lines)
 
@@ -933,15 +935,19 @@ async def _report_not_tracked_lines(message: discord.Message, raw_lines: list[st
 async def _dispatch_pick(
     target_channel: discord.abc.Messageable, pick: dict,
     section: Optional[str], label: Optional[str], origin_channel_id: Optional[int],
-) -> Optional[int]:
+) -> Optional[int | str]:
     """Routes one already-parsed pick to its tracker, mirroring exactly
     which _auto_* function on_message would have called - shared with
     on_message_edit so a newly-added line (from editing an existing picks
     message) gets tracked through the identical path a brand new message
     would use. Returns the posted card's message id (each _auto_* function
     returns this on success now, purely so on_message/on_message_edit can
-    remember "this raw line -> this card" for later - see _tracked_lines),
-    or None if nothing got tracked (skipped/failed/queued)."""
+    remember "this raw line -> this card" for later - see _tracked_lines).
+    Returns the literal string "skipped" if the pick is a duplicate of one
+    already being tracked - not a card id, but not a failure either, so
+    on_message's not-tracked recap (see _report_not_tracked_lines) knows to
+    leave it out. None means it genuinely never got tracked (no match
+    found, unknown stat, queued for retry, ...)."""
     try:
         if pick["kind"] == "track":
             return await _auto_track(target_channel, pick["sport"], pick["team"], section=section, label=label, origin_channel_id=origin_channel_id)
@@ -1152,7 +1158,7 @@ async def on_message_edit(before: discord.Message, after: discord.Message):
     for line in added_lines:
         pick = new_raw_to_pick[line]
         card_id = await _dispatch_pick(target_channel, pick, pick.get("section"), line, before.channel.id)
-        if card_id is not None:
+        if isinstance(card_id, int):
             old_lines[line] = card_id
 
     if old_lines:
