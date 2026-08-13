@@ -30,6 +30,18 @@ TRASH_EMOJI = "🗑️"
 # for a game that's still very much alive.
 MAX_CONSECUTIVE_MISSES = 3
 
+# Separate, much more generous threshold specifically for a 429 on the
+# message edit itself - confirmed live, Discord's own server-wide "message
+# edit attachment upload limit" (error code 400009) transiently trips in a
+# busy channel with many concurrent tracked cards all re-uploading a fresh
+# image every poll, then clears on its own within a few cycles. Unlike a
+# permission error or a deleted message, this isn't evidence the pick
+# itself is broken, so it shouldn't share MAX_CONSECUTIVE_MISSES's much
+# stricter budget - confirmed live, a pick in a high-traffic channel got
+# voided ("Message edit failed repeatedly") purely from rate limiting
+# while an identical pick in a quieter channel updated fine the whole time.
+MAX_CONSECUTIVE_RATE_LIMIT_FAILURES = 20
+
 # Keyed by f"{channel_id}:{game_id}" -> asyncio.Task
 _active_tracks: dict[str, asyncio.Task] = {}
 
@@ -347,6 +359,7 @@ async def _track_loop(
 
     consecutive_misses = 0
     consecutive_edit_failures = 0
+    consecutive_rate_limit_failures = 0
 
     async def _repost_final(embed: discord.Embed, file: discord.File):
         """Bumps the card to the bottom of the channel (pre-kickoff, graded,
@@ -590,7 +603,19 @@ async def _track_loop(
             try:
                 await throttle.run(channel_id, lambda: message.edit(embed=embed, attachments=[file]))
                 consecutive_edit_failures = 0
+                consecutive_rate_limit_failures = 0
             except discord.HTTPException as e:
+                if e.status == 429:
+                    consecutive_rate_limit_failures += 1
+                    log.warning(
+                        "Failed to edit tracking message, rate limited (failure %d/%d): %s",
+                        consecutive_rate_limit_failures, MAX_CONSECUTIVE_RATE_LIMIT_FAILURES, e,
+                    )
+                    if consecutive_rate_limit_failures >= MAX_CONSECUTIVE_RATE_LIMIT_FAILURES:
+                        botlog.event(f"⚠️ Auto-stopped tracking (message edit rate-limited {MAX_CONSECUTIVE_RATE_LIMIT_FAILURES}x in a row) for game `{game_id}` in <#{channel_id}>")
+                        await _void_leg_and_give_up("Message edit rate-limited repeatedly")
+                        break
+                    continue
                 consecutive_edit_failures += 1
                 log.warning(
                     "Failed to edit tracking message (failure %d/%d): %s",
