@@ -696,12 +696,6 @@ def _bullet_strip(line: str) -> str:
     return re.sub(r"^(?:\d+[.)]\s*)?[•\-\*]?\s*", "", line).strip()
 
 
-# Same marker shape as _bullet_strip, but the marker itself is *mandatory* -
-# used to tell an actual pick bullet apart from a bare, un-bulleted standalone
-# line (a section sub-header, going by every real source's own formatting).
-_LIST_MARKER_RE = re.compile(r"^(?:\d+[.)]\s*[•\-\*]?|[•\-\*])")
-
-
 def _is_simple_pick_name(text: str) -> Optional[str]:
     """A bare 'Name', 'Name ML', or 'Name Sets Moneyline' with nothing else
     attached - rejects anything with digits or prop-betting keywords, which
@@ -1732,28 +1726,22 @@ def parse_picks_message(content: str) -> list[dict]:
                         results.append(prop)
             continue
 
-        if not _LIST_MARKER_RE.match(line):
-            # A bare, un-bulleted standalone line under an already-set
-            # category is some other section title this bot doesn't
-            # specifically recognize (e.g. "MLB Home Run Predictor",
-            # "Cricket") rather than a pick - confirmed live, both silently
-            # got parsed as a literal team-name search on the header text
-            # itself instead. If it's still thematically under a known
-            # sport (its leading word(s) match a _HEADER_SPORT_MAP key,
-            # e.g. the "MLB" in "MLB Home Run Predictor"), current_category
-            # is re-resolved to that sport so the real picks underneath
-            # still track; otherwise (e.g. "Cricket", not a supported sport
-            # at all) it's reset to None instead of left stale on whatever
-            # sport was set before - confirmed live, that's what let
-            # "Australia ML" under a "Cricket" header get searched as a
-            # SOCCER team instead of being skipped as unsupported.
-            bare_lower = _bullet_strip(line).lower()
-            matched = next((k for k in _HEADER_SPORT_MAP if bare_lower.startswith(k + " ")), None)
-            # Stored as the bare matched key (e.g. "mlb"), not the full
-            # header text - current_category is looked up directly against
-            # _HEADER_SPORT_MAP.lower() everywhere else in this loop, so the
-            # full "MLB Home Run Predictor" text would never resolve.
-            current_category = matched
+        # A bare line whose leading word(s) match a _HEADER_SPORT_MAP key
+        # plus trailing text (e.g. "MLB Home Run Predictor") is a sub-header
+        # still thematically under that sport, not a pick - confirmed live,
+        # this previously fell through to being parsed as a literal
+        # team-name search on the header text itself instead. Deliberately
+        # narrow (checked before anything else, matched only against a
+        # multi-word line) so it doesn't risk misclassifying a genuine bare
+        # pick - real team/player names essentially never start with a bare
+        # league abbreviation as their own separate word the way a
+        # descriptive sub-header does.
+        bare_for_header_check = _bullet_strip(line).lower()
+        header_prefix_match = next(
+            (k for k in _HEADER_SPORT_MAP if bare_for_header_check.startswith(k + " ")), None
+        )
+        if header_prefix_match:
+            current_category = header_prefix_match
             continue
 
         if current_category.lower().endswith("props"):
