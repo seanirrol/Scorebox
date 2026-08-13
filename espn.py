@@ -222,7 +222,16 @@ def find_current_event_id(sport: str, team_id: str) -> Optional[str]:
     exists, it just hasn't been published yet. So a "post" (finished)
     candidate is only accepted if it actually finished today (Eastern) -
     yesterday's final is never eligible, matching this function's whole
-    purpose of finding what a FRESH pick should attach to."""
+    purpose of finding what a FRESH pick should attach to.
+
+    Same reasoning applies to "pre" (scheduled) candidates: a fresh pick is
+    always about today's slate (dailylog's own date reflects when it was
+    posted, never when its game happens to fall), so if a team has games on
+    both today and tomorrow and today's hasn't kicked off yet, only today's
+    is eligible - tomorrow's must never win by default just because it's
+    also sitting in the +-1 day window. Confirmed live: several MLB picks
+    for a team's today game instead silently attached to that same team's
+    game the next day, with no error or "not found"."""
     sport_slug, league_slug = SPORT_PATHS[sport]
     today = datetime.datetime.now(tz=scores365.EASTERN).date()
     start = (today - datetime.timedelta(days=1)).strftime("%Y%m%d")
@@ -241,7 +250,7 @@ def find_current_event_id(sport: str, team_id: str) -> Optional[str]:
             event_dt = datetime.datetime.fromisoformat(comp_date.replace("Z", "+00:00"))
         except (AttributeError, ValueError):
             continue
-        if state == "post":
+        if state in ("post", "pre"):
             if event_dt.astimezone(scores365.EASTERN).date() != today:
                 continue
         rank = _STATUS_RANK.get(state, 3)

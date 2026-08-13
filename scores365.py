@@ -659,13 +659,25 @@ def find_match_for_team(team: str, sport: Optional[str] = None) -> Optional[tupl
     Search 365scores' live game lists for a team, across all supported sports
     unless a specific one is given. Prefers a live match, then the
     soonest/most-recently scheduled or finished one. Returns (game, sport_id).
-    """
+
+    A "notstarted" or "finished" candidate is only accepted if it's actually
+    today (Eastern) - a fresh pick is always about today's slate (dailylog's
+    own date reflects when it was posted, never when its game happens to
+    fall), so a team with matches on both today and tomorrow must never
+    silently resolve to tomorrow's just because today's hadn't been
+    published to this feed yet at lookup time. Confirmed live: several
+    tennis picks posted for a player's today match instead attached to that
+    same player's match the following day, with no error or "not found" -
+    this rejects that outright rather than accepting the nearest-in-time
+    candidate regardless of which day it's actually on. "inprogress" is
+    always accepted regardless - a live match is unambiguous."""
     sport_ids = [SPORT_IDS[sport.lower()]] if sport and sport.lower() in SPORT_IDS else UNIQUE_SPORT_IDS
 
     best = None
     best_sport_id = None
     best_rank = None
     now = time.time()
+    today = datetime.datetime.now(tz=EASTERN).date()
 
     for sport_id in sport_ids:
         try:
@@ -674,6 +686,8 @@ def find_match_for_team(team: str, sport: Optional[str] = None) -> Optional[tupl
             continue
         for game in _candidates_for_team(games, team):
             status = map_status_type(game.get("statusGroup"))
+            if status in ("notstarted", "finished") and eastern_date(start_epoch(game)) != today:
+                continue
             rank = _STATUS_RANK.get(status, 3)
             if best is None or rank < best_rank or (
                 rank == best_rank and abs(start_epoch(game) - now) < abs(start_epoch(best) - now)
