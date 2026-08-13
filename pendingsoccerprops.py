@@ -1,17 +1,23 @@
 #!/usr/bin/env python3
 """
-scores365.find_soccer_player() only searches matches that are live or
-kicking off within the next 2 hours (see its own docstring) - a soccer prop
+scores365.find_soccer_player() only searches matches kicking off within
+_SOCCER_PROP_SEARCH_WINDOW_SECONDS (see its own docstring) - a soccer prop
 pick posted further ahead of kickoff than that has no candidate match yet
 and would otherwise just be silently dropped as "player not found".
 
 This module queues that pick and retries the lookup periodically until the
-match's kickoff enters the 2-hour search window (at which point the retry
-succeeds exactly like a normal auto-track would have) or a bounded wait
-elapses without ever finding a match (typo'd name, or the match never
-materializes). The queue is persisted so a bot restart mid-wait doesn't lose
-it - same approach as pendingdelete.py, and for the same reason: an
-in-memory-only asyncio.sleep can't survive a deploy.
+match's kickoff enters that search window (at which point the retry
+succeeds exactly like a normal auto-track would have) or the day it was
+queued ends (Eastern midnight) without ever finding a match (typo'd name,
+or the match never materializes) - a pick is always about the day it was
+posted, so it's voided rather than left silently retrying into the next
+day. Voiding records a dailylog entry (with a reason) for the first time
+at give-up - a still-queued pick has no game/event id yet to key a normal
+"pending" entry on, so there's nothing to show in /summary until either it
+resolves (a normal entry gets created then, same as any other auto-track)
+or it's given up on. The queue is persisted so a bot restart mid-wait
+doesn't lose it - same approach as pendingdelete.py, and for the same
+reason: an in-memory-only asyncio.sleep can't survive a deploy.
 """
 
 import asyncio
@@ -19,16 +25,15 @@ import logging
 import time
 from typing import Awaitable, Callable
 
+import dailylog
+import scores365
 import state
 
 log = logging.getLogger("scorebox.pendingsoccerprops")
 
-# Comfortably shorter than the 2h search window, so a pick doesn't sit
+# Comfortably shorter than the search window, so a pick doesn't sit
 # resolved-but-unclaimed for long once its match actually enters it.
 RETRY_INTERVAL_SECONDS = 30 * 60
-# Picks are virtually always same-day, but this covers a pick dropped up to
-# two days ahead of kickoff without retrying forever on a bad name.
-MAX_WAIT_SECONDS = 48 * 3600
 
 
 def _persist(entry_id: str, entry: dict):
@@ -49,8 +54,27 @@ def list_pending() -> list[dict]:
     return list(state.load_pending_soccer_props().values())
 
 
+def _give_up(entry_id: str, entry: dict):
+    """Records a void dailylog entry for a pick that never resolved before
+    its day ended - the first (and only) dailylog entry this pick ever
+    gets, since it never had a game/event id to key a normal "pending" one
+    on while still queued. Keyed on entry_id (the same
+    channel:player:stat:queued-at-ms id queue() already generated), which
+    never collides with a real proptracker key (event-id-based)."""
+    dailylog.record_pick(
+        entry["channel_id"], "pendingsoccerprops", entry_id, entry["section"], entry["label"],
+        message_id=0, origin_channel_id=entry["origin_channel_id"], sport="Soccer",
+    )
+    dailylog.record_result(
+        entry["channel_id"], "pendingsoccerprops", entry_id, "void",
+        "Match not found before end of day",
+    )
+    _forget(entry_id)
+    log.info("Gave up waiting for soccer prop pick to resolve: %s %s", entry.get("player"), entry.get("stat"))
+
+
 async def _retry_loop(entry_id: str, entry: dict, resolve: Callable[[dict], Awaitable[bool]]):
-    expires_at = entry["queued_at"] + MAX_WAIT_SECONDS
+    expires_at = scores365.next_eastern_midnight_epoch(entry["queued_at"])
     while True:
         remaining = expires_at - time.time()
         if remaining <= 0:
@@ -64,8 +88,7 @@ async def _retry_loop(entry_id: str, entry: dict, resolve: Callable[[dict], Awai
         if found:
             _forget(entry_id)
             return
-    _forget(entry_id)
-    log.info("Gave up waiting for soccer prop pick to resolve: %s %s", entry.get("player"), entry.get("stat"))
+    _give_up(entry_id, entry)
 
 
 def queue(

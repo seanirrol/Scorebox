@@ -421,8 +421,16 @@ SOCCER_STAT_CATALOG = {"Goals": "Goals", "Assists": "Assists", "Yellow Cards": "
 _SOCCER_EVENT_TYPES = {"Goals": "Goal", "Yellow Cards": "Yellow Card", "Red Cards": "Red Card"}
 
 # How far ahead of kickoff a not-yet-started match is still worth searching
-# for a named player - see find_soccer_player.
-_SOCCER_PROP_SEARCH_WINDOW_SECONDS = 2 * 3600
+# for a named player - see find_soccer_player. Widened from 2h to 24h -
+# confirmed live, 365scores' probable-lineup data (what find_soccer_player
+# actually reads via _get_game_detail's "members" list) is already
+# populated 16+ hours before kickoff, well outside the old 2h window - a
+# soccer prop pick is virtually always about a same-day match anyway (same
+# assumption dailylog's own date field already makes), so 24h covers the
+# realistic case immediately instead of leaving it queued for hours. Costs
+# more candidate matches per lookup (~90 at 24h vs ~0-50 at 2h, confirmed
+# live), but fetches already run in parallel and are cached.
+_SOCCER_PROP_SEARCH_WINDOW_SECONDS = 24 * 3600
 
 
 def soccer_player_stat(game: dict, member_id, stat_label: str) -> Optional[int]:
