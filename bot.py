@@ -1972,12 +1972,12 @@ def _summary_route(interaction_channel_id: int) -> Optional[config.SummaryRoute]
     return config.SUMMARY_ROUTES.get(interaction_channel_id)
 
 
-async def _reject_summary_wrong_channel(interaction: discord.Interaction, command_name: str = "summary"):
-    channels = ", ".join(f"<#{cid}>" for cid in config.SUMMARY_ROUTES)
-    await interaction.response.send_message(
-        f"/{command_name} only works in {channels}." if channels else f"/{command_name} isn't configured for any channel yet.",
-        ephemeral=True,
-    )
+async def _reject_summary_wrong_channel(interaction: discord.Interaction):
+    # Deliberately doesn't list config.SUMMARY_ROUTES' channels - whoever
+    # runs this command in the wrong place isn't necessarily someone who
+    # should even know which other channels this bot operates in (e.g. a
+    # picks-source admin with no visibility into the destination channels).
+    await interaction.response.send_message("Unable to use this command in this channel.", ephemeral=True)
 
 
 def _summary_status_line(entry: dict) -> str:
@@ -2306,7 +2306,7 @@ class WinLossGraphMonthPickView(discord.ui.View):
 async def winlossgraph_command(interaction: discord.Interaction):
     route = _summary_route(interaction.channel_id)
     if not route:
-        await _reject_summary_wrong_channel(interaction, command_name="winlossgraph")
+        await _reject_summary_wrong_channel(interaction)
         return
     if not _summary_allowed(interaction):
         await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
