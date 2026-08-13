@@ -35,6 +35,7 @@ import inningtracker
 import parlaytracker
 import pendingdelete
 import pendingsoccerprops
+import pendingtrack
 import picks
 import playerstatsfootball
 import proptracker
@@ -112,6 +113,7 @@ async def on_ready():
     await _safe_resume("parlaytracker", parlaytracker.resume_all(client))
     await _safe_resume("pendingdelete", pendingdelete.resume_all(client))
     await _safe_resume("pendingsoccerprops", pendingsoccerprops.resume_all(_resolve_pending_soccer_prop))
+    await _safe_resume("pendingtrack", pendingtrack.resume_all(_resolve_pending_track))
 
 
 def _find_message_owner(card_message_id: int) -> Optional[tuple[str, tuple]]:
@@ -215,6 +217,65 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
         log.warning("Failed to delete message via reaction: %s", e)
 
 
+async def _complete_track(
+    channel: discord.abc.Messageable, sport_value: str, team: str, result: tuple,
+    total_direction: Optional[str], total_line: Optional[float], team_total: Optional[str],
+    section: Optional[str], label: Optional[str], origin_channel_id: Optional[int],
+):
+    """Shared tail of a successful scores365.find_match_for_team() lookup -
+    called both right after a fresh auto-track attempt finds a match
+    immediately, and later from a pendingtrack retry once one shows up.
+    Keeping this split out means the retry path never has to duplicate (or
+    drift from) the actual posting/tracking logic below."""
+    game, sport_id = result
+    game_id = game["id"]
+    picked_team = team if total_direction is None and team_total is None else None
+    if tracker.is_tracked(channel.id, game_id, picked_team, team_total, total_direction, total_line):
+        botlog.event(f"⏭️ Skipped: **{team}** — game `{game_id}` already being tracked in <#{channel.id}>")
+        return
+
+    embed, file = await tracker.build_embed(game, sport_id, picked_team, total_direction, total_line, team_total)
+    message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
+    embed.set_footer(text=tracker._footer_text(message.id))
+    await throttle.run(channel.id, lambda: message.edit(embed=embed))
+    tracker.register_message(message.id, channel.id, game_id, None, picked_team, team_total, total_direction, total_line)
+    await message.add_reaction(TRASH_EMOJI)
+
+    tracker.start_tracking(
+        message, sport_id, game, channel.id, None, picked_team, total_direction, total_line, team_total,
+        section, label, origin_channel_id,
+    )
+    log.info("Auto-tracked pick '%s' -> game %s", team, game_id)
+    botlog.event(f"✅ Tracked: **{team}** ({sport_value}) — game `{game_id}` in <#{channel.id}>")
+    return message.id
+
+
+async def _resolve_pending_track(entry: dict) -> bool:
+    """resolve callback for pendingtrack - retried every
+    RETRY_INTERVAL_SECONDS until it returns True (found and tracked) or the
+    entry's max wait elapses. Re-fetches the channel by id since a resumed
+    entry (after a bot restart) only has the persisted channel_id, not a
+    live channel object."""
+    try:
+        channel = client.get_channel(entry["channel_id"]) or await client.fetch_channel(entry["channel_id"])
+    except discord.HTTPException as e:
+        log.warning("Pending track: couldn't resolve channel %s: %s", entry["channel_id"], e)
+        return False
+    try:
+        result = await asyncio.to_thread(scores365.find_match_for_team, entry["team"], entry["sport_value"])
+    except scores365.ScoresError as e:
+        log.info("Pending track retry: couldn't reach 365scores for '%s': %s", entry["team"], e)
+        return False
+    if not result:
+        return False
+    await _complete_track(
+        channel, entry["sport_value"], entry["team"], result,
+        entry["total_direction"], entry["total_line"], entry["team_total"],
+        entry["section"], entry["label"], entry["origin_channel_id"],
+    )
+    return True
+
+
 async def _auto_track(
     channel: discord.abc.Messageable, sport_value: str, team: str,
     total_direction: Optional[str] = None, total_line: Optional[float] = None,
@@ -237,30 +298,18 @@ async def _auto_track(
         botlog.event(f"❌ Not tracked: **{team}** ({sport_value}) — couldn't reach 365scores: {e}")
         return
     if not result:
-        log.info("Auto-track: no match found for '%s' (%s)", team, sport_value)
-        botlog.event(f"❌ Not tracked: **{team}** ({sport_value}) — no match found")
+        log.info("Auto-track: no match found for '%s' (%s), queuing retry", team, sport_value)
+        pendingtrack.queue(
+            channel.id, sport_value, team, total_direction, total_line, team_total,
+            section, label, origin_channel_id, _resolve_pending_track,
+        )
+        botlog.event(
+            f"⏳ Queued: **{team}** ({sport_value}) — no match found yet, will retry automatically"
+        )
         return
-    game, sport_id = result
-    game_id = game["id"]
-    picked_team = team if total_direction is None and team_total is None else None
-    if tracker.is_tracked(channel.id, game_id, picked_team, team_total, total_direction, total_line):
-        botlog.event(f"⏭️ Skipped: **{team}** — game `{game_id}` already being tracked in <#{channel.id}>")
-        return
-
-    embed, file = await tracker.build_embed(game, sport_id, picked_team, total_direction, total_line, team_total)
-    message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
-    embed.set_footer(text=tracker._footer_text(message.id))
-    await throttle.run(channel.id, lambda: message.edit(embed=embed))
-    tracker.register_message(message.id, channel.id, game_id, None, picked_team, team_total, total_direction, total_line)
-    await message.add_reaction(TRASH_EMOJI)
-
-    tracker.start_tracking(
-        message, sport_id, game, channel.id, None, picked_team, total_direction, total_line, team_total,
-        section, label, origin_channel_id,
+    return await _complete_track(
+        channel, sport_value, team, result, total_direction, total_line, team_total, section, label, origin_channel_id,
     )
-    log.info("Auto-tracked pick '%s' -> game %s", team, game_id)
-    botlog.event(f"✅ Tracked: **{team}** ({sport_value}) — game `{game_id}` in <#{channel.id}>")
-    return message.id
 
 
 async def _auto_f5(

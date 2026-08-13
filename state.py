@@ -30,6 +30,7 @@ ESPORTS_FILE = os.path.join(_DIR, "esports_state.json")
 DAILY_LOG_FILE = os.path.join(_DIR, "daily_log_state.json")
 PENDING_SOCCER_PROPS_FILE = os.path.join(_DIR, "pending_soccer_props_state.json")
 HALF_FILE = os.path.join(_DIR, "half_state.json")
+PENDING_TRACK_FILE = os.path.join(_DIR, "pending_track_state.json")
 
 
 def _load(path: str) -> dict[str, Any]:
@@ -165,3 +166,11 @@ def load_half() -> dict[str, Any]:
 
 def save_half(data: dict[str, Any]):
     _save(HALF_FILE, data)
+
+
+def load_pending_track() -> dict[str, Any]:
+    return _load(PENDING_TRACK_FILE)
+
+
+def save_pending_track(data: dict[str, Any]):
+    _save(PENDING_TRACK_FILE, data)
