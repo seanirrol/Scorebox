@@ -13,6 +13,7 @@ import concurrent.futures
 import datetime
 import re
 import time
+import unicodedata
 from typing import Optional
 from zoneinfo import ZoneInfo
 
@@ -597,8 +598,19 @@ def is_cancelled(game: dict) -> bool:
 
 # --- fuzzy team-name matching ----------------------------------------------
 
+def _strip_accents(text: str) -> str:
+    # NFKD decomposes an accented character into its base letter plus a
+    # separate combining-mark codepoint, which the [^a-z0-9] filters below
+    # can then just drop - without this, the accent isn't stripped, the
+    # whole letter is (a-z0-9 doesn't match "é" at all), silently mangling
+    # the word instead of folding it to its unaccented equivalent.
+    # Confirmed live: 365scores stores "Club América" with the accent, so a
+    # pick parsed as plain "Club America" (no accent) never matched at all.
+    return "".join(c for c in unicodedata.normalize("NFKD", text) if not unicodedata.combining(c))
+
+
 def _normalize(name: str) -> str:
-    return re.sub(r"[^a-z0-9]", "", (name or "").lower())
+    return re.sub(r"[^a-z0-9]", "", _strip_accents(name or "").lower())
 
 
 def _meaningful_words(name: str) -> set[str]:
@@ -615,7 +627,7 @@ def _meaningful_words(name: str) -> set[str]:
     # Minnesota Twins. Two-letter team prefixes (LG, KT, SK, NC in KBO; LA,
     # NY elsewhere) are exactly the kind of disambiguating qualifier this
     # match needs to keep, not discard.
-    collapsed = re.sub(r"[-']", "", (name or "").lower())
+    collapsed = re.sub(r"[-']", "", _strip_accents(name or "").lower())
     words = set(re.sub(r"[^a-z0-9\s]", " ", collapsed).split())
     filtered = {w for w in words if len(w) > 1}
     return filtered or words
