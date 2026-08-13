@@ -2042,7 +2042,52 @@ def _normalize_summary_section(section: str) -> str:
     return section
 
 
-def _build_summary_embed(date_str: str, picks_list: list[dict]) -> discord.Embed:
+_EMBED_DESCRIPTION_LIMIT = 4096
+
+
+def _pack_summary_blocks_into_embeds(date_str: str, blocks: list[str]) -> list[discord.Embed]:
+    """Packs description blocks (one per section, plus the win-rate line
+    always last) into as few embeds as fit under Discord's 4096-char
+    description limit each, splitting between blocks first and only
+    falling back to splitting within a block (by line) if a single block
+    alone doesn't fit. A big slate used to just get hard-sliced to 4096
+    chars and silently lose whatever came after - including the Win Rate
+    line, always appended last, the single most load-bearing line in the
+    whole report."""
+    chunks: list[str] = []
+    current = ""
+    for block in blocks:
+        candidate = f"{current}\n\n{block}" if current else block
+        if len(candidate) <= _EMBED_DESCRIPTION_LIMIT:
+            current = candidate
+            continue
+        if current:
+            chunks.append(current)
+            current = ""
+        if len(block) <= _EMBED_DESCRIPTION_LIMIT:
+            current = block
+            continue
+        # A single section's own block is bigger than the whole limit -
+        # split it line by line instead (still never truncates content).
+        for line in block.split("\n"):
+            candidate = f"{current}\n{line}" if current else line
+            if len(candidate) <= _EMBED_DESCRIPTION_LIMIT:
+                current = candidate
+            else:
+                if current:
+                    chunks.append(current)
+                current = line
+    if current:
+        chunks.append(current)
+
+    embeds = []
+    for i, description in enumerate(chunks):
+        title = f"Summary Report ({date_str})" if i == 0 else f"Summary Report ({date_str}) (cont'd)"
+        embeds.append(discord.Embed(title=title, description=description, color=0x2B2D31))
+    return embeds
+
+
+def _build_summary_embeds(date_str: str, picks_list: list[dict]) -> list[discord.Embed]:
     sections: dict[str, list[dict]] = {}
     for entry in picks_list:
         # Group by each tracker's own canonical sport label (dailylog.
@@ -2061,11 +2106,7 @@ def _build_summary_embed(date_str: str, picks_list: list[dict]) -> discord.Embed
         blocks.append(f"**{section}**\n" + "\n".join(lines))
     blocks.append(_win_rate_line(picks_list))
 
-    return discord.Embed(
-        title=f"Summary Report ({date_str})",
-        description="\n\n".join(blocks)[:4096],
-        color=0x2B2D31,
-    )
+    return _pack_summary_blocks_into_embeds(date_str, blocks)
 
 
 class SummaryPostView(discord.ui.View):
@@ -2097,7 +2138,7 @@ class SummaryPostView(discord.ui.View):
             picks_list = dailylog.picks_for_date(self.origin_ids, date_str)
             if not picks_list:
                 continue
-            embeds.append(_build_summary_embed(date_str, picks_list))
+            embeds.extend(_build_summary_embeds(date_str, picks_list))
             posted_dates.append(date_str)
         if not embeds:
             await interaction.response.edit_message(
@@ -2106,7 +2147,13 @@ class SummaryPostView(discord.ui.View):
             self.stop()
             return
         target = client.get_channel(self.post_channel_id) or await client.fetch_channel(self.post_channel_id)
-        await target.send(embeds=embeds)
+        # Discord caps a single message at 10 embeds - a big multi-date (or
+        # single very long) report can now produce more than that (see
+        # _build_summary_embeds), so send in batches of 10 rather than
+        # truncating and dropping content the same way the old hard slice
+        # to 4096 chars used to.
+        for i in range(0, len(embeds), 10):
+            await target.send(embeds=embeds[i : i + 10])
         dates_label = ", ".join(posted_dates)
         botlog.event(
             f"📋 Summary report ({dates_label}) posted to <#{self.post_channel_id}> "
@@ -2129,7 +2176,7 @@ async def _send_summary_preview(
     snapshot) since a pending pick can resolve, or someone else can
     post/re-preview the same date, in the time between opening the picker
     and selecting a date."""
-    embeds = [_build_summary_embed(d, picks) for d in date_strs if (picks := dailylog.picks_for_date(origin_ids, d))]
+    embeds = [e for d in date_strs if (picks := dailylog.picks_for_date(origin_ids, d)) for e in _build_summary_embeds(d, picks)]
     if not embeds:
         content, view = f"No picks logged for {', '.join(date_strs)}.", None
     else:
@@ -2138,6 +2185,13 @@ async def _send_summary_preview(
             if post_channel_id == interaction.channel_id
             else f"Preview only - not posted yet. Click below to publish it to <#{post_channel_id}>."
         )
+        if len(embeds) > 10:
+            # A single interaction response can only carry 10 embeds - the
+            # actual post (SummaryPostView.post) isn't limited this way, it
+            # batches into multiple messages, so this only trims the
+            # preview itself, never what actually gets posted.
+            content += f" (preview truncated to 10 of {len(embeds)} embeds - the full report will still post in full)"
+            embeds = embeds[:10]
         view = SummaryPostView(origin_ids, post_channel_id, date_strs, interaction.user.id)
     if edit:
         await interaction.response.edit_message(content=content, embeds=embeds, view=view)
