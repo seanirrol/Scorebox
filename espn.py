@@ -230,26 +230,33 @@ def find_current_event_id(sport: str, team_id: str) -> Optional[str]:
     data = _get(f"{SITE_BASE}/{sport_slug}/{league_slug}/scoreboard", dates=f"{start}-{end}")
 
     best = None
-    best_rank = None
-    now = time.time()
+    best_key = None
     for event in data.get("events", []):
         competitors = event.get("competitions", [{}])[0].get("competitors", [])
         if not any(c.get("team", {}).get("id") == team_id for c in competitors):
             continue
         state = event.get("status", {}).get("type", {}).get("state")
+        comp_date = event.get("competitions", [{}])[0].get("date")
+        try:
+            event_dt = datetime.datetime.fromisoformat(comp_date.replace("Z", "+00:00"))
+        except (AttributeError, ValueError):
+            continue
         if state == "post":
-            comp_date = event.get("competitions", [{}])[0].get("date")
-            try:
-                event_date = datetime.datetime.fromisoformat(
-                    comp_date.replace("Z", "+00:00")
-                ).astimezone(scores365.EASTERN).date()
-            except (AttributeError, ValueError):
-                continue
-            if event_date != today:
+            if event_dt.astimezone(scores365.EASTERN).date() != today:
                 continue
         rank = _STATUS_RANK.get(state, 3)
-        if best is None or rank < best_rank:
-            best, best_rank = event, rank
+        # Within the same rank tier, a team can have more than one candidate
+        # in the +-1 day window (e.g. games on both today and tomorrow) -
+        # confirmed live, two "pre" (not-yet-started) games for the same
+        # team a day apart, and this used to have no tie-break at all,
+        # silently keeping whichever the API happened to list first rather
+        # than the soonest one. Sort key ascending within a tier: soonest
+        # first for scheduled/live, most recent first (negated epoch) for
+        # an already-finished game.
+        tiebreak = event_dt.timestamp() if state != "post" else -event_dt.timestamp()
+        key = (rank, tiebreak)
+        if best is None or key < best_key:
+            best, best_key = event, key
     return best["id"] if best else None
 
 
