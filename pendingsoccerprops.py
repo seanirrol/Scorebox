@@ -74,7 +74,16 @@ def _give_up(entry_id: str, entry: dict):
 
 
 async def _retry_loop(entry_id: str, entry: dict, resolve: Callable[[dict], Awaitable[bool]]):
-    expires_at = scores365.next_eastern_midnight_epoch(entry["queued_at"])
+    # Two Eastern-midnight rollovers out, not one - confirmed live, a pick
+    # queued at 10:31 PM (for a match the next day, a completely normal
+    # "posted the night before" pattern) got voided within minutes of a
+    # restart because "midnight after the day it was queued" had already
+    # passed by the time the bot came back up, hours before the match it
+    # was actually about even kicked off. Giving it through the END of the
+    # day AFTER it was queued covers that same-night-for-tomorrow case
+    # without meaningfully weakening the safety net for a pick that
+    # genuinely never resolves (typo'd name, match never materializes).
+    expires_at = scores365.next_eastern_midnight_epoch(scores365.next_eastern_midnight_epoch(entry["queued_at"]))
     while True:
         remaining = expires_at - time.time()
         if remaining <= 0:
