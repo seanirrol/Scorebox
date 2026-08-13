@@ -1172,8 +1172,11 @@ def _channel_allowed(interaction: discord.Interaction) -> bool:
 
 
 async def _reject_wrong_channel(interaction: discord.Interaction):
-    channels = ", ".join(f"<#{cid}>" for cid in config.ALLOWED_CHANNEL_IDS)
-    await interaction.response.send_message(f"This bot only works in {channels}.", ephemeral=True)
+    # Deliberately doesn't list config.ALLOWED_CHANNEL_IDS - same reasoning
+    # as _reject_summary_wrong_channel: whoever runs a command in the wrong
+    # place isn't necessarily someone who should see the full list of every
+    # channel this bot operates in.
+    await interaction.response.send_message("Unable to use this command in this channel.", ephemeral=True)
 
 
 def _summary_allowed(interaction: discord.Interaction) -> bool:
