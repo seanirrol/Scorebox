@@ -883,6 +883,7 @@ async def on_message(message: discord.Message):
         botlog.event(f"❌ Couldn't reach target scores channel `{target_channel_id}`: {e}")
         return
 
+    not_tracked_lines = []
     for pick in parsed:
         # section/label are the verbatim picks-channel header ("MLB", "WNBA",
         # ...) and raw pick line text (see picks.py's parse_picks_message) -
@@ -897,6 +898,36 @@ async def on_message(message: discord.Message):
         card_id = await _dispatch_pick(target_channel, pick, pick.get("section"), raw_line, message.channel.id)
         if card_id is not None and raw_line:
             _tracked_lines.setdefault(message.id, {})[raw_line] = card_id
+        elif raw_line:
+            not_tracked_lines.append(raw_line)
+    await _report_not_tracked_lines(message, not_tracked_lines)
+
+
+async def _report_not_tracked_lines(message: discord.Message, raw_lines: list[str]):
+    """Posts one consolidated botlog recap of every picks-message line that
+    parsed into a recognized pick but never ended up tracked (no match
+    found, unknown stat, already tracked, queued for retry, ...) - each
+    individual _auto_* function already logs its own specific reason, but
+    this lets a reviewer see the exact raw source lines to check in one
+    place instead of piecing them together from scattered log entries.
+    Doesn't cover a line that failed to parse into a pick at all
+    (unrecognized wording, a plain section sub-header, ...) - that never
+    reaches the caller's `parsed` list in the first place."""
+    if not raw_lines:
+        return
+    header = (
+        f"📋 {len(raw_lines)} line(s) from **{message.author}**'s picks message in "
+        f"<#{message.channel.id}> didn't end up tracked (see the reasons logged above) — raw source text:"
+    )
+    chunk = header
+    for i, line in enumerate(raw_lines, 1):
+        entry = f"{i}. {line}"
+        if len(chunk) + len(entry) + 1 > 1900:
+            botlog.event(chunk)
+            chunk = entry
+        else:
+            chunk += "\n" + entry
+    botlog.event(chunk)
 
 
 async def _dispatch_pick(
