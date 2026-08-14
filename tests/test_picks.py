@@ -79,6 +79,57 @@ class StatAliases(unittest.TestCase):
         self.assertEqual(pick["stat"], "Rushing Yards")
 
 
+class WinASetNoMatchup(unittest.TestCase):
+    """"Player to Win at Least 1 Set" / "Player to Win a Set" with no
+    opponent named at all - confirmed live, 7 of 8 picks in one real
+    message vanished with no botlog trace because the existing
+    _WIN_A_SET_RE required a full "Team A vs Team B - " matchup prefix,
+    and the bare wording fell through to the simple-name fallback, which
+    rejects anything with a digit in it (the "1" in "at least 1 set")."""
+
+    def test_at_least_1_set_wording_with_no_matchup(self):
+        msg = "Tennis\nStefanos Tsitsipas to Win at Least 1 Set (Alt Line) (Bet365 -275)"
+        results = picks.parse_picks_message(msg)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["kind"], "tennis_win_a_set")
+        self.assertEqual(results[0]["team"], "Stefanos Tsitsipas")
+        self.assertEqual(results[0]["direction"], "yes")
+
+    def test_plain_to_win_a_set_wording_with_no_matchup(self):
+        msg = "Tennis\nVenus Williams to Win a Set (DraftKings -150)"
+        results = picks.parse_picks_message(msg)
+        self.assertEqual(results[0]["team"], "Venus Williams")
+
+    def test_no_prefix_flips_direction(self):
+        msg = "Tennis\nNo Venus Williams to Win a Set (DraftKings +150)"
+        results = picks.parse_picks_message(msg)
+        self.assertEqual(results[0]["team"], "Venus Williams")
+        self.assertEqual(results[0]["direction"], "no")
+
+    def test_matchup_prefixed_wording_still_works(self):
+        # The pre-existing _WIN_A_SET_RE path, must not regress.
+        pick = picks.parse_pick_line(
+            "[Tennis] Venus Williams vs Serena Williams - Venus Williams to Win a Set (DraftKings -150)"
+        )
+        self.assertEqual(pick["kind"], "tennis_win_a_set")
+        self.assertEqual(pick["team"], "Venus Williams")
+
+    def test_whole_real_message_all_eight_picks_parse(self):
+        msg = (
+            "Tennis\n"
+            "Stefanos Tsitsipas to Win at Least 1 Set (Alt Line) (Bet365 -275)\n"
+            "Hubert Hurkacz to Win at Least 1 Set (Alt Line) (Bet365 -270)\n"
+            "Wang Xinyu to Win at Least 1 Set (Alt Line) (Bet365 -220)\n"
+            "Grigor Dimitrov to Win at Least 1 Set (Alt Line) (FanDuel -240)\n"
+            "Karen Khachanov to Win at Least 1 Set (Alt Line) (DraftKings -270)\n"
+            "Elisabetta Cocciaretto to Win at Least 1 Set (Alt Line) (Fanatics -245)\n"
+            "Karolina Pliskova to Win at Least 1 Set (Alt Line) (Bet365 -225)\n"
+            "Liudmila Samsonova +1.5 Sets (Alt Line) (Bet365 -195)"
+        )
+        results = picks.parse_picks_message(msg)
+        self.assertEqual(len(results), 8)
+
+
 class YrfiNrfiSeparators(unittest.TestCase):
     """The matchup separator regex only recognized "vs"/"vs." - a real
     source used "@" (the away-@-home convention) and those lines silently

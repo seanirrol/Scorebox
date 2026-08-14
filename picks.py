@@ -270,6 +270,17 @@ _WIN_A_SET_RE = re.compile(
     re.IGNORECASE,
 )
 
+# "Stefanos Tsitsipas to Win at Least 1 Set" / "Venus Williams to Win a
+# Set" - the same market as _WIN_A_SET_RE, just with no opponent named at
+# all (same no-matchup shape as _SETS_HANDICAP_NOMATCHUP_RE above) -
+# confirmed live, this exact "to Win at Least 1 Set" wording (no matchup
+# prefix, and "at least 1" instead of "a") fell through to the simple-
+# name fallback, which rejects anything with a digit in it, and vanished
+# with no botlog trace at all - 7 of 8 picks in one real message.
+_WIN_A_SET_NOMATCHUP_RE = re.compile(
+    r"^(.+?)\s+to\s+win\s+(?:a\s+set|at\s+least\s+1\s+sets?)\b", re.IGNORECASE,
+)
+
 # "Team A vs Team B - 1st Inning Draw" (or "Tie") - the Draw side of the same
 # 3-way "1st inning result" market. Either team name is enough to look the
 # game up - grading only cares whether the 1st inning runs end level.
@@ -916,6 +927,26 @@ def _parse_sets_handicap_nomatchup_pick(description: str) -> Optional[dict]:
     return {"kind": "tennis_sets_handicap", "team": player, "line": float(m.group(2))}
 
 
+def _parse_win_a_set_nomatchup_pick(description: str) -> Optional[dict]:
+    """"Player to Win a Set" / "Player to Win at Least 1 Set" - the same
+    market as _parse_win_a_set_pick, just with no opponent named at all
+    (see _WIN_A_SET_NOMATCHUP_RE)."""
+    text = _clean_line(description)
+    m = _WIN_A_SET_NOMATCHUP_RE.match(text)
+    if not m:
+        return None
+    named = m.group(1).strip()
+    direction = "yes"
+    # Same leading/trailing "No"/"Not" flip as _parse_win_a_set_pick.
+    stripped = re.sub(r"^(?:not|no)\s+|\s+(?:not|no)$", "", named, flags=re.IGNORECASE).strip()
+    if stripped != named:
+        direction = "no"
+        named = stripped
+    if not named:
+        return None
+    return {"kind": "tennis_win_a_set", "team": named, "direction": direction}
+
+
 def _parse_match_total_games_pick(description: str) -> Optional[dict]:
     text = _clean_line(description)
     m = _MATCH_TOTAL_GAMES_BEFORE_RE.match(text) or _MATCH_TOTAL_GAMES_AFTER_RE.match(text)
@@ -1537,6 +1568,10 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
             sets_handicap_nomatchup = _parse_sets_handicap_nomatchup_pick(description)
             if sets_handicap_nomatchup:
                 return sets_handicap_nomatchup
+
+            win_a_set_nomatchup = _parse_win_a_set_nomatchup_pick(description)
+            if win_a_set_nomatchup:
+                return win_a_set_nomatchup
 
             tennis_prop = _parse_tennis_player_prop(description)
             if tennis_prop:
