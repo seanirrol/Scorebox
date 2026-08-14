@@ -89,6 +89,7 @@ def _tracker_modules():
     import here would be circular."""
     import esportstracker
     import f5tracker
+    import halftracker
     import inning1tracker
     import inningtracker
     import proptracker
@@ -100,9 +101,9 @@ def _tracker_modules():
 
     return {
         "tracker": tracker, "proptracker": proptracker, "inningtracker": inningtracker,
-        "f5tracker": f5tracker, "inning1tracker": inning1tracker, "settracker": settracker,
-        "soccerpropstracker": soccerpropstracker, "tennispropstracker": tennispropstracker,
-        "ufctracker": ufctracker, "esportstracker": esportstracker,
+        "f5tracker": f5tracker, "halftracker": halftracker, "inning1tracker": inning1tracker,
+        "settracker": settracker, "soccerpropstracker": soccerpropstracker,
+        "tennispropstracker": tennispropstracker, "ufctracker": ufctracker, "esportstracker": esportstracker,
     }
 
 
@@ -115,18 +116,37 @@ def resolve_leg(message_id: int) -> Optional[tuple[str, str, int]]:
     _message_owners tuple has channel_id as its first element, but the
     rest of the shape (and the track_key/prop_key signature needed to
     rebuild the key) differs per module - no generic shortcut is possible,
-    so this is an explicit branch per module."""
+    so this is an explicit branch per module.
+
+    Each branch's unpack must match that module's own _message_owners
+    tuple shape (owner_id last, everything else in between) AND its own
+    track_key/prop_key signature, in full - not just channel_id+game_id.
+    Confirmed live: several of these had drifted out of sync as each
+    module's own owner tuple grew extra discriminator fields (team_total,
+    direction/line, handicap_line, ...) over time without this function
+    being updated to match - most crashed /parlay add outright with a
+    "too many values to unpack" ValueError (an unhandled exception here
+    left the deferred interaction with no reply at all, so it just showed
+    "thinking..." forever in Discord); the ones that didn't crash
+    (proptracker/soccerpropstracker/tennispropstracker/ufctracker) instead
+    silently rebuilt the WRONG key (missing discriminators default back to
+    "manual"), so the leg would never actually match its tracker's live
+    reports. halftracker was missing from this function entirely - a 1H
+    pick's card could never be added to a parlay at all, even though
+    halftracker.py already calls back into this module's own
+    report_leg_progress/handle_leg_result once a leg IS in a group."""
     mods = _tracker_modules()
 
     owner = mods["tracker"].get_message_owner(message_id)
     if owner:
-        channel_id, game_id, _owner_id = owner
-        return "tracker", mods["tracker"].track_key(channel_id, game_id), channel_id
+        channel_id, game_id, picked_team, team_total, total_direction, total_line, _owner_id = owner
+        key = mods["tracker"].track_key(channel_id, game_id, picked_team, team_total, total_direction, total_line)
+        return "tracker", key, channel_id
 
     owner = mods["proptracker"].get_message_owner(message_id)
     if owner:
-        channel_id, event_id, entity_id, stat_key, _owner_id = owner
-        key = mods["proptracker"].prop_key(channel_id, event_id, entity_id, tuple(stat_key))
+        channel_id, event_id, entity_id, stat_key, direction, line, _owner_id = owner
+        key = mods["proptracker"].prop_key(channel_id, event_id, entity_id, tuple(stat_key), direction, line)
         return "proptracker", key, channel_id
 
     owner = mods["inningtracker"].get_message_owner(message_id)
@@ -136,8 +156,15 @@ def resolve_leg(message_id: int) -> Optional[tuple[str, str, int]]:
 
     owner = mods["f5tracker"].get_message_owner(message_id)
     if owner:
-        channel_id, game_id, _owner_id = owner
-        return "f5tracker", mods["f5tracker"].track_key(channel_id, game_id), channel_id
+        channel_id, game_id, picked_team, total_direction, total_line, handicap_line, _owner_id = owner
+        key = mods["f5tracker"].track_key(channel_id, game_id, picked_team, total_direction, total_line, handicap_line)
+        return "f5tracker", key, channel_id
+
+    owner = mods["halftracker"].get_message_owner(message_id)
+    if owner:
+        channel_id, game_id, picked_team, total_direction, total_line, _owner_id = owner
+        key = mods["halftracker"].track_key(channel_id, game_id, picked_team, total_direction, total_line)
+        return "halftracker", key, channel_id
 
     owner = mods["inning1tracker"].get_message_owner(message_id)
     if owner:
@@ -151,20 +178,21 @@ def resolve_leg(message_id: int) -> Optional[tuple[str, str, int]]:
 
     owner = mods["soccerpropstracker"].get_message_owner(message_id)
     if owner:
-        channel_id, game_id, member_id, stat_name, _owner_id = owner
-        key = mods["soccerpropstracker"].prop_key(channel_id, game_id, member_id, stat_name)
+        channel_id, game_id, member_id, stat_name, direction, line, _owner_id = owner
+        key = mods["soccerpropstracker"].prop_key(channel_id, game_id, member_id, stat_name, direction, line)
         return "soccerpropstracker", key, channel_id
 
     owner = mods["tennispropstracker"].get_message_owner(message_id)
     if owner:
-        channel_id, game_id, competitor_id, stat_name, _owner_id = owner
-        key = mods["tennispropstracker"].prop_key(channel_id, game_id, competitor_id, stat_name)
+        channel_id, game_id, competitor_id, stat_name, direction, line, _owner_id = owner
+        key = mods["tennispropstracker"].prop_key(channel_id, game_id, competitor_id, stat_name, direction, line)
         return "tennispropstracker", key, channel_id
 
     owner = mods["ufctracker"].get_message_owner(message_id)
     if owner:
-        channel_id, competition_id, _owner_id = owner
-        return "ufctracker", mods["ufctracker"].track_key(channel_id, competition_id), channel_id
+        channel_id, competition_id, fighter_id, total_direction, total_line, _owner_id = owner
+        key = mods["ufctracker"].track_key(channel_id, competition_id, fighter_id, total_direction, total_line)
+        return "ufctracker", key, channel_id
 
     owner = mods["esportstracker"].get_message_owner(message_id)
     if owner:
