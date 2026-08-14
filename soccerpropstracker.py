@@ -362,6 +362,7 @@ async def _track_loop(
     await asyncio.sleep(random.uniform(0, config.UPDATE_INTERVAL_SECONDS))
     game = None
     psf_match = None
+    psf_html = None
     try:
         while time.monotonic() < deadline:
             await asyncio.sleep(config.UPDATE_INTERVAL_SECONDS)
@@ -452,8 +453,28 @@ async def _track_loop(
                 if direction is not None and line is not None:
                     current_value = _current_value(game, member_id, player_name, stat_name, psf_match)
                     result = scores365.grade_over_under(current_value, direction, line)
-                    if result is None and scores365.is_cancelled(game):
+                    reason = None
+                    if result is None:
+                        # The game finished but there's no usable value to
+                        # grade against - previously this branch just left
+                        # result as None, which meant dailylog.record_result
+                        # below never even ran (falsy result), silently
+                        # stranding the pick on "pending" forever. Confirmed
+                        # live: a finished match's card sat showing "Not
+                        # Started" for hours with nothing left running to
+                        # ever fix it.
                         result = "void"
+                        if scores365.is_cancelled(game):
+                            reason = "Cancelled"
+                        elif psf_html and playerstatsfootball.was_substituted(psf_html, player_name):
+                            # Confirmed live: a player substituted out mid-
+                            # match genuinely played, but this source's
+                            # structured data only covers players still on
+                            # the field at full time - get_player_stat
+                            # returning None here doesn't mean DNP.
+                            reason = "Player was substituted - stat not available from this source"
+                        else:
+                            reason = "No usable stat value"
                     reaction = _RESULT_REACTIONS.get(result)
                     if reaction:
                         try:
@@ -461,7 +482,7 @@ async def _track_loop(
                         except discord.HTTPException as e:
                             log.warning("Failed to add result reaction: %s", e)
                     if result:
-                        dailylog.record_result(channel_id, "soccerpropstracker", key, result, "Cancelled" if result == "void" else None)
+                        dailylog.record_result(channel_id, "soccerpropstracker", key, result, reason)
                         group_ids = parlaytracker.groups_for_leg(channel_id, "soccerpropstracker", key)
                         await parlaytracker.handle_leg_result(
                             message.channel, channel_id, message, "soccerpropstracker", key, leg_label, result, group_ids,

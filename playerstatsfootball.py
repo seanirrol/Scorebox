@@ -177,6 +177,29 @@ def parse_match(html: str) -> Optional[dict]:
     return {"players": players}
 
 
+_SUB_NOTE_RE = re.compile(r'text-gray-400[^>]*>\(([^)]+)\)')
+
+
+def was_substituted(html: str, player_name: str) -> bool:
+    """True if player_name appears as a substitution note ("(R. Lewandowski)"
+    next to whoever came on for them) anywhere in the raw fixture page -
+    confirmed live this site's structured JSON-LD block (what parse_match
+    reads) only includes players still on the field at full time, silently
+    omitting anyone substituted out during the match even though they
+    genuinely played. get_player_stat returning None for a finished match
+    is ambiguous between "never played at all" and "played, subbed off,
+    just not in this site's structured summary" - this disambiguates the
+    second case so it can be voided with an honest reason instead of
+    looking like a plain DNP. Doesn't recover the actual stat value (that
+    requires HTML the raw JSON-LD doesn't expose - reading the underlying
+    site's own UI directly is the only reliable way right now), just
+    identifies when that's actually what happened."""
+    for name in _SUB_NOTE_RE.findall(html):
+        if scores365.names_match(name, player_name):
+            return True
+    return False
+
+
 def get_player_stat(match: dict, player_name: str, stat_label: str) -> Optional[float]:
     """Looks up one player's value for one stat (our display label, e.g.
     "Shots on Target" - translated to this site's own field name via
