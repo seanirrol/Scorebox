@@ -53,6 +53,17 @@ log = logging.getLogger("scorebox.bot")
 
 intents = discord.Intents.default()
 intents.message_content = True  # needed to read pick messages in config.PICKS_CHANNEL_MAP
+# Needed for on_raw_reaction_add's admin check - Discord's gateway only
+# includes the reacting member's roles/permissions on a MESSAGE_REACTION_ADD
+# event when this privileged intent is enabled. Without it, payload.member
+# is always None, so is_admin always evaluates False for every user - the
+# trash-reaction delete on an owner-less auto-tracked card (owner_id=None)
+# silently never worked for anyone, admin or not. Also requires "Server
+# Members Intent" to be toggled ON for this bot in the Discord Developer
+# Portal (Bot page, Privileged Gateway Intents) - the client fails to log
+# in with PrivilegedIntentsRequired if that portal toggle is off while this
+# is requested in code.
+intents.members = True
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 botlog.init(client)
