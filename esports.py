@@ -750,7 +750,7 @@ def total_kills(series_data: dict) -> Optional[tuple[int, int]]:
     - it's meaningful (and needed for grading) once the series is finished
     too. None for CS2, or if a Dota 2 series was only ever resolved via the
     GosuGamers fallback (no hawk.live coverage, no per-map state data to sum)."""
-    if series_data["sport"] != "dota2":
+    if series_data["sport"] != "dota2" or series_data["_ref"]["provider"] != "hawklive":
         return None
     return _hawk_total_kills(series_data)
 

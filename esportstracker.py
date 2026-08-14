@@ -241,7 +241,25 @@ async def build_embed(
     if author_bits:
         embed.set_author(name=" • ".join(author_bits))
 
-    description_lines = [pick_label(market, picked_team, direction, line, map_number, picked_maps, other_maps)]
+    label = pick_label(market, picked_team, direction, line, map_number, picked_maps, other_maps)
+    if market in ("total_kills", "team_total_kills"):
+        # Shows progress toward the line while the series is still live -
+        # e.g. "Over 108.5 Total Kills (100)". None (e.g. CS2, or a Dota 2
+        # series only ever resolved via the GosuGamers fallback with no
+        # per-map kill data) just leaves the label bare, same as before.
+        kills = esports.total_kills(series_data)
+        if kills is not None:
+            if market == "total_kills":
+                current = kills[0] + kills[1]
+            elif esports.names_match(series_data["home_team"], picked_team):
+                current = kills[0]
+            elif esports.names_match(series_data["away_team"], picked_team):
+                current = kills[1]
+            else:
+                current = None
+            if current is not None:
+                label = f"{label} ({current})"
+    description_lines = [label]
     if status == "notstarted" and series_data.get("start_epoch"):
         description_lines.append(f"<t:{int(series_data['start_epoch'])}:f>")
     embed.description = "\n".join(description_lines)
