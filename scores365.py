@@ -344,6 +344,34 @@ def tennis_match_games(game: dict) -> tuple[int, int]:
     return home_total, away_total
 
 
+def tennis_sets_won(game: dict) -> tuple[int, int]:
+    """(home_sets, away_sets) derived directly from each completed Set N
+    stage's own score - deliberately NOT main_scores' aggregate
+    homeCompetitor/awayCompetitor "score" field (what a plain sets-won
+    tally would normally read). Confirmed live that field doesn't get
+    incremented when a match ends by mid-set retirement, even though an
+    earlier set fully completed (a real WTA match: Set 1 ended 5-3, the
+    match then ended by retirement in Set 2, and main_scores still showed
+    0-0 despite Set 1 clearly having a winner) - the settracker card for
+    a "Win a Set"/sets-handicap pick showed a misleading 0-0 as if nothing
+    had been played at all. A tie within one completed set can't happen in
+    real tennis, so ties are simply skipped rather than needing a push
+    case."""
+    home_sets = away_sets = 0
+    for stage in game.get("stages") or []:
+        if not re.match(r"^Set \d+$", stage.get("name") or "") or not stage.get("isEnded"):
+            continue
+        home = _norm_score(stage.get("homeCompetitorScore"))
+        away = _norm_score(stage.get("awayCompetitorScore"))
+        if home is None or away is None or home == away:
+            continue
+        if home > away:
+            home_sets += 1
+        else:
+            away_sets += 1
+    return home_sets, away_sets
+
+
 def grade_win_a_set(game: dict, picked_team: str, direction: str) -> Optional[str]:
     """Grades a "Player to Win a Set" (direction="yes") or "Player Not to
     Win a Set" (direction="no") pick. Winning at least one set is safe to

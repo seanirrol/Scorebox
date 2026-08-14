@@ -267,14 +267,24 @@ async def build_embed(
         decided = scores365.is_finished(game)
         if decided:
             result = scores365.grade_sets_handicap(game, team, line)
-        # frozen_cols left None - falls through to the live main_scores
-        # (sets-won) display below, same score that's already shown for a
-        # plain moneyline pick, no separate freeze needed for this market.
+            # tennis_sets_won, not main_scores - see its own docstring for
+            # why main_scores' aggregate sets-won tally can't be trusted
+            # here (a mid-set retirement can leave it stuck at 0-0 even
+            # though an earlier set clearly finished with a winner).
+            home_sets, away_sets = scores365.tennis_sets_won(game)
+            frozen_cols = (scores365.fmt_score(home_sets), scores365.fmt_score(away_sets))
 
     else:  # win_a_set
         decided_result = scores365.grade_win_a_set(game, team, direction)
         decided = decided_result is not None
         result = decided_result
+        if decided:
+            # Same reasoning as sets_handicap above - confirmed live, a
+            # real "to Win a Set" pick showed a misleading 0-0 (as if the
+            # match had never been played) for a match that ended by
+            # retirement right after Set 1 had already finished 5-3.
+            home_sets, away_sets = scores365.tennis_sets_won(game)
+            frozen_cols = (scores365.fmt_score(home_sets), scores365.fmt_score(away_sets))
 
     if force_result:
         color_status = force_result

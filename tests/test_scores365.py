@@ -104,6 +104,45 @@ class GradeSpread(unittest.TestCase):
         self.assertIsNone(scores365.grade_spread(game, "Los Angeles Rams", -3.5))
 
 
+class TennisSetsWonRetirement(unittest.TestCase):
+    """tennis_sets_won derives each side's real sets-won count from the
+    completed Set N stages themselves, not 365scores' own aggregate
+    homeCompetitor/awayCompetitor "score" field (what main_scores reads) -
+    confirmed live that field can stay stuck at 0-0 when a match ends by
+    mid-set retirement, even though an earlier set had already finished
+    with a clear winner (a real WTA match: Set 1 ended 5-3, the match then
+    ended by retirement in Set 2, and main_scores still showed 0-0)."""
+
+    def _game(self, stages):
+        return {
+            "homeCompetitor": {"name": "Elisabetta Cocciaretto", "score": 0.0},
+            "awayCompetitor": {"name": "Lucrezia Stefanini", "score": 0.0},
+            "stages": stages,
+        }
+
+    def test_retirement_after_one_completed_set(self):
+        game = self._game([
+            {"name": "Set 1", "homeCompetitorScore": 3.0, "awayCompetitorScore": 5.0, "isEnded": True},
+            {"name": "Set 2", "homeCompetitorScore": -1.0, "awayCompetitorScore": -1.0},
+        ])
+        self.assertEqual(scores365.tennis_sets_won(game), (0, 1))
+
+    def test_unplayed_sets_dont_count(self):
+        game = self._game([
+            {"name": "Set 1", "homeCompetitorScore": 6.0, "awayCompetitorScore": 4.0, "isEnded": True},
+            {"name": "Set 2", "homeCompetitorScore": -1.0, "awayCompetitorScore": -1.0},
+            {"name": "Set 3", "homeCompetitorScore": -1.0, "awayCompetitorScore": -1.0},
+        ])
+        self.assertEqual(scores365.tennis_sets_won(game), (1, 0))
+
+    def test_still_live_set_not_yet_ended_is_not_counted(self):
+        game = self._game([
+            {"name": "Set 1", "homeCompetitorScore": 6.0, "awayCompetitorScore": 2.0, "isEnded": True},
+            {"name": "Set 2", "homeCompetitorScore": 3.0, "awayCompetitorScore": 2.0},
+        ])
+        self.assertEqual(scores365.tennis_sets_won(game), (1, 0))
+
+
 class GradeMoneyline(unittest.TestCase):
     """isWinner is checked before falling back to score comparison - a
     walkover/retirement sits at 0-0 with no sets played, which used to
