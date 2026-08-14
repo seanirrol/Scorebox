@@ -547,29 +547,20 @@ async def _resolve_soccer_psf_match(game: dict, stat_name: str) -> tuple[Optiona
     return fixture_path, (playerstatsfootball.parse_match(html) if html else None)
 
 
-async def _complete_soccer_prop_track(
+async def _complete_soccer_prop_post(
     channel: discord.abc.Messageable, player: str, stat: str, stat_name: str,
-    direction: Optional[float], line: Optional[float], result: tuple,
+    direction: Optional[float], line: Optional[float],
+    game: dict, member_id, member_competitor_id, resolved_name: str, photo_url: Optional[str],
+    psf_match: Optional[dict], fixture_path: Optional[str],
     section: Optional[str], label: Optional[str], origin_channel_id: Optional[int],
 ):
-    """Shared tail of a successful scores365.find_soccer_player() lookup -
-    called both right after a fresh auto-track attempt finds a match
-    immediately, and later from a pendingsoccerprops retry once one shows up.
-    Keeping this split out means the retry path never has to duplicate (or
-    drift from) the actual posting/tracking logic below."""
-    game, member = result
-    game_id, member_id, member_competitor_id = game["id"], member["id"], member.get("competitorId")
-    resolved_name = member.get("name", player)
-    photo_url = scores365.athlete_photo_url(member)
-    if soccerpropstracker.is_tracked(channel.id, game_id, member_id, stat_name, direction, line):
-        botlog.event(f"⏭️ Skipped (soccer prop): **{player}** {stat} — already being tracked in <#{channel.id}>")
-        return "skipped"
-
-    fixture_path, psf_match = await _resolve_soccer_psf_match(game, stat_name)
-    if stat_name in playerstatsfootball.STAT_CATALOG and not fixture_path:
-        botlog.event(f"❌ Not tracked (soccer prop): **{player}** {stat} — couldn't find this match on our extended stats source")
-        return
-
+    """Shared tail once a soccer prop's game+player (and, if this stat
+    needs it, its playerstats.football fixture) are all resolved - posts
+    the card and starts tracking. Split out from _complete_soccer_prop_track
+    so a pendingsoccerprops PSF-fixture retry (see
+    _resolve_pending_soccer_psf_fixture) can reuse it without duplicating
+    the posting logic."""
+    game_id = game["id"]
     embed, file = await soccerpropstracker.build_embed(
         game, member_id, member_competitor_id, resolved_name, photo_url, stat, stat_name, direction, line,
         psf_match=psf_match,
@@ -587,6 +578,82 @@ async def _complete_soccer_prop_track(
     log.info("Auto-tracked soccer player prop pick: %s - %s", player, stat)
     botlog.event(f"✅ Tracked (soccer prop): **{player}** {stat} in <#{channel.id}>")
     return message.id
+
+
+async def _resolve_pending_soccer_psf_fixture(entry: dict) -> bool:
+    """resolve callback for pendingsoccerprops when the player was already
+    found on 365scores but this stat's playerstats.football fixture wasn't
+    (see _complete_soccer_prop_track) - re-fetches the game fresh on every
+    retry (so the eventual card starts from current data, not a stale
+    snapshot from when this was first queued) and re-attempts just the
+    fixture resolution, not the whole player search again."""
+    try:
+        channel = client.get_channel(entry["channel_id"]) or await client.fetch_channel(entry["channel_id"])
+    except discord.HTTPException as e:
+        log.warning("Pending soccer PSF fixture: couldn't resolve channel %s: %s", entry["channel_id"], e)
+        return False
+    game = await asyncio.to_thread(scores365.soccer_game_detail, entry["game_id"])
+    if not game:
+        return False
+    fixture_path, psf_match = await _resolve_soccer_psf_match(game, entry["stat_name"])
+    if not fixture_path:
+        return False
+    await _complete_soccer_prop_post(
+        channel, entry["player"], entry["stat"], entry["stat_name"], entry["direction"], entry["line"],
+        game, entry["member_id"], entry["member_competitor_id"], entry["resolved_name"], entry["photo_url"],
+        psf_match, fixture_path, entry["section"], entry["label"], entry["origin_channel_id"],
+    )
+    return True
+
+
+async def _complete_soccer_prop_track(
+    channel: discord.abc.Messageable, player: str, stat: str, stat_name: str,
+    direction: Optional[float], line: Optional[float], result: tuple,
+    section: Optional[str], label: Optional[str], origin_channel_id: Optional[int],
+):
+    """Shared tail of a successful scores365.find_soccer_player() lookup -
+    called both right after a fresh auto-track attempt finds a match
+    immediately, and later from a pendingsoccerprops retry once one shows up.
+    Keeping this split out means the retry path never has to duplicate (or
+    drift from) the actual posting/tracking logic below.
+
+    If this stat additionally needs playerstats.football (see
+    _resolve_soccer_psf_match) and that lookup fails, queues a SEPARATE
+    retry scoped to just that lookup instead of failing the pick outright -
+    the player's already found, no need to re-search 365scores too.
+    Confirmed live: a real fixture (Philadelphia Union vs Santos Laguna)
+    simply didn't have a page on that source yet hours before kickoff,
+    the same "not published yet" shape as the outer player-search queue,
+    not a wrong-guess bug - retrying is the right fix, not giving up."""
+    game, member = result
+    game_id, member_id, member_competitor_id = game["id"], member["id"], member.get("competitorId")
+    resolved_name = member.get("name", player)
+    photo_url = scores365.athlete_photo_url(member)
+    if soccerpropstracker.is_tracked(channel.id, game_id, member_id, stat_name, direction, line):
+        botlog.event(f"⏭️ Skipped (soccer prop): **{player}** {stat} — already being tracked in <#{channel.id}>")
+        return "skipped"
+
+    fixture_path, psf_match = await _resolve_soccer_psf_match(game, stat_name)
+    if stat_name in playerstatsfootball.STAT_CATALOG and not fixture_path:
+        pendingsoccerprops.queue(
+            channel.id, player, stat, stat_name, direction, line, section, label, origin_channel_id,
+            _resolve_pending_soccer_psf_fixture,
+            queued_detail="Queued - waiting for our extended stats source to publish this match",
+            extra={
+                "game_id": game_id, "member_id": member_id, "member_competitor_id": member_competitor_id,
+                "resolved_name": resolved_name, "photo_url": photo_url,
+            },
+        )
+        botlog.event(
+            f"⏳ Queued (soccer prop): **{player}** {stat} — match found, but not yet on our extended "
+            f"stats source, will retry automatically"
+        )
+        return
+    return await _complete_soccer_prop_post(
+        channel, player, stat, stat_name, direction, line,
+        game, member_id, member_competitor_id, resolved_name, photo_url,
+        psf_match, fixture_path, section, label, origin_channel_id,
+    )
 
 
 async def _resolve_pending_soccer_prop(entry: dict) -> bool:

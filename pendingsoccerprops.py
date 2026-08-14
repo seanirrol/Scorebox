@@ -30,7 +30,7 @@ asyncio.sleep can't survive a deploy.
 import asyncio
 import logging
 import time
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, Optional
 
 import dailylog
 import scores365
@@ -109,11 +109,19 @@ async def _retry_loop(entry_id: str, entry: dict, resolve: Callable[[dict], Awai
 def queue(
     channel_id: int, player: str, stat: str, stat_name: str, direction, line,
     section, label, origin_channel_id, resolve: Callable[[dict], Awaitable[bool]],
+    queued_detail: str = "Queued - waiting for match lineup to be published",
+    extra: Optional[dict] = None,
 ) -> dict:
-    """Called right after a fresh auto-track attempt's find_soccer_player
-    comes back empty. stat_name is the already-validated catalog key (kept
-    separate from stat, the raw pick text, so the retry never has to
-    re-derive it). resolve is awaited on every retry and on resume_all -
+    """Called right after a fresh auto-track attempt comes back empty -
+    either find_soccer_player itself found nothing yet, or (extra passed)
+    the player WAS found but a second, stat-specific lookup (e.g.
+    playerstats.football, see bot.py's _resolve_soccer_psf_match) came back
+    empty. stat_name is the already-validated catalog key (kept separate
+    from stat, the raw pick text, so the retry never has to re-derive it).
+    extra is merged into the persisted entry as-is - lets a retry scoped to
+    just that second lookup carry whatever it needs (game id, resolved
+    player id, ...) without find_soccer_player-specific fields leaking into
+    every entry. resolve is awaited on every retry and on resume_all -
     return True once the pick has been fully posted/tracked so the entry
     can be dropped from the queue."""
     entry_id = f"{channel_id}:{player}:{stat}:{int(time.time() * 1000)}"
@@ -122,12 +130,14 @@ def queue(
         "direction": direction, "line": line, "section": section, "label": label,
         "origin_channel_id": origin_channel_id, "queued_at": time.time(),
     }
+    if extra:
+        entry.update(extra)
     _persist(entry_id, entry)
     dailylog.record_pick(
         channel_id, "pendingsoccerprops", entry_id, section, label,
         message_id=0, origin_channel_id=origin_channel_id, sport="Soccer",
     )
-    dailylog.touch(channel_id, "pendingsoccerprops", entry_id, "Queued - waiting for match lineup to be published")
+    dailylog.touch(channel_id, "pendingsoccerprops", entry_id, queued_detail)
     asyncio.create_task(_retry_loop(entry_id, entry, resolve))
     return entry
 
