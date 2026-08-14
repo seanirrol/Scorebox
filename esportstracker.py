@@ -58,6 +58,7 @@ import throttle
 
 log = logging.getLogger("scorebox.esportstracker")
 MAX_CONSECUTIVE_MISSES = 3
+MAX_CONSECUTIVE_RATE_LIMIT_FAILURES = 20  # separate, more generous threshold for a 429 on the edit itself - see tracker.py
 TRASH_EMOJI = "🗑️"
 
 _SPORT_LABELS = {"dota2": "Dota 2", "cs2": "CS2"}
@@ -288,6 +289,7 @@ async def _track_loop(
 
     consecutive_misses = 0
     consecutive_edit_failures = 0
+    consecutive_rate_limit_failures = 0
     # Filled in once the match is first resolved - passed back into later
     # get_series calls purely to help GosuGamers disambiguate a back-to-back
     # series between the same two teams, not required for hawk.live.
@@ -473,7 +475,22 @@ async def _track_loop(
             try:
                 await throttle.run(channel_id, lambda: message.edit(embed=embed, attachments=[file]))
                 consecutive_edit_failures = 0
+                consecutive_rate_limit_failures = 0
             except discord.HTTPException as e:
+                if e.status == 429:
+                    consecutive_rate_limit_failures += 1
+                    log.warning(
+                        "Failed to edit esports tracking message, rate limited (failure %d/%d): %s",
+                        consecutive_rate_limit_failures, MAX_CONSECUTIVE_RATE_LIMIT_FAILURES, e,
+                    )
+                    if consecutive_rate_limit_failures >= MAX_CONSECUTIVE_RATE_LIMIT_FAILURES:
+                        botlog.event(
+                            f"⚠️ Auto-stopped tracking (esports {market}): "
+                            f"{team_a} v {team_b} message edit rate-limited {MAX_CONSECUTIVE_RATE_LIMIT_FAILURES}x in a row, in <#{channel_id}>"
+                        )
+                        await _void_leg_and_give_up("Message edit rate-limited repeatedly")
+                        break
+                    continue
                 consecutive_edit_failures += 1
                 log.warning(
                     "Failed to edit esports tracking message (failure %d/%d): %s",

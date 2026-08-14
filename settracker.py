@@ -61,6 +61,8 @@ import throttle
 
 log = logging.getLogger("scorebox.settracker")
 MAX_CONSECUTIVE_MISSES = 3
+
+MAX_CONSECUTIVE_RATE_LIMIT_FAILURES = 20  # separate, more generous threshold for a 429 on the edit itself - see tracker.py
 TRASH_EMOJI = "🗑️"
 
 _active: dict[str, asyncio.Task] = {}
@@ -389,6 +391,7 @@ async def _track_loop(
 
     consecutive_misses = 0
     consecutive_edit_failures = 0
+    consecutive_rate_limit_failures = 0
 
     async def _repost_final(embed: discord.Embed, file: discord.File):
         """Bumps the card to the bottom of the channel (pre-kickoff, graded,
@@ -606,7 +609,19 @@ async def _track_loop(
             try:
                 await throttle.run(channel_id, lambda: message.edit(embed=embed, attachments=[file]))
                 consecutive_edit_failures = 0
+                consecutive_rate_limit_failures = 0
             except discord.HTTPException as e:
+                if e.status == 429:
+                    consecutive_rate_limit_failures += 1
+                    log.warning(
+                        "Failed to edit tennis-market tracking message, rate limited (failure %d/%d): %s",
+                        consecutive_rate_limit_failures, MAX_CONSECUTIVE_RATE_LIMIT_FAILURES, e,
+                    )
+                    if consecutive_rate_limit_failures >= MAX_CONSECUTIVE_RATE_LIMIT_FAILURES:
+                        botlog.event(f"⚠️ Auto-stopped tracking ({market}): game `{game_id}` message edit rate-limited {MAX_CONSECUTIVE_RATE_LIMIT_FAILURES}x in a row, in <#{channel_id}>")
+                        await _void_leg_and_give_up("Message edit rate-limited repeatedly")
+                        break
+                    continue
                 consecutive_edit_failures += 1
                 log.warning(
                     "Failed to edit tennis-market tracking message (failure %d/%d): %s",
