@@ -62,6 +62,14 @@ _COMBO_STAT_COMPONENTS = {
     PRA_KEY: (("PTS", None), ("REB", None), ("AST", None)),
 }
 
+# ESPN's raw "IP" boxscore field uses baseball notation - "5.2" means 5 full
+# innings plus 2 outs (17 outs total), NOT 5.2 decimal innings - confirmed
+# live against a real finished game's boxscore ("0.1"/"0.2"/"1.0" for 1/2/3
+# outs). "Pitching Outs" is a real, distinct prop market (outs recorded, not
+# innings) that needs this converted to a plain integer rather than read as
+# a raw label - handled specially in get_stat_value like TOTAL_BASES_KEY.
+PITCHING_OUTS_KEY = ("__computed__", "pitching_outs")
+
 # ESPN reports these boxscore labels as a "made-attempted" string (e.g.
 # "1-6"), never a plain number - confirmed live for every athlete in a real
 # WNBA boxscore's "3PT" column. Passing that straight to float() in
@@ -88,6 +96,7 @@ STAT_CATALOG = {
         "Walks (Pitching)": ("BB", "IP"),
         "Earned Runs": ("ER", "IP"),
         "Innings Pitched": ("IP", "IP"),
+        "Pitching Outs": PITCHING_OUTS_KEY,
         "Total Bases": TOTAL_BASES_KEY,
     },
     "basketball": {
@@ -373,6 +382,17 @@ def get_stat_value(event: dict, entity_id: str, stat_key: tuple) -> tuple[Option
 
     if stat_key == TOTAL_BASES_KEY:
         return _compute_total_bases(event, entity_id), is_home, team
+
+    if stat_key == PITCHING_OUTS_KEY:
+        raw, _, _ = get_stat_value(event, entity_id, ("IP", "IP"))
+        if raw is None:
+            return None, is_home, team
+        whole, _, partial = str(raw).partition(".")
+        try:
+            outs = int(whole) * 3 + (int(partial) if partial else 0)
+        except ValueError:
+            return None, is_home, team
+        return outs, is_home, team
 
     if stat_key in _COMBO_STAT_COMPONENTS:
         # PTS/REB/AST are always whole numbers - int, not float, so display

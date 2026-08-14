@@ -97,8 +97,17 @@ def _split_merged_bracket_lines(line: str) -> list[str]:
     return splits
 # The optional "the" handles wording like "Roki Sasaki Over the 1.5 Walks
 # Allowed" (confirmed live - a real pick worded this way silently never
-# posted, since the number wasn't immediately after Over/Under).
-_PLAYER_STAT_RE = re.compile(r"^(.+?)\s+(Over|Under)\s+(?:the\s+)?([\d.]+)\s+(.+?)\s*(?:\(|$)", re.IGNORECASE)
+# posted, since the number wasn't immediately after Over/Under). The
+# optional "(...)" right after the number handles "(Alt Line)" placed
+# BETWEEN the number and the stat name (e.g. "OVER 1.5 (Alt Line) THREE
+# POINTERS") rather than at the very end where _clean_line's trailing-
+# paren stripping would remove it - confirmed live, without this the
+# whole "(Alt Line) Three Pointers" text got captured as the stat name,
+# which then matched nothing in STAT_CATALOG and silently misparsed as a
+# team pick instead of a player prop.
+_PLAYER_STAT_RE = re.compile(
+    r"^(.+?)\s+(Over|Under)\s+(?:the\s+)?([\d.]+)\s+(?:\([^)]*\)\s+)?(.+?)\s*(?:\(|$)", re.IGNORECASE,
+)
 
 # Combined basketball stat props ("P+R+A") are conventionally worded with
 # the stat token BEFORE "Over/Under" (e.g. "Shakira Austin P+R+A Over

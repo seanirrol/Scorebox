@@ -79,6 +79,36 @@ class StatAliases(unittest.TestCase):
         self.assertEqual(pick["stat"], "Rushing Yards")
 
 
+class PitchingOutsAndMidPhraseAltLine(unittest.TestCase):
+    """Two distinct real-message bugs confirmed live in the same slate:
+    "Pitching Outs" wasn't a recognized stat at all (fell through to a
+    team-pick guess on the pitcher's own name), and "(Alt Line)" placed
+    BETWEEN the number and the stat name (rather than at the very end,
+    where _clean_line's trailing-paren stripping would remove it) got
+    captured as part of the stat name and matched nothing."""
+
+    def test_pitching_outs_recognized_as_a_stat(self):
+        pick = picks.parse_pick_line("[MLB] George Kirby Over 17.5 Pitching Outs (PrizePicks O 17.5)")
+        self.assertEqual(pick["kind"], "playerprops")
+        self.assertEqual(pick["stat"], "Pitching Outs")
+
+    def test_pitching_outs_with_trailing_alt_line_still_works(self):
+        pick = picks.parse_pick_line("[MLB] Jake Bennett Over 15.5 Pitching Outs (Alt Line) (Underdog Higher 17.5)")
+        self.assertEqual(pick["kind"], "playerprops")
+        self.assertEqual(pick["stat"], "Pitching Outs")
+
+    def test_alt_line_between_number_and_stat_name(self):
+        pick = picks.parse_pick_line("[WNBA] Bridget Carleton OVER 1.5 (Alt Line) THREE POINTERS (Underdog -235)")
+        self.assertEqual(pick["kind"], "playerprops")
+        self.assertEqual(pick["stat"], "3-Pointers Made")
+        self.assertEqual(pick["line"], 1.5)
+
+    def test_alt_line_at_the_end_still_works_unaffected(self):
+        pick = picks.parse_pick_line("[WNBA] Bridget Carleton OVER 2.5 THREE POINTERS (PrizePicks O 2.5)")
+        self.assertEqual(pick["kind"], "playerprops")
+        self.assertEqual(pick["stat"], "3-Pointers Made")
+
+
 class WinASetNoMatchup(unittest.TestCase):
     """"Player to Win at Least 1 Set" / "Player to Win a Set" with no
     opponent named at all - confirmed live, 7 of 8 picks in one real
