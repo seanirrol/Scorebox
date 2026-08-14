@@ -641,6 +641,27 @@ def _meaningful_words(name: str) -> set[str]:
     return filtered or words
 
 
+def _levenshtein(a: str, b: str) -> int:
+    if len(a) < len(b):
+        a, b = b, a
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i] + [0] * len(b)
+        for j, cb in enumerate(b, 1):
+            cur[j] = min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb))
+        prev = cur
+    return prev[-1]
+
+
+def _fuzzy_word_match(a: str, b: str) -> bool:
+    # Guarded by a length floor so short, unrelated words (e.g. "Al" vs
+    # "Ed") can't collide on a small edit distance - only meaningfully
+    # long words are compared this loosely.
+    if len(a) < 5 or len(b) < 5:
+        return a == b
+    return _levenshtein(a, b) <= 2
+
+
 def names_match(a: str, b: str) -> bool:
     na, nb = _normalize(a), _normalize(b)
     if not na or not nb:
@@ -651,7 +672,22 @@ def names_match(a: str, b: str) -> bool:
     if not wa or not wb:
         return False
     smaller, larger = (wa, wb) if len(wa) <= len(wb) else (wb, wa)
-    return smaller.issubset(larger)
+    if smaller.issubset(larger):
+        return True
+    # Same word count and every word but one already matches exactly -
+    # allow that single remaining pair to differ by a small edit distance,
+    # since a first name is sometimes transliterated differently by two
+    # sources (confirmed live: "Liudmila Samsonova" vs 365scores' own
+    # "Ludmilla Samsonova" for the same player, edit distance 2). The
+    # surname (or any other shared word) still has to match exactly, which
+    # anchors this against matching two genuinely different people.
+    if len(wa) == len(wb):
+        unmatched_a, unmatched_b = wa - wb, wb - wa
+        if len(unmatched_a) == 1 and len(unmatched_b) == 1:
+            (word_a,), (word_b,) = unmatched_a, unmatched_b
+            if _fuzzy_word_match(word_a, word_b):
+                return True
+    return False
 
 
 def start_epoch(game: dict) -> float:

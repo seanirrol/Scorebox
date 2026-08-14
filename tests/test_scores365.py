@@ -45,6 +45,29 @@ class NamesMatchAccentFolding(unittest.TestCase):
         self.assertTrue(scores365.names_match("Xin-Yu Wang", "Xinyu"))
 
 
+class NamesMatchFuzzyTransliteration(unittest.TestCase):
+    """A first name transliterated differently by two sources (e.g. a
+    Russian name romanized two valid ways) is allowed to differ by a
+    small edit distance, but only when every OTHER word already matches
+    exactly - that anchor is what keeps this from matching two different
+    people who happen to share a surname."""
+
+    def test_liudmila_vs_ludmilla_matches(self):
+        # Confirmed live: a pick for "Liudmila Samsonova" went untracked
+        # because 365scores itself spells it "Ludmilla Samsonova".
+        self.assertTrue(scores365.names_match("Liudmila Samsonova", "Ludmilla Samsonova"))
+
+    def test_different_first_names_same_surname_still_rejected(self):
+        self.assertFalse(scores365.names_match("Emma Smith", "Olivia Smith"))
+
+    def test_short_words_are_not_fuzzy_matched(self):
+        # Below the length floor - must be an exact match, not edit-distance.
+        self.assertFalse(scores365.names_match("Al Jones", "Ed Jones"))
+
+    def test_surname_must_still_match_exactly(self):
+        self.assertFalse(scores365.names_match("Liudmila Samsonova", "Ludmilla Petrova"))
+
+
 class GradeMoneyline(unittest.TestCase):
     """isWinner is checked before falling back to score comparison - a
     walkover/retirement sits at 0-0 with no sets played, which used to
