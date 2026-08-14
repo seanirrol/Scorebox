@@ -224,10 +224,42 @@ async def build_embed(
     status = series_data["status"]
     decided, result = grade_now(series_data, market, picked_team, direction, line, map_number, picked_maps, other_maps)
 
+    # Current running kill count for total_kills/team_total_kills - both the
+    # progress display below and the early-win check just after reuse this
+    # same value. None for every other market, CS2, or a Dota 2 series only
+    # ever resolved via the GosuGamers fallback (no per-map kill data).
+    current_kills: Optional[int] = None
+    if market in ("total_kills", "team_total_kills"):
+        kills = esports.total_kills(series_data)
+        if kills is not None:
+            if market == "total_kills":
+                current_kills = kills[0] + kills[1]
+            elif esports.names_match(series_data["home_team"], picked_team):
+                current_kills = kills[0]
+            elif esports.names_match(series_data["away_team"], picked_team):
+                current_kills = kills[1]
+
+    # The running kill total only ever grows as more maps get played (a
+    # map's own kill count can't retroactively shrink), so once an Over
+    # line is already cleared it can't un-clear - same reasoning as
+    # tracker.py's own early-win Over tagging elsewhere in this bot, safe
+    # to apply here despite grade_total_kills/grade_team_total_kills
+    # themselves deliberately waiting for the series to end (see their own
+    # docstrings) - that wait is about not being able to call an early
+    # UNDER, not about Over. Purely cosmetic: the actual dailylog
+    # settlement still only happens once `decided` for real, same as
+    # every other early-win tag in this bot.
+    early_win = (
+        not result and current_kills is not None and direction == "over"
+        and line is not None and current_kills > line
+    )
+
     if force_result:
         color_status = force_result
     elif result:
         color_status = result
+    elif early_win:
+        color_status = "won"
     elif status in ("notstarted", "finished"):
         color_status = status
     else:
@@ -236,29 +268,17 @@ async def build_embed(
     embed = discord.Embed(color=scoreimage.EMBED_COLOR[color_status])
     if result:
         embed.title = _RESULT_TITLES[result]
+    elif early_win:
+        embed.title = _RESULT_TITLES["won"]
 
     author_bits = [b for b in (_SPORT_LABELS.get(series_data["sport"]), series_data.get("tournament")) if b]
     if author_bits:
         embed.set_author(name=" • ".join(author_bits))
 
     label = pick_label(market, picked_team, direction, line, map_number, picked_maps, other_maps)
-    if market in ("total_kills", "team_total_kills"):
-        # Shows progress toward the line while the series is still live -
-        # e.g. "Over 108.5 Total Kills (100)". None (e.g. CS2, or a Dota 2
-        # series only ever resolved via the GosuGamers fallback with no
-        # per-map kill data) just leaves the label bare, same as before.
-        kills = esports.total_kills(series_data)
-        if kills is not None:
-            if market == "total_kills":
-                current = kills[0] + kills[1]
-            elif esports.names_match(series_data["home_team"], picked_team):
-                current = kills[0]
-            elif esports.names_match(series_data["away_team"], picked_team):
-                current = kills[1]
-            else:
-                current = None
-            if current is not None:
-                label = f"{label} ({current})"
+    if current_kills is not None:
+        # e.g. "Over 108.5 Total Kills (100)" - progress toward the line.
+        label = f"{label} ({current_kills})"
     description_lines = [label]
     if status == "notstarted" and series_data.get("start_epoch"):
         description_lines.append(f"<t:{int(series_data['start_epoch'])}:f>")
