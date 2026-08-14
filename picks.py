@@ -1895,6 +1895,22 @@ def parse_picks_message(content: str) -> list[dict]:
             results.append(pick)
             continue
 
+        if sport in ("dota2", "cs2"):
+            # No generic bare-name fallback for esports at all (see this
+            # module's own docstring above _ESPORTS_MAP_HANDICAP_RE) -
+            # hawk.live/GosuGamers can only resolve a match by BOTH team
+            # names together, so a bare team with no opponent genuinely
+            # can't be tracked. Confirmed live: a real "Iron Wing to Win at
+            # Least One Map" / "BoomBoys ML" pick under a bare "Dota 2"
+            # header (no matchup, and _parse_esports_pick above already
+            # returned None for exactly that reason) fell all the way down
+            # to here and got misread as a literal team named "Iron Wing to
+            # Win at Least One Map" - then routed to the generic
+            # scores365-backed auto-track, which has no esports coverage
+            # whatsoever, so it queued and retried forever with zero chance
+            # of ever resolving.
+            continue
+
         name = _is_simple_pick_name(_clean_line(bare))
         if not name:
             continue

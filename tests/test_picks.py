@@ -109,6 +109,41 @@ class PitchingOutsAndMidPhraseAltLine(unittest.TestCase):
         self.assertEqual(pick["stat"], "3-Pointers Made")
 
 
+class EsportsBareHeaderNoMatchupFallback(unittest.TestCase):
+    """Every esports market requires an explicit "Team A vs Team B" matchup
+    (hawk.live/GosuGamers can only resolve a match by both team names
+    together - see picks.py's own comment above _ESPORTS_MAP_HANDICAP_RE),
+    so _parse_esports_pick correctly returns None for a bare no-matchup
+    line. But under a bare (non-bracket-tagged) "Dota 2"/"CS2" header, that
+    None used to fall all the way through to the generic
+    _is_simple_pick_name bare-team fallback meant for ordinary sports -
+    confirmed live, a real "Iron Wing to Win at Least One Map"/"BoomBoys
+    ML" pick got misread as literal (nonsense) team names and routed to
+    the generic scores365-backed auto-track, which has no esports coverage
+    at all, so it queued and retried forever with zero chance of ever
+    resolving."""
+
+    def test_bare_header_no_matchup_lines_are_rejected_not_misrouted(self):
+        msg = (
+            "Dota 2\n"
+            "Iron Wing to Win at Least One Map\n"
+            "LGD Gaming Wins at Least One Map\n"
+            "BoomBoys ML"
+        )
+        self.assertEqual(picks.parse_picks_message(msg), [])
+
+    def test_bare_header_with_a_real_matchup_still_works(self):
+        msg = "Dota 2\nOG vs Huligani - OG ML"
+        picked = picks.parse_picks_message(msg)
+        self.assertEqual(len(picked), 1)
+        self.assertEqual(picked[0]["kind"], "esports_match_winner")
+
+    def test_ordinary_sport_bare_name_fallback_unaffected(self):
+        msg = "WNBA\nIndiana Fever"
+        picked = picks.parse_picks_message(msg)
+        self.assertEqual(picked, [{"kind": "track", "sport": "basketball", "team": "Indiana Fever", "section": "WNBA", "raw": "Indiana Fever"}])
+
+
 class MisfiledPropUnderWrongSectionHeader(unittest.TestCase):
     """A player-prop-shaped line whose stat belongs to a DIFFERENT sport
     than its own section header (the tipster's own mistake, not a code
