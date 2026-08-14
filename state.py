@@ -31,6 +31,7 @@ DAILY_LOG_FILE = os.path.join(_DIR, "daily_log_state.json")
 PENDING_SOCCER_PROPS_FILE = os.path.join(_DIR, "pending_soccer_props_state.json")
 HALF_FILE = os.path.join(_DIR, "half_state.json")
 PENDING_TRACK_FILE = os.path.join(_DIR, "pending_track_state.json")
+WINLOSSGRAPH_OVERRIDES_FILE = os.path.join(_DIR, "winlossgraph_overrides_state.json")
 
 
 def _load(path: str) -> dict[str, Any]:
@@ -174,3 +175,11 @@ def load_pending_track() -> dict[str, Any]:
 
 def save_pending_track(data: dict[str, Any]):
     _save(PENDING_TRACK_FILE, data)
+
+
+def load_winlossgraph_overrides() -> dict[str, Any]:
+    return _load(WINLOSSGRAPH_OVERRIDES_FILE)
+
+
+def save_winlossgraph_overrides(data: dict[str, Any]):
+    _save(WINLOSSGRAPH_OVERRIDES_FILE, data)

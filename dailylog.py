@@ -190,6 +190,28 @@ _RELIABLE_FROM = {
 }
 
 
+def _winlossgraph_override_key(origin_channel_ids: Iterable[int], date_str: str) -> str:
+    ids = {origin_channel_ids} if isinstance(origin_channel_ids, int) else set(origin_channel_ids)
+    return f"{'|'.join(str(i) for i in sorted(ids))}:{date_str}"
+
+
+def set_winlossgraph_override(origin_channel_ids: Iterable[int], date_str: str, won: int, lost: int):
+    """Manually overrides /winlossgraph's displayed won/lost counts for one
+    date and route, without touching any individual pick's dailylog entry
+    - /summary is completely unaffected. Meant for the rare case where the
+    chart's own reported numbers need to differ from what the day's
+    individual pick statuses currently sum to."""
+    data = state.load_winlossgraph_overrides()
+    data[_winlossgraph_override_key(origin_channel_ids, date_str)] = {"won": won, "lost": lost}
+    state.save_winlossgraph_overrides(data)
+
+
+def clear_winlossgraph_override(origin_channel_ids: Iterable[int], date_str: str):
+    data = state.load_winlossgraph_overrides()
+    data.pop(_winlossgraph_override_key(origin_channel_ids, date_str), None)
+    state.save_winlossgraph_overrides(data)
+
+
 def daily_win_loss(origin_channel_ids: Iterable[int], year_month: str) -> list[tuple[str, int, int]]:
     """(date_str, won_count, lost_count) for every date in year_month
     ("YYYY-MM") that has at least one won/lost decision from these origin
@@ -197,7 +219,9 @@ def daily_win_loss(origin_channel_ids: Iterable[int], year_month: str) -> list[t
     Push/void/pending picks are excluded entirely (same "decided only" rule
     as bot.py's _win_rate_line) - a day with only pushes/voids has no
     meaningful win rate to plot. Dates before _RELIABLE_FROM's floor for
-    this month (if any) are excluded too."""
+    this month (if any) are excluded too. A date with a manual override
+    (see set_winlossgraph_override) reports that instead of the real
+    computed counts - checked last, so it always wins."""
     ids = {origin_channel_ids} if isinstance(origin_channel_ids, int) else set(origin_channel_ids)
     floor = _RELIABLE_FROM.get(year_month)
     data = state.load_daily_log()
@@ -211,6 +235,14 @@ def daily_win_loss(origin_channel_ids: Iterable[int], year_month: str) -> list[t
             counts.setdefault(entry["date"], [0, 0])[0] += 1
         elif entry["status"] == "lost":
             counts.setdefault(entry["date"], [0, 0])[1] += 1
+
+    overrides = state.load_winlossgraph_overrides()
+    for key, override in overrides.items():
+        ids_part, date_str = key.rsplit(":", 1)
+        if not date_str.startswith(year_month) or {int(i) for i in ids_part.split("|")} != ids:
+            continue
+        counts[date_str] = [override["won"], override["lost"]]
+
     return [(d, w, l) for d, (w, l) in sorted(counts.items())]
 
 

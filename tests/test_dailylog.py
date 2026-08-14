@@ -24,19 +24,27 @@ import state
 
 
 class DailyLogTestCase(unittest.TestCase):
-    """Base class that isolates every test from the real daily_log_state.json."""
+    """Base class that isolates every test from the real daily_log_state.json
+    and winlossgraph_overrides_state.json."""
 
     def setUp(self):
         self._real_path = state.DAILY_LOG_FILE
+        self._real_overrides_path = state.WINLOSSGRAPH_OVERRIDES_FILE
         fd, self._tmp_path = tempfile.mkstemp(suffix=".json")
         os.close(fd)
         os.remove(self._tmp_path)  # _load() treats a missing file as {}
         state.DAILY_LOG_FILE = self._tmp_path
+        fd2, self._tmp_overrides_path = tempfile.mkstemp(suffix=".json")
+        os.close(fd2)
+        os.remove(self._tmp_overrides_path)
+        state.WINLOSSGRAPH_OVERRIDES_FILE = self._tmp_overrides_path
 
     def tearDown(self):
         state.DAILY_LOG_FILE = self._real_path
-        if os.path.exists(self._tmp_path):
-            os.remove(self._tmp_path)
+        state.WINLOSSGRAPH_OVERRIDES_FILE = self._real_overrides_path
+        for path in (self._tmp_path, self._tmp_overrides_path):
+            if os.path.exists(path):
+                os.remove(path)
 
 
 class RecordPickAndResult(DailyLogTestCase):
@@ -177,6 +185,48 @@ class WinRateAggregation(DailyLogTestCase):
         self._log(1, "k1", "won", "2026-09-01")
         rows = dailylog.daily_win_loss([2], "2026-09")
         self.assertEqual(rows, [("2026-09-01", 1, 0)])
+
+
+class WinLossGraphOverrides(DailyLogTestCase):
+    """set_winlossgraph_override lets /winlossgraph show custom counts for
+    a date without touching any individual pick's dailylog entry - real
+    computed rows still come through unaffected for every date except the
+    overridden one."""
+
+    def _log(self, channel_id, key, status, date_str, origin=2):
+        dailylog.record_pick(channel_id, "tracker", key, "MLB", f"Pick {key}", message_id=1, origin_channel_id=origin)
+        entry_key = f"{channel_id}:tracker:{key}"
+        data = state.load_daily_log()
+        data[entry_key]["date"] = date_str
+        data[entry_key]["status"] = status
+        state.save_daily_log(data)
+
+    def test_override_replaces_the_real_computed_row(self):
+        self._log(1, "k1", "won", "2026-08-13")
+        self._log(1, "k2", "lost", "2026-08-13")
+        self.assertEqual(dailylog.daily_win_loss([2], "2026-08"), [("2026-08-13", 1, 1)])
+        dailylog.set_winlossgraph_override([2], "2026-08-13", 26, 14)
+        self.assertEqual(dailylog.daily_win_loss([2], "2026-08"), [("2026-08-13", 26, 14)])
+
+    def test_override_does_not_affect_other_dates(self):
+        self._log(1, "k1", "won", "2026-08-12")
+        dailylog.set_winlossgraph_override([2], "2026-08-13", 26, 14)
+        rows = dailylog.daily_win_loss([2], "2026-08")
+        self.assertEqual(rows, [("2026-08-12", 1, 0), ("2026-08-13", 26, 14)])
+
+    def test_override_is_scoped_to_its_own_origin_route(self):
+        # premium (origin {2}) and free (origin {3, 4}) must never leak
+        # into each other's overrides.
+        dailylog.set_winlossgraph_override([2], "2026-08-13", 26, 14)
+        dailylog.set_winlossgraph_override([3, 4], "2026-08-13", 19, 10)
+        self.assertEqual(dailylog.daily_win_loss([2], "2026-08"), [("2026-08-13", 26, 14)])
+        self.assertEqual(dailylog.daily_win_loss([3, 4], "2026-08"), [("2026-08-13", 19, 10)])
+
+    def test_clear_override_restores_the_real_computed_row(self):
+        self._log(1, "k1", "won", "2026-08-13")
+        dailylog.set_winlossgraph_override([2], "2026-08-13", 26, 14)
+        dailylog.clear_winlossgraph_override([2], "2026-08-13")
+        self.assertEqual(dailylog.daily_win_loss([2], "2026-08"), [("2026-08-13", 1, 0)])
 
 
 class AvailableDatesAndMonths(DailyLogTestCase):
