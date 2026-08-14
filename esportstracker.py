@@ -239,19 +239,27 @@ async def build_embed(
             elif esports.names_match(series_data["away_team"], picked_team):
                 current_kills = kills[1]
 
-    # The running kill total only ever grows as more maps get played (a
-    # map's own kill count can't retroactively shrink), so once an Over
-    # line is already cleared it can't un-clear - same reasoning as
-    # tracker.py's own early-win Over tagging elsewhere in this bot, safe
-    # to apply here despite grade_total_kills/grade_team_total_kills
-    # themselves deliberately waiting for the series to end (see their own
+    # Total maps played so far - series_data's own home/away maps-won score
+    # is already live regardless of decided status, and (like the kill
+    # count above) only ever grows as more maps get played.
+    current_maps: Optional[int] = None
+    if market == "total_maps":
+        current_maps = series_data["home_score"] + series_data["away_score"]
+
+    # Both the kill total and the maps total only ever grow as more maps
+    # get played, so once an Over line is already cleared it can't
+    # un-clear - same reasoning as tracker.py's own early-win Over tagging
+    # elsewhere in this bot, safe to apply here despite
+    # grade_total_kills/grade_team_total_kills/grade_total_maps themselves
+    # deliberately waiting for the series to end (see their own
     # docstrings) - that wait is about not being able to call an early
     # UNDER, not about Over. Purely cosmetic: the actual dailylog
     # settlement still only happens once `decided` for real, same as
     # every other early-win tag in this bot.
+    current_value = current_kills if current_kills is not None else current_maps
     early_win = (
-        not result and current_kills is not None and direction == "over"
-        and line is not None and current_kills > line
+        not result and current_value is not None and direction == "over"
+        and line is not None and current_value > line
     )
 
     if force_result:

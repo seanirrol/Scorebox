@@ -222,6 +222,16 @@ async def build_embed(
     frozen_cols: Optional[tuple[str, str]] = None
     final_period_text = "Final"
 
+    # Games won only ever climb during a match (a completed game's score
+    # can't retroactively shrink), so once an Over line is already cleared
+    # it can't un-clear - same reasoning as tracker.py's own early-win
+    # tagging elsewhere in this bot. Applies to all three Over/Under games
+    # markets below, using the same live tennis_match_games value each
+    # already computes for its own frozen_cols/breakdown display. Over-only
+    # (an early Under can't be called the same way) and purely cosmetic -
+    # actual dailylog settlement still waits for `decided` for real.
+    early_win = False
+
     if market == "set1_moneyline":
         breakdown = scores365.tennis_first_set_result(game)
         decided = breakdown is not None
@@ -236,6 +246,13 @@ async def build_embed(
         if decided:
             result = scores365.grade_over_under(breakdown[0] + breakdown[1], direction, line)
             frozen_cols = (scores365.fmt_score(breakdown[0]), scores365.fmt_score(breakdown[1]))
+        elif direction == "over" and line is not None:
+            # Set 1 hasn't ended yet - tennis_match_games mid-Set-1 is
+            # effectively just Set 1's own live running total, since no
+            # later set has started contributing to it yet.
+            home_games, away_games = scores365.tennis_match_games(game)
+            if home_games + away_games > line:
+                early_win = True
         final_period_text = "1st Set Final"
 
     elif market == "match_total_games":
@@ -243,6 +260,8 @@ async def build_embed(
         home_games, away_games = scores365.tennis_match_games(game)
         if decided:
             result = scores365.grade_over_under(home_games + away_games, direction, line)
+        elif direction == "over" and line is not None and home_games + away_games > line:
+            early_win = True
         frozen_cols = (scores365.fmt_score(home_games), scores365.fmt_score(away_games))  # live-running, shown whether decided or not
 
     elif market == "player_total_games":
@@ -254,6 +273,8 @@ async def build_embed(
         player_games = home_games if scores365.names_match(home_competitor.get("name", ""), team) else away_games
         if decided:
             result = scores365.grade_over_under(player_games, direction, line)
+        elif direction == "over" and line is not None and player_games > line:
+            early_win = True
         frozen_cols = (scores365.fmt_score(home_games), scores365.fmt_score(away_games))  # live-running, shown whether decided or not
 
     elif market == "games_handicap":
@@ -290,6 +311,8 @@ async def build_embed(
         color_status = force_result
     elif result:
         color_status = result
+    elif early_win:
+        color_status = "won"
     elif status in ("notstarted", "finished"):
         color_status = status
     else:
@@ -298,6 +321,8 @@ async def build_embed(
     embed = discord.Embed(color=scoreimage.EMBED_COLOR[color_status])
     if result:
         embed.title = _RESULT_TITLES[result]
+    elif early_win:
+        embed.title = _RESULT_TITLES["won"]
 
     author_bits = [b for b in (scores365.sport_label(sport_id), game.get("competitionDisplayName")) if b]
     if author_bits:

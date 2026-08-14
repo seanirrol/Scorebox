@@ -190,8 +190,25 @@ async def build_embed(
     else:
         result = None
 
+    # ESPN's live "period" field is the round currently being fought - once
+    # it's already past the Over line, the fight has definitively gone that
+    # far (round numbers only climb during a live bout, never reset), so an
+    # Over pick is locked in regardless of how the fight eventually ends -
+    # same "can't un-clear" reasoning as tracker.py's own early-win tagging
+    # elsewhere in this bot. An early Under can't be called the same way
+    # (the fight could still end in a later round than line), so this is
+    # Over-only. Purely cosmetic: actual dailylog settlement still waits
+    # for is_finished for real.
+    early_win = False
+    if not decided and total_direction == "over" and total_line is not None:
+        current_round = competition.get("status", {}).get("period")
+        if current_round is not None and current_round > total_line:
+            early_win = True
+
     if result:
         color_status = result
+    elif early_win:
+        color_status = "won"
     elif decided:
         color_status = "finished"
     elif competition.get("status", {}).get("type", {}).get("state") == "in":
@@ -202,6 +219,8 @@ async def build_embed(
     embed = discord.Embed(color=scoreimage.EMBED_COLOR[color_status])
     if result:
         embed.title = _RESULT_TITLES[result]
+    elif early_win:
+        embed.title = _RESULT_TITLES["won"]
     league_label = espn_ufc.LEAGUE_LABELS.get(league_slug, league_slug.upper())
     embed.set_author(name=f"{league_label} • {event_name}")
 
