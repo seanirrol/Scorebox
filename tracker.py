@@ -71,6 +71,8 @@ def _grade(
 ) -> Optional[str]:
     if picked_team:
         return scores365.grade_moneyline(game, picked_team)
+    if team_total and total_direction == "spread" and total_line is not None:
+        return scores365.grade_spread(game, team_total, total_line)
     if team_total and total_direction and total_line is not None:
         return scores365.grade_team_total(game, team_total, total_direction, total_line)
     if total_direction and total_line is not None:
@@ -162,6 +164,8 @@ async def build_embed(
     # space, since the card itself covers it from then on.
     if picked_team:
         description_lines = [f"{picked_team} ML"]
+    elif team_total and total_direction == "spread" and total_line is not None:
+        description_lines = [f"{team_total} {total_line:+g}"]
     elif team_total and total_direction and total_line is not None:
         description_lines = [f"{team_total} {total_direction.title()} {total_line:g}"]
     elif total_direction and total_line is not None:
@@ -430,6 +434,8 @@ async def _track_loop(
             matchup = f"Game `{game_id}`"
         if picked_team:
             pick_desc = f"{picked_team} ML"
+        elif team_total and total_direction == "spread" and total_line is not None:
+            pick_desc = f"{team_total} {total_line:+g}"
         elif team_total and total_direction and total_line is not None:
             pick_desc = f"{team_total} {total_direction.title()} {total_line:g}"
         elif total_direction and total_line is not None:

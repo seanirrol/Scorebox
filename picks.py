@@ -380,6 +380,32 @@ _1H_COMBINED_TOTAL_RE = re.compile(
     re.IGNORECASE,
 )
 
+# "Denver Broncos -3.5" - a full-game point-spread pick, no opponent named
+# at all (this tipster's own wording always drops it - see
+# scores365.grade_spread). Distinguished from every other shape in this
+# file by a signed number directly after the team name with nothing else
+# trailing it (unlike the tennis games/sets handicap variants above, which
+# require a trailing "Games"/"Sets" word). Only checked for sport == "nfl"
+# (see _parse_description) - scoped narrowly since it hasn't been
+# confirmed live for any other team sport yet.
+_TEAM_SPREAD_NOMATCHUP_RE = re.compile(r"^(.+?)\s+([+-]\d+(?:\.\d+)?)\s*$")
+
+
+def _parse_team_spread_nomatchup_pick(sport: str, description: str) -> Optional[dict]:
+    text = _clean_line(description)
+    # A matchup-shaped line (e.g. "Team A @ Team B -3.5") isn't this no-
+    # opponent-named shape - left unmatched rather than misreading the
+    # whole "Team A @ Team B" string as one literal team name.
+    if any(sep in text for sep in (" vs. ", " vs ", " v. ", " v ", " @ ")):
+        return None
+    m = _TEAM_SPREAD_NOMATCHUP_RE.match(text)
+    if not m:
+        return None
+    team = m.group(1).strip()
+    if not team:
+        return None
+    return {"kind": "team_total", "sport": sport, "team": team, "direction": "spread", "line": float(m.group(2))}
+
 # "Daniel Rodriguez vs Uros Medic - Under 2.5 Rounds" - a UFC round total
 # (see grade_ufc_round_total). Requires "Rounds" explicitly since it would
 # otherwise match the same shape as a generic combined game total
@@ -1464,6 +1490,10 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
             return f5_handicap
 
     if sport == "nfl":
+        spread = _parse_team_spread_nomatchup_pick(sport, description)
+        if spread:
+            return spread
+
         onehalf_combined = _parse_1h_combined_total_pick(description, sport)
         if onehalf_combined:
             return onehalf_combined

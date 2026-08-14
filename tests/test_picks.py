@@ -109,6 +109,50 @@ class PitchingOutsAndMidPhraseAltLine(unittest.TestCase):
         self.assertEqual(pick["stat"], "3-Pointers Made")
 
 
+class NflSpreadNoMatchup(unittest.TestCase):
+    """A full-game point-spread pick like "Denver Broncos -3.5" had no
+    parser at all anywhere in this file (only tennis games/sets and F5/
+    esports handicaps existed) - it fell through to the bare-name fallback,
+    which rejects anything with a digit, and silently vanished with no
+    botlog trace. Confirmed live: a real "[NFL] NFL / Denver Broncos -3.5
+    (Fanatics -100) / New York Jets -5.0 (Bet365 -105)" message parsed 0/3
+    lines."""
+
+    def test_bracket_tagged_spread_line(self):
+        pick = picks.parse_pick_line("[NFL] Denver Broncos -3.5 (Fanatics -100)")
+        self.assertEqual(pick, {"kind": "team_total", "sport": "nfl", "team": "Denver Broncos", "direction": "spread", "line": -3.5})
+
+    def test_underdog_positive_spread(self):
+        pick = picks.parse_pick_line("[NFL] New York Jets +5.0 (Bet365 -105)")
+        self.assertEqual(pick["direction"], "spread")
+        self.assertEqual(pick["line"], 5.0)
+
+    def test_bare_header_bullet_list(self):
+        msg = "NFL\n- Denver Broncos -3.5 (Fanatics -100)\n- New York Jets -5.0 (Bet365 -105)"
+        picked = picks.parse_picks_message(msg)
+        self.assertEqual(len(picked), 2)
+        self.assertEqual(picked[0]["team"], "Denver Broncos")
+        self.assertEqual(picked[0]["line"], -3.5)
+        self.assertEqual(picked[1]["team"], "New York Jets")
+        self.assertEqual(picked[1]["line"], -5.0)
+
+    def test_matchup_prefixed_line_is_not_misread_as_a_spread_pick(self):
+        # No opponent-named spread parser exists for this shape yet - the
+        # nomatchup guard just keeps it out of THIS parser rather than
+        # capturing "Team A @ Team B" whole as one literal team+line. It
+        # still falls through to the pre-existing generic team-pick
+        # fallback below (a separate, unrelated gap: that fallback's own
+        # matchup-separator list doesn't include "@" at all) - not
+        # reproducing that behavior here since it's out of scope for this
+        # spread-specific fix.
+        pick = picks.parse_pick_line("[NFL] Denver Broncos @ New York Jets -3.5")
+        self.assertNotEqual((pick or {}).get("kind"), "team_total")
+
+    def test_ordinary_moneyline_pick_still_unaffected(self):
+        pick = picks.parse_pick_line("[NFL] Denver Broncos ML (Fanatics -150)")
+        self.assertEqual(pick["kind"], "track")
+
+
 class WinASetNoMatchup(unittest.TestCase):
     """"Player to Win at Least 1 Set" / "Player to Win a Set" with no
     opponent named at all - confirmed live, 7 of 8 picks in one real

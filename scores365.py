@@ -1136,6 +1136,33 @@ def grade_team_total(game: dict, team: str, direction: str, line: float) -> Opti
     return "won" if value < line else "lost"
 
 
+def grade_spread(game: dict, team: str, line: float) -> Optional[str]:
+    """Grades a full-game point-spread (handicap) pick - the line is added
+    to the picked team's own final score before comparing against the
+    other side's (e.g. team -3.5 needs to win by 4+; team +3.5 covers
+    unless it loses by 4+ - same math as grade_f5_handicap, just against
+    the whole game's score instead of just the first 5 innings). Returns
+    "won"/"lost"/"push" (a whole-number line landing on an exact tie after
+    adjustment), or None if there's no final score yet or team doesn't
+    match either side."""
+    home = (game.get("homeCompetitor") or {}).get("name", "")
+    away = (game.get("awayCompetitor") or {}).get("name", "")
+    scores = main_scores(game)
+    if not scores:
+        return None
+    home_score, away_score = scores
+    if names_match(home, team):
+        picked_score, other_score = home_score, away_score
+    elif names_match(away, team):
+        picked_score, other_score = away_score, home_score
+    else:
+        return None
+    adjusted = picked_score + line
+    if adjusted == other_score:
+        return "push"
+    return "won" if adjusted > other_score else "lost"
+
+
 def grade_f5_combined_total(home_runs: int, away_runs: int, direction: str, line: float) -> Optional[str]:
     """Grades an F5 (First 5 Innings) combined-total pick - both sides'
     1st-5th inning runs summed together (see grade_f5_team_total for a

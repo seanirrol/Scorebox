@@ -68,6 +68,42 @@ class NamesMatchFuzzyTransliteration(unittest.TestCase):
         self.assertFalse(scores365.names_match("Liudmila Samsonova", "Ludmilla Petrova"))
 
 
+class GradeSpread(unittest.TestCase):
+    """grade_spread is grade_f5_handicap's math applied to the whole
+    game's final score instead of just the first 5 innings - the line is
+    added to the picked team's own score before comparing to the other
+    side's."""
+
+    def _game(self, home, away, home_score, away_score):
+        return {
+            "homeCompetitor": {"name": home, "score": home_score},
+            "awayCompetitor": {"name": away, "score": away_score},
+        }
+
+    def test_favorite_covers_the_spread(self):
+        # Broncos (away) win by 6 - covers -3.5.
+        game = self._game("New York Jets", "Denver Broncos", 18.0, 24.0)
+        self.assertEqual(scores365.grade_spread(game, "Denver Broncos", -3.5), "won")
+
+    def test_favorite_wins_but_doesnt_cover(self):
+        # Broncos win by only 4 - doesn't cover -5.0.
+        game = self._game("New York Jets", "Denver Broncos", 20.0, 24.0)
+        self.assertEqual(scores365.grade_spread(game, "Denver Broncos", -5.0), "lost")
+
+    def test_underdog_covers_with_the_points(self):
+        # Jets (home) lose by only 3.5 - covers +5.0.
+        game = self._game("New York Jets", "Denver Broncos", 20.0, 24.0)
+        self.assertEqual(scores365.grade_spread(game, "New York Jets", 5.0), "won")
+
+    def test_whole_number_line_can_push(self):
+        game = self._game("New York Jets", "Denver Broncos", 20.0, 24.0)
+        self.assertEqual(scores365.grade_spread(game, "Denver Broncos", -4.0), "push")
+
+    def test_team_not_in_the_game_returns_none(self):
+        game = self._game("New York Jets", "Denver Broncos", 20.0, 24.0)
+        self.assertIsNone(scores365.grade_spread(game, "Los Angeles Rams", -3.5))
+
+
 class GradeMoneyline(unittest.TestCase):
     """isWinner is checked before falling back to score comparison - a
     walkover/retirement sits at 0-0 with no sets played, which used to
