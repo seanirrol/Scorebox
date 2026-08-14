@@ -109,6 +109,36 @@ class PitchingOutsAndMidPhraseAltLine(unittest.TestCase):
         self.assertEqual(pick["stat"], "3-Pointers Made")
 
 
+class MisfiledPropUnderWrongSectionHeader(unittest.TestCase):
+    """A player-prop-shaped line whose stat belongs to a DIFFERENT sport
+    than its own section header (the tipster's own mistake, not a code
+    gap) used to fall through to _parse_bare_team_total_pick, which
+    silently treated the player's own name as if it were a literal team.
+    Confirmed live: a real "Yoshi Yamamoto Over 4.5 Strikeouts" pick (an
+    MLB pitcher prop) posted under a "WNBA" header parsed as a basketball
+    team-total bet on a team named "Yoshi Yamamoto" and queued forever
+    searching for a team that will never exist."""
+
+    def test_baseball_prop_under_wnba_header_is_rejected_not_misparsed(self):
+        msg = (
+            "WNBA\n"
+            "Kelsey Mitchell Over 20.5 Points (DraftKings -170)\n"
+            "Yoshi Yamamoto Over 4.5 Strikeouts (Underdog -145)\n"
+            "Caitlin Clark Over 6.5 Assists (DraftKings -130)"
+        )
+        picked = picks.parse_picks_message(msg)
+        self.assertEqual(len(picked), 2)
+        self.assertNotIn("Yoshi Yamamoto", [p.get("team") or p.get("player") for p in picked])
+
+    def test_bracket_tagged_misfiled_prop_returns_none(self):
+        pick = picks.parse_pick_line("[WNBA] Yoshi Yamamoto Over 4.5 Strikeouts (Underdog -145)")
+        self.assertIsNone(pick)
+
+    def test_genuine_bare_team_total_with_no_trailing_word_unaffected(self):
+        pick = picks.parse_pick_line("[MLB] Los Angeles Dodgers Over 4.5 (FanDuel -110)")
+        self.assertEqual(pick, {"kind": "team_total", "sport": "baseball", "team": "Los Angeles Dodgers", "direction": "over", "line": 4.5})
+
+
 class NflSpreadNoMatchup(unittest.TestCase):
     """A full-game point-spread pick like "Denver Broncos -3.5" had no
     parser at all anywhere in this file (only tennis games/sets and F5/

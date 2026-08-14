@@ -798,6 +798,31 @@ def _infer_sport_from_stat(description: str) -> Optional[str]:
     return matches.pop() if len(matches) == 1 else None
 
 
+def _looks_like_misfiled_prop(sport: str, description: str) -> bool:
+    """A player-prop-shaped line ("Name Over/Under N <word(s)>") whose
+    trailing word is a real stat name for a DIFFERENT sport - checked only
+    once _parse_player_prop has already failed to match it under the
+    section's own (stated) sport, so this specifically catches the pick
+    having been posted under the WRONG section header, not just an
+    unsupported stat in general. Strong evidence it's a misfiled prop, not
+    a literal team-total bet on a "team" that happens to be named after a
+    person - confirmed live, a real "Yoshi Yamamoto Over 4.5 Strikeouts"
+    pick (an MLB pitcher prop) posted under a "WNBA" header fell through to
+    _parse_bare_team_total_pick, which silently treated "Yoshi Yamamoto" as
+    a basketball team name and queued it forever searching for a
+    basketball team that will never exist. Deliberately narrower than
+    _infer_sport_from_stat's single-match requirement above (that's for
+    guessing a sport with NO header at all, so it stays conservative) -
+    here the goal is only to recognize "this doesn't belong under this
+    header," which just needs the stat to be real somewhere else, not
+    uniquely identify where."""
+    pm = _PLAYER_STAT_RE.match(description)
+    if not pm:
+        return False
+    raw_stat = pm.group(4).strip()
+    return any(other != sport and _match_stat_label(other, raw_stat) for other in _INFER_SPORT_CANDIDATES)
+
+
 def _parse_player_prop(sport_key: str, sport: str, description: str) -> Optional[dict]:
     if sport not in espn.SPORT_PATHS:
         return None
@@ -1643,6 +1668,8 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
             return prop
 
         if not is_prop_category:
+            if _looks_like_misfiled_prop(sport, description):
+                return None
             bare_total = _parse_bare_team_total_pick(sport, description)
             if bare_total:
                 return bare_total
