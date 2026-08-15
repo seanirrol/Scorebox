@@ -228,6 +228,32 @@ class WinLossGraphOverrides(DailyLogTestCase):
         dailylog.clear_winlossgraph_override([2], "2026-08-13")
         self.assertEqual(dailylog.daily_win_loss([2], "2026-08"), [("2026-08-13", 1, 0)])
 
+    def test_hide_drops_the_date_entirely_even_with_real_decided_picks(self):
+        self._log(1, "k1", "won", "2026-08-15")
+        self._log(1, "k2", "lost", "2026-08-15")
+        dailylog.hide_winlossgraph_date([2], "2026-08-15")
+        self.assertEqual(dailylog.daily_win_loss([2], "2026-08"), [])
+
+    def test_hide_does_not_affect_other_dates(self):
+        self._log(1, "k1", "won", "2026-08-13")
+        self._log(1, "k2", "won", "2026-08-15")
+        dailylog.hide_winlossgraph_date([2], "2026-08-15")
+        self.assertEqual(dailylog.daily_win_loss([2], "2026-08"), [("2026-08-13", 1, 0)])
+
+    def test_hide_is_scoped_to_its_own_origin_route(self):
+        self._log(1, "k1", "won", "2026-08-15", origin=2)
+        self._log(2, "k2", "lost", "2026-08-15", origin=3)
+        dailylog.hide_winlossgraph_date([2], "2026-08-15")
+        self.assertEqual(dailylog.daily_win_loss([2], "2026-08"), [])
+        self.assertEqual(dailylog.daily_win_loss([3], "2026-08"), [("2026-08-15", 0, 1)])
+
+    def test_clearing_a_hide_reveals_whatever_has_been_decided_since(self):
+        dailylog.hide_winlossgraph_date([2], "2026-08-15")
+        self._log(1, "k1", "won", "2026-08-15")
+        self.assertEqual(dailylog.daily_win_loss([2], "2026-08"), [])
+        dailylog.clear_winlossgraph_override([2], "2026-08-15")
+        self.assertEqual(dailylog.daily_win_loss([2], "2026-08"), [("2026-08-15", 1, 0)])
+
 
 class AvailableDatesAndMonths(DailyLogTestCase):
     def test_available_months_only_counts_decided_picks(self):
