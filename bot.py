@@ -22,6 +22,8 @@ import discord
 from discord import app_commands
 
 import botlog
+import boxing
+import boxingtracker
 import config
 import dailylog
 import espn
@@ -120,6 +122,7 @@ async def on_ready():
     await _safe_resume("tennispropstracker", tennispropstracker.resume_all(client))
     await _safe_resume("soccerpropstracker", soccerpropstracker.resume_all(client))
     await _safe_resume("ufctracker", ufctracker.resume_all(client))
+    await _safe_resume("boxingtracker", boxingtracker.resume_all(client))
     await _safe_resume("esportstracker", esportstracker.resume_all(client))
     await _safe_resume("parlaytracker", parlaytracker.resume_all(client))
     await _safe_resume("pendingdelete", pendingdelete.resume_all(client))
@@ -141,6 +144,7 @@ def _find_message_owner(card_message_id: int) -> Optional[tuple[str, tuple]]:
         ("set1", settracker.get_message_owner),
         ("tennis_prop", tennispropstracker.get_message_owner),
         ("ufc", ufctracker.get_message_owner),
+        ("boxing", boxingtracker.get_message_owner),
         ("soccer_prop", soccerpropstracker.get_message_owner),
         ("esports", esportstracker.get_message_owner),
     ):
@@ -183,6 +187,9 @@ def _stop_tracking_by_card_message(card_message_id: int) -> Optional[str]:
     elif kind == "ufc":
         channel_id, competition_id, fighter_id, total_direction, total_line, _ = info
         ufctracker.stop_tracking(channel_id, competition_id, fighter_id, total_direction, total_line)
+    elif kind == "boxing":
+        channel_id, fight_id, fighter_id, _ = info
+        boxingtracker.stop_tracking(channel_id, fight_id, fighter_id)
     elif kind == "esports":
         channel_id, sport, team_a, team_b, market, _ = info
         esportstracker.stop_tracking(channel_id, sport, team_a, team_b, market)
@@ -900,6 +907,46 @@ async def _auto_ufc(
     return message.id
 
 
+async def _auto_boxing(
+    channel: discord.abc.Messageable, fighter: str,
+    section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
+):
+    """Boxing moneyline picks - settle once the fight itself finishes.
+    Backed by boxing.py (BoxingScene.com - neither 365scores nor ESPN's
+    public API cover boxing at all)."""
+    try:
+        result = await asyncio.to_thread(boxing.find_boxing_fight, fighter)
+    except boxing.BoxingError as e:
+        log.info("Auto-boxing: couldn't reach BoxingScene for '%s': %s", fighter, e)
+        botlog.event(f"❌ Not tracked (Boxing): **{fighter}** — couldn't reach BoxingScene: {e}")
+        return
+    if not result:
+        log.info("Auto-boxing: no fight found for '%s'", fighter)
+        botlog.event(f"❌ Not tracked (Boxing): **{fighter}** — no fight found")
+        return
+    fight_id = result["fight_id"]
+    fighter_id = result["fighter1_id"] if esports.names_match(result["fighter1_name"], fighter) else result["fighter2_id"]
+    fighter_name = result["fighter1_name"] if fighter_id == result["fighter1_id"] else result["fighter2_name"]
+    if boxingtracker.is_tracked(channel.id, fight_id, fighter_id):
+        botlog.event(f"⏭️ Skipped (Boxing): **{fighter}** — fight `{fight_id}` already being tracked in <#{channel.id}>")
+        return "skipped"
+
+    embed, file = await boxingtracker.build_embed(result, fighter_id, fighter_name)
+    message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
+    embed.set_footer(text=boxingtracker._footer_text(message.id))
+    await throttle.run(channel.id, lambda: message.edit(embed=embed))
+    boxingtracker.register_message(message.id, channel.id, fight_id, fighter_id, None)
+    await message.add_reaction(TRASH_EMOJI)
+
+    boxingtracker.start_tracking(
+        message, channel.id, fight_id, fighter_id, fighter_name, None, result.get("event_name") or "",
+        section, label, origin_channel_id,
+    )
+    log.info("Auto-tracked boxing pick '%s' -> fight %s", fighter, fight_id)
+    botlog.event(f"✅ Tracked (Boxing): **{fighter}** — fight `{fight_id}` in <#{channel.id}>")
+    return message.id
+
+
 async def _auto_esports(
     channel: discord.abc.Messageable, sport: str, team_a: str, team_b: str, market: str,
     picked_team: Optional[str] = None, direction: Optional[str] = None, line: Optional[float] = None,
@@ -1117,6 +1164,8 @@ async def _dispatch_pick(
             return await _auto_ufc(
                 target_channel, pick["team"], pick["direction"], pick["line"], section=section, label=label, origin_channel_id=origin_channel_id,
             )
+        elif pick["kind"] == "boxing_moneyline":
+            return await _auto_boxing(target_channel, pick["team"], section=section, label=label, origin_channel_id=origin_channel_id)
         elif pick["kind"] == "esports_match_winner":
             return await _auto_esports(
                 target_channel, pick["sport"], pick["team_a"], pick["team_b"], "match_winner",
@@ -1585,6 +1634,12 @@ def _untrack_one(channel_id: int, game_id: str, player: Optional[str]) -> list[s
         ):
             stopped.append("UFC pick")
 
+    for entry in boxingtracker.list_tracked_details(channel_id):
+        if str(entry["fight_id"]) != str(game_id):
+            continue
+        if boxingtracker.stop_tracking(channel_id, entry["fight_id"], entry["fighter_id"]):
+            stopped.append("Boxing pick")
+
     for entry in proptracker.list_tracked_details(channel_id):
         if str(entry["event_id"]) != str(game_id):
             continue
@@ -1792,6 +1847,14 @@ async def _gather_tracked_items(channel_id: int) -> list[dict]:
             "message_id": entry["message_id"],
             "stop": lambda cid=channel_id, compid=entry["competition_id"], fid=entry.get("fighter_id"),
                 td=entry.get("total_direction"), tl=entry.get("total_line"): ufctracker.stop_tracking(cid, compid, fid, td, tl),
+        })
+
+    for entry in boxingtracker.list_tracked_details(channel_id):
+        items.append({
+            "kind": "boxing", "label": f"{entry['fighter_name']} ML", "id_label": entry["fight_id"],
+            "message_id": entry["message_id"],
+            "stop": lambda cid=channel_id, fid=entry["fight_id"], fighter=entry["fighter_id"]:
+                boxingtracker.stop_tracking(cid, fid, fighter),
         })
 
     for entry in esportstracker.list_tracked_details(channel_id):

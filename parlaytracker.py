@@ -87,6 +87,7 @@ def _tracker_modules():
     level) since each of them calls back into this module's
     report_leg_progress/handle_leg_result/groups_for_leg - a module-level
     import here would be circular."""
+    import boxingtracker
     import esportstracker
     import f5tracker
     import halftracker
@@ -103,7 +104,8 @@ def _tracker_modules():
         "tracker": tracker, "proptracker": proptracker, "inningtracker": inningtracker,
         "f5tracker": f5tracker, "halftracker": halftracker, "inning1tracker": inning1tracker,
         "settracker": settracker, "soccerpropstracker": soccerpropstracker,
-        "tennispropstracker": tennispropstracker, "ufctracker": ufctracker, "esportstracker": esportstracker,
+        "tennispropstracker": tennispropstracker, "ufctracker": ufctracker, "boxingtracker": boxingtracker,
+        "esportstracker": esportstracker,
     }
 
 
@@ -193,6 +195,12 @@ def resolve_leg(message_id: int) -> Optional[tuple[str, str, int]]:
         channel_id, competition_id, fighter_id, total_direction, total_line, _owner_id = owner
         key = mods["ufctracker"].track_key(channel_id, competition_id, fighter_id, total_direction, total_line)
         return "ufctracker", key, channel_id
+
+    owner = mods["boxingtracker"].get_message_owner(message_id)
+    if owner:
+        channel_id, fight_id, fighter_id, _owner_id = owner
+        key = mods["boxingtracker"].track_key(channel_id, fight_id, fighter_id)
+        return "boxingtracker", key, channel_id
 
     owner = mods["esportstracker"].get_message_owner(message_id)
     if owner:

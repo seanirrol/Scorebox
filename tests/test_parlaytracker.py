@@ -21,6 +21,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import boxingtracker
 import esportstracker
 import f5tracker
 import halftracker
@@ -127,6 +128,13 @@ class ResolveLegMatchesEachModulesOwnerShape(unittest.TestCase):
         self.assertEqual(
             parlaytracker.resolve_leg(11),
             ("ufctracker", ufctracker.track_key(555, 100, None, "over", 2.5), 555),
+        )
+
+    def test_boxingtracker(self):
+        self._register(boxingtracker, 13, 555, 10758, 4524, 1)
+        self.assertEqual(
+            parlaytracker.resolve_leg(13),
+            ("boxingtracker", boxingtracker.track_key(555, 10758, 4524), 555),
         )
 
     def test_esportstracker_unaffected(self):

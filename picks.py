@@ -42,6 +42,7 @@ _SPORT_MAP = {
     "mma": "mma",
     "combat": "mma",
     "pfl": "mma",  # espn_ufc.py's scoreboard already covers PFL, not just UFC
+    "boxing": "boxing",
     "dota 2": "dota2",
     "dota2": "dota2",
     "cs2": "cs2",
@@ -1687,7 +1688,7 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
     # that didn't recover as a prop above (see is_prop_category+has_matchup
     # block) shouldn't fall through to the generic team-pick guess at the
     # bottom of this function either.
-    if is_prop_category and sport != "mma":
+    if is_prop_category and sport not in ("mma", "boxing"):
         return None  # explicitly tagged as a prop but couldn't be confidently parsed - don't guess it's a team pick
 
     if sport == "mma":
@@ -1704,6 +1705,16 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
         # skip straight past that block to the generic fallback below.
         ufc_team = _parse_team_pick(description)
         return {"kind": "ufc_moneyline", "team": ufc_team} if ufc_team else None
+
+    if sport == "boxing":
+        # Moneyline only (see boxing.py's own module docstring) - same
+        # "don't fall through to the generic 365scores-backed track
+        # fallback" reasoning as mma above, since BoxingScene isn't a
+        # 365scores sport either. _parse_team_pick already handles both
+        # "Fighter A vs Fighter B - Fighter A ML" and a bare "Fighter A ML"
+        # with no opponent named.
+        boxing_fighter = _parse_team_pick(description)
+        return {"kind": "boxing_moneyline", "team": boxing_fighter} if boxing_fighter else None
 
     team = _parse_team_pick(description)
     if not team:

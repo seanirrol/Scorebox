@@ -109,6 +109,33 @@ class PitchingOutsAndMidPhraseAltLine(unittest.TestCase):
         self.assertEqual(pick["stat"], "3-Pointers Made")
 
 
+class BoxingMoneyline(unittest.TestCase):
+    """Boxing moneyline picks - added after confirming neither 365scores
+    nor ESPN's public API cover boxing at all (BoxingScene.com is the data
+    source instead - see boxing.py). Mirrors mma's own handling: moneyline
+    only, and _parse_team_pick already covers both a matchup-prefixed line
+    and a bare fighter name with no opponent."""
+
+    def test_matchup_prefixed_bracket_tagged(self):
+        pick = picks.parse_pick_line("[Boxing] Claressa Shields vs. Kaye Scott - Claressa Shields ML (Bet365 -305)")
+        self.assertEqual(pick, {"kind": "boxing_moneyline", "team": "Claressa Shields"})
+
+    def test_bare_fighter_no_opponent(self):
+        pick = picks.parse_pick_line("[Boxing] Troy Isley ML (DraftKings -250)")
+        self.assertEqual(pick, {"kind": "boxing_moneyline", "team": "Troy Isley"})
+
+    def test_bare_header_bullet_list(self):
+        msg = (
+            "Boxing\n"
+            "Claressa Shields vs. Kaye Scott - Claressa Shields ML (Bet365 -305)\n"
+            "Troy Isley vs. Derrick Hicks - Troy Isley ML (DraftKings -250)"
+        )
+        picked = picks.parse_picks_message(msg)
+        self.assertEqual(len(picked), 2)
+        self.assertEqual([p["team"] for p in picked], ["Claressa Shields", "Troy Isley"])
+        self.assertTrue(all(p["kind"] == "boxing_moneyline" for p in picked))
+
+
 class EsportsBareHeaderNoMatchupFallback(unittest.TestCase):
     """Every esports market requires an explicit "Team A vs Team B" matchup
     (hawk.live/GosuGamers can only resolve a match by both team names
