@@ -734,11 +734,18 @@ def live_kill_count(series_data: dict) -> Optional[tuple[int, int]]:
     since neither hawk.live nor GosuGamers covers CS2 at all, and
     GosuGamers has no live in-map stat for either game). Purely a
     supplementary display value, not used for grading anything - every
-    market here settles on maps won. None while notstarted/finished, or
-    if the relevant provider has no live data for this map right now."""
+    market here settles on maps won. None while notstarted/finished, if the
+    relevant provider has no live data for this map right now, or (Dota 2
+    only) if the series was only ever resolved via the GosuGamers fallback
+    - confirmed live, a real Nigma Galaxy vs Vici Gaming series resolved
+    that way crashed the whole /parlay-visible pick with a raw KeyError
+    ("unexpected error: 'series'") instead of returning None, since
+    _hawk_live_kill_count assumes hawk.live's own series shape unconditionally."""
     if series_data["status"] != "inprogress":
         return None
     if series_data["sport"] == "dota2":
+        if series_data["_ref"]["provider"] != "hawklive":
+            return None
         return _hawk_live_kill_count(series_data)
     return _strafe_live_round_score(series_data["home_team"], series_data["away_team"])
 
