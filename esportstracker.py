@@ -216,11 +216,18 @@ async def build_embed(
     picked_team: Optional[str] = None, direction: Optional[str] = None, line: Optional[float] = None,
     map_number: Optional[int] = None, picked_maps: Optional[int] = None, other_maps: Optional[int] = None,
     force_result: Optional[str] = None, message_id: Optional[int] = None,
-) -> tuple[discord.Embed, discord.File]:
+) -> tuple[discord.Embed, discord.File, Optional[str]]:
     """force_result overrides the color/title as if this were already
     graded that way, regardless of the series' actual live status - not
     currently used here (no interrupted/postponed signal to react to), kept
-    for signature parity with every other tracker's build_embed."""
+    for signature parity with every other tracker's build_embed.
+
+    The third return value is the early-lock result ("won"/"lost") once
+    one's mathematically certain but the series itself hasn't finished yet
+    (currently only win_at_least_one_map produces this) - None otherwise.
+    _track_loop uses it to settle the pick for real (dailylog + parlay)
+    the moment it's locked in, without waiting for/ending on the series'
+    own actual finish - see _track_loop's own early_result handling."""
     status = series_data["status"]
     decided, result = grade_now(series_data, market, picked_team, direction, line, map_number, picked_maps, other_maps)
 
@@ -335,7 +342,7 @@ async def build_embed(
     embed.set_image(url="attachment://score.png")
     embed.set_footer(text=_footer_text(message_id))
     embed.timestamp = discord.utils.utcnow()
-    return embed, file
+    return embed, file, early_result
 
 
 async def _track_loop(
@@ -353,6 +360,12 @@ async def _track_loop(
     # get_series calls purely to help GosuGamers disambiguate a back-to-back
     # series between the same two teams, not required for hawk.live.
     expected_epoch: Optional[float] = None
+    # True once build_embed's early_result has been settled for real
+    # (dailylog + parlay) - guards against settling twice when the series
+    # later actually finishes for real (handle_leg_result isn't safe to
+    # call twice for the same leg - it increments the parlay group's
+    # resolved/won counters each time).
+    early_settled = False
 
     async def _repost_final(embed: discord.Embed, file: discord.File):
         """Bumps the card to the bottom of the channel (pre-kickoff or
@@ -476,7 +489,7 @@ async def _track_loop(
             consecutive_misses = 0
             expected_epoch = series_data.get("start_epoch") or expected_epoch
 
-            embed, file = await build_embed(
+            embed, file, early_result = await build_embed(
                 series_data, market, picked_team, direction, line, map_number, picked_maps, other_maps,
                 message_id=message.id,
             )
@@ -493,6 +506,29 @@ async def _track_loop(
                 )
                 continue
 
+            if not early_settled and early_result:
+                # Mathematically locked in (see grade_win_at_least_one_map's
+                # docstring) but the series itself hasn't finished - settle
+                # this leg for real right now instead of waiting, same as
+                # the eventual real result would be anyway, while leaving
+                # the loop running below so the card keeps polling/updating
+                # until the series actually ends.
+                leg_matchup = f"{series_data.get('home_team') or '?'} vs {series_data.get('away_team') or '?'}"
+                leg_pick = pick_label(market, picked_team, direction, line, map_number, picked_maps, other_maps)
+                leg_label = f"{leg_matchup} - {leg_pick}"
+                reaction = _RESULT_REACTIONS.get(early_result)
+                if reaction:
+                    try:
+                        await message.add_reaction(reaction)
+                    except discord.HTTPException as e:
+                        log.warning("Failed to add early-lock result reaction: %s", e)
+                dailylog.record_result(channel_id, "esportstracker", key, early_result)
+                group_ids = parlaytracker.groups_for_leg(channel_id, "esportstracker", key)
+                await parlaytracker.handle_leg_result(
+                    message.channel, channel_id, message, "esportstracker", key, leg_label, early_result, group_ids,
+                )
+                early_settled = True
+
             decided, result = grade_now(series_data, market, picked_team, direction, line, map_number, picked_maps, other_maps)
             if decided:
                 await _repost_final(embed, file)
@@ -504,7 +540,12 @@ async def _track_loop(
                     except discord.HTTPException as e:
                         log.warning("Failed to add result reaction: %s", e)
                 pendingdelete.start(channel_id, message, embed.description or "")
-                if result:
+                # Already settled early above (guaranteed to match - see
+                # grade_win_at_least_one_map's docstring) - don't call
+                # handle_leg_result a second time, it's not idempotent (it
+                # increments the parlay group's resolved/won counters on
+                # every call).
+                if result and not early_settled:
                     leg_matchup = f"{series_data.get('home_team') or '?'} vs {series_data.get('away_team') or '?'}"
                     leg_pick = pick_label(market, picked_team, direction, line, map_number, picked_maps, other_maps)
                     leg_label = f"{leg_matchup} - {leg_pick}"
@@ -522,14 +563,18 @@ async def _track_loop(
             else:
                 detail = f"LIVE, Game {series_data['current_game_number']}"
             dailylog.touch(channel_id, "esportstracker", key, detail)
-            group_ids = parlaytracker.groups_for_leg(channel_id, "esportstracker", key)
-            if group_ids:
-                leg_matchup = f"{series_data.get('home_team') or '?'} vs {series_data.get('away_team') or '?'}"
-                leg_pick = pick_label(market, picked_team, direction, line, map_number, picked_maps, other_maps)
-                leg_label = f"{leg_matchup} - {leg_pick}"
-                await parlaytracker.report_leg_progress(
-                    message.channel, channel_id, message, "esportstracker", key, leg_label, detail, group_ids,
-                )
+            # Skipped once early-settled - report_leg_progress unconditionally
+            # marks the parlay leg "pending" again, which would erase the
+            # "won"/"lost" handle_leg_result just recorded above.
+            if not early_settled:
+                group_ids = parlaytracker.groups_for_leg(channel_id, "esportstracker", key)
+                if group_ids:
+                    leg_matchup = f"{series_data.get('home_team') or '?'} vs {series_data.get('away_team') or '?'}"
+                    leg_pick = pick_label(market, picked_team, direction, line, map_number, picked_maps, other_maps)
+                    leg_label = f"{leg_matchup} - {leg_pick}"
+                    await parlaytracker.report_leg_progress(
+                        message.channel, channel_id, message, "esportstracker", key, leg_label, detail, group_ids,
+                    )
 
             try:
                 await throttle.run(channel_id, lambda: message.edit(embed=embed, attachments=[file]))

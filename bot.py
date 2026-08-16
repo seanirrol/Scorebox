@@ -968,7 +968,7 @@ async def _auto_esports(
         botlog.event(f"⏭️ Skipped ({category_label}): **{team_a} v {team_b}** — already being tracked in <#{channel.id}>")
         return "skipped"
 
-    embed, file = await esportstracker.build_embed(
+    embed, file, _early_result = await esportstracker.build_embed(
         series_data, market, picked_team, direction, line, map_number, picked_maps, other_maps
     )
     message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
