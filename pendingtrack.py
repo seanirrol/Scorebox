@@ -33,7 +33,7 @@ RETRY_INTERVAL_SECONDS = 30 * 60
 # A missing-from-the-feed match is expected to resolve itself well within a
 # day as the bulk feed's window rotates - this just bounds the wait so a
 # genuinely bad team name doesn't retry forever.
-MAX_WAIT_SECONDS = 48 * 3600
+MAX_WAIT_SECONDS = 24 * 3600
 
 
 def _persist(entry_id: str, entry: dict):
