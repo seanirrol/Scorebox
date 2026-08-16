@@ -78,10 +78,16 @@ def render_chart(title: str, data: dict[str, dict[str, tuple[int, int]]]) -> byt
             return {}
         return tournaments
 
-    row_count = 0
-    for sport, tournaments in sports:
-        row_count += 1 + len(_visible_tournaments(sport, tournaments))
-    height = TOP_PADDING + row_count * (SUB_BAR_HEIGHT + ROW_GAP) + len(sports) * (SPORT_GAP - ROW_GAP) + LEGEND_HEIGHT + BOTTOM_PADDING
+    # Sport header rows are taller than tournament sub-rows (SPORT_BAR_HEIGHT
+    # vs. SUB_BAR_HEIGHT) - confirmed live, treating every row as sub-row
+    # height undercounted the total by 8px per sport and clipped the last
+    # row off the bottom of the image entirely once there were enough
+    # sports for that deficit to add up.
+    sub_row_count = sum(len(_visible_tournaments(sport, tournaments)) for sport, tournaments in sports)
+    height = (
+        TOP_PADDING + len(sports) * (SPORT_BAR_HEIGHT + SPORT_GAP) + sub_row_count * (SUB_BAR_HEIGHT + ROW_GAP)
+        + LEGEND_HEIGHT + BOTTOM_PADDING
+    )
 
     img = Image.new("RGBA", (WIDTH, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
