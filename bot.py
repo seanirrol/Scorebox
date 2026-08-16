@@ -86,6 +86,26 @@ SPORT_CHOICES = [
 
 TRASH_EMOJI = "🗑️"
 
+
+async def _safe_add_trash_reaction(message: discord.Message):
+    """Every auto-track function's own initial 🗑️-reaction add, right after
+    posting a fresh card and before calling that tracker's start_tracking -
+    confirmed live, an unhandled discord.Forbidden here (a target channel
+    missing the "Add Reactions" permission - error code 50013) propagated
+    all the way out to _dispatch_pick's broad exception handler, which
+    logged the whole pick as "not tracked" even though the card had
+    already posted successfully. Worse than a missing reaction: since
+    start_tracking is always the very next line, the pick was silently
+    never tracked at all - a permanently orphaned card that looks like a
+    normal tracked pick but never updates or grades. Swallowing the
+    failure here (loud in the logs, not fatal) means a missing permission
+    degrades to "no 🗑️ delete button" instead of "no tracking whatsoever"."""
+    try:
+        await message.add_reaction(TRASH_EMOJI)
+    except discord.HTTPException as e:
+        log.warning("Failed to add initial trash-reaction to %s in channel %s: %s", message.id, message.channel.id, e)
+        botlog.event(f"⚠️ Couldn't add 🗑️ reaction to a new card in <#{message.channel.id}> (missing permissions?) — tracking still started: {e}")
+
 # message_id (the picks-channel source message) -> {raw_line: card_message_id}
 # for every pick successfully tracked from it - lets on_message_edit diff a
 # later edit against what was originally tracked (see on_message_edit).
@@ -265,7 +285,7 @@ async def _complete_track(
     embed.set_footer(text=tracker._footer_text(message.id))
     await throttle.run(channel.id, lambda: message.edit(embed=embed))
     tracker.register_message(message.id, channel.id, game_id, None, picked_team, team_total, total_direction, total_line)
-    await message.add_reaction(TRASH_EMOJI)
+    await _safe_add_trash_reaction(message)
 
     tracker.start_tracking(
         message, sport_id, game, channel.id, None, picked_team, total_direction, total_line, team_total,
@@ -374,7 +394,7 @@ async def _auto_f5(
     embed.set_footer(text=f5tracker._footer_text(message.id))
     await throttle.run(channel.id, lambda: message.edit(embed=embed))
     f5tracker.register_message(message.id, channel.id, game_id, None, picked_team, total_direction, total_line, handicap_line)
-    await message.add_reaction(TRASH_EMOJI)
+    await _safe_add_trash_reaction(message)
 
     f5tracker.start_tracking(
         message, sport_id, game, channel.id, None, picked_team, total_direction, total_line, handicap_line,
@@ -416,7 +436,7 @@ async def _auto_1h_total(
     embed.set_footer(text=halftracker._footer_text(message.id))
     await throttle.run(channel.id, lambda: message.edit(embed=embed))
     halftracker.register_message(message.id, channel.id, game_id, None, picked_team, total_direction, total_line)
-    await message.add_reaction(TRASH_EMOJI)
+    await _safe_add_trash_reaction(message)
 
     halftracker.start_tracking(
         message, sport_id, game, channel.id, None, picked_team, total_direction, total_line, section, label, origin_channel_id,
@@ -506,7 +526,7 @@ async def _auto_playerprops(
     embed.set_footer(text=proptracker._footer_text(message.id))
     await throttle.run(channel.id, lambda: message.edit(embed=embed))
     proptracker.register_message(message.id, channel.id, event_id, entity["id"], stat_key, None, direction, line)
-    await message.add_reaction(TRASH_EMOJI)
+    await _safe_add_trash_reaction(message)
 
     proptracker.start_tracking(
         message, channel.id, event_id, entity["id"], entity["team_id"], entity["photo_url"],
@@ -559,7 +579,7 @@ async def _auto_tennis_playerprops(
     embed.set_footer(text=tennispropstracker._footer_text(message.id))
     await throttle.run(channel.id, lambda: message.edit(embed=embed))
     tennispropstracker.register_message(message.id, channel.id, game_id, competitor_id, stat_name, None, direction, line)
-    await message.add_reaction(TRASH_EMOJI)
+    await _safe_add_trash_reaction(message)
 
     tennispropstracker.start_tracking(
         message, sport_id, game_id, channel.id, competitor_id, stat_name, stat, resolved_name, None, direction, line,
@@ -611,7 +631,7 @@ async def _complete_soccer_prop_post(
     embed.set_footer(text=soccerpropstracker._footer_text(message.id))
     await throttle.run(channel.id, lambda: message.edit(embed=embed))
     soccerpropstracker.register_message(message.id, channel.id, game_id, member_id, stat_name, None, direction, line)
-    await message.add_reaction(TRASH_EMOJI)
+    await _safe_add_trash_reaction(message)
 
     soccerpropstracker.start_tracking(
         message, game_id, channel.id, member_id, member_competitor_id, stat_name, photo_url,
@@ -802,7 +822,7 @@ async def _auto_inning_runs(
     embed.set_footer(text=inningtracker._footer_text(message.id))
     await throttle.run(channel.id, lambda: message.edit(embed=embed))
     inningtracker.register_message(message.id, channel.id, event_id, pick_type, None)
-    await message.add_reaction(TRASH_EMOJI)
+    await _safe_add_trash_reaction(message)
 
     inningtracker.start_tracking(
         message, channel.id, event_id, pick_type, entity["id"], None, section, label, origin_channel_id,
@@ -840,7 +860,7 @@ async def _auto_inning1_result(
     embed.set_footer(text=inning1tracker._footer_text(message.id))
     await throttle.run(channel.id, lambda: message.edit(embed=embed))
     inning1tracker.register_message(message.id, channel.id, game_id, None)
-    await message.add_reaction(TRASH_EMOJI)
+    await _safe_add_trash_reaction(message)
 
     inning1tracker.start_tracking(
         message, sport_id, game, channel.id, None, team, pick, section, label, origin_channel_id,
@@ -883,7 +903,7 @@ async def _auto_tennis_market(
     embed.set_footer(text=settracker._footer_text(message.id))
     await throttle.run(channel.id, lambda: message.edit(embed=embed))
     settracker.register_message(message.id, channel.id, game_id, market, team, None)
-    await message.add_reaction(TRASH_EMOJI)
+    await _safe_add_trash_reaction(message)
 
     settracker.start_tracking(
         message, sport_id, game, channel.id, market, None, team, direction, line, section, label, origin_channel_id,
@@ -927,7 +947,7 @@ async def _auto_ufc(
     embed.set_footer(text=ufctracker._footer_text(message.id))
     await throttle.run(channel.id, lambda: message.edit(embed=embed))
     ufctracker.register_message(message.id, channel.id, competition_id, None, fighter_id, total_direction, total_line)
-    await message.add_reaction(TRASH_EMOJI)
+    await _safe_add_trash_reaction(message)
 
     ufctracker.start_tracking(
         message, channel.id, league_slug, event["id"], competition_id, competition["date"], None, event["name"],
@@ -967,7 +987,7 @@ async def _auto_boxing(
     embed.set_footer(text=boxingtracker._footer_text(message.id))
     await throttle.run(channel.id, lambda: message.edit(embed=embed))
     boxingtracker.register_message(message.id, channel.id, fight_id, fighter_id, None)
-    await message.add_reaction(TRASH_EMOJI)
+    await _safe_add_trash_reaction(message)
 
     boxingtracker.start_tracking(
         message, channel.id, fight_id, fighter_id, fighter_name, None, result.get("event_name") or "",
@@ -1015,7 +1035,7 @@ async def _auto_kboprop(
     embed.set_footer(text=kboproptracker._footer_text(message.id))
     await throttle.run(channel.id, lambda: message.edit(embed=embed))
     kboproptracker.register_message(message.id, channel.id, pcode, stat, direction, line, target_date, None)
-    await message.add_reaction(TRASH_EMOJI)
+    await _safe_add_trash_reaction(message)
 
     kboproptracker.start_tracking(
         message, channel.id, pcode, stat, direction, line, target_date, player_entry["name"],
@@ -1054,7 +1074,7 @@ async def _auto_esports(
     embed.set_footer(text=esportstracker._footer_text(message.id))
     await throttle.run(channel.id, lambda: message.edit(embed=embed))
     esportstracker.register_message(message.id, channel.id, sport, team_a, team_b, market, None)
-    await message.add_reaction(TRASH_EMOJI)
+    await _safe_add_trash_reaction(message)
 
     esportstracker.start_tracking(
         message, sport, team_a, team_b, channel.id, market, None,
@@ -1491,7 +1511,7 @@ async def track(interaction: discord.Interaction, sport: app_commands.Choice[str
     embed.set_footer(text=tracker._footer_text(message.id))
     await throttle.run(interaction.channel_id, lambda: message.edit(embed=embed))
     tracker.register_message(message.id, interaction.channel_id, game_id, interaction.user.id)
-    await message.add_reaction(TRASH_EMOJI)
+    await _safe_add_trash_reaction(message)
 
     if scores365.is_finished(game):
         return  # Nothing to track, match is already over.
@@ -1550,7 +1570,7 @@ async def _playerprops_tennis(interaction: discord.Interaction, player: str, sta
     embed.set_footer(text=tennispropstracker._footer_text(message.id))
     await throttle.run(interaction.channel_id, lambda: message.edit(embed=embed))
     tennispropstracker.register_message(message.id, interaction.channel_id, game_id, competitor_id, stat_name, interaction.user.id)
-    await message.add_reaction(TRASH_EMOJI)
+    await _safe_add_trash_reaction(message)
 
     if not scores365.is_finished(game):
         tennispropstracker.start_tracking(
@@ -1605,7 +1625,7 @@ async def _playerprops_soccer(interaction: discord.Interaction, player: str, sta
     embed.set_footer(text=soccerpropstracker._footer_text(message.id))
     await throttle.run(interaction.channel_id, lambda: message.edit(embed=embed))
     soccerpropstracker.register_message(message.id, interaction.channel_id, game_id, member_id, stat_name, interaction.user.id)
-    await message.add_reaction(TRASH_EMOJI)
+    await _safe_add_trash_reaction(message)
 
     if not scores365.is_finished(game):
         soccerpropstracker.start_tracking(
@@ -1684,7 +1704,7 @@ async def playerprops(interaction: discord.Interaction, sport: app_commands.Choi
     embed.set_footer(text=proptracker._footer_text(message.id))
     await throttle.run(interaction.channel_id, lambda: message.edit(embed=embed))
     proptracker.register_message(message.id, interaction.channel_id, event_id, entity["id"], stat_key, interaction.user.id)
-    await message.add_reaction(TRASH_EMOJI)
+    await _safe_add_trash_reaction(message)
 
     if not espn.is_finished(event):
         proptracker.start_tracking(
