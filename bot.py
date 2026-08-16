@@ -2634,6 +2634,10 @@ async def winlossgraph_command(interaction: discord.Interaction):
 
 
 _PERFORMANCE_ALL_TIME = "All-time"  # not a real "YYYY-MM" value - handled specially wherever a period is passed around
+# /performance can be run from anywhere (no channel restriction, unlike
+# /summary/winlossgraph's config.SUMMARY_ROUTES gate), but always posts to
+# this one fixed channel regardless of where it was invoked.
+_PERFORMANCE_POST_CHANNEL_ID = 1538638629889380412
 
 
 def _performance_title(period: str) -> str:
@@ -2652,15 +2656,15 @@ def _build_performance_embed_and_file(image_bytes: bytes) -> tuple[discord.Embed
 class PerformancePostView(discord.ui.View):
     """Same preview-then-post pattern as WinLossGraphPostView - re-renders
     at click time (not the preview-time snapshot) since a pending pick can
-    resolve in the time between preview and click. Posts to wherever the
-    command was run rather than a config.SUMMARY_ROUTES destination -
-    /performance isn't scoped to a picks-source route, it's a fixed pair
-    of scores channels (see dailylog.PERFORMANCE_CHANNEL_IDS)."""
+    resolve in the time between preview and click. Always posts to
+    _PERFORMANCE_POST_CHANNEL_ID regardless of where /performance itself
+    was run - not scoped to a picks-source route the way config.
+    SUMMARY_ROUTES is, /performance is scoped to a fixed pair of scores
+    channels instead (see dailylog.PERFORMANCE_CHANNEL_IDS)."""
 
-    def __init__(self, period: str, post_channel_id: int, requester_id: int):
+    def __init__(self, period: str, requester_id: int):
         super().__init__(timeout=900)
         self.period = period
-        self.post_channel_id = post_channel_id
         self.requester_id = requester_id
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -2681,9 +2685,9 @@ class PerformancePostView(discord.ui.View):
             return
         image_bytes = await asyncio.to_thread(performance.render_chart, _performance_title(self.period), data)
         embed, file = _build_performance_embed_and_file(image_bytes)
-        target = client.get_channel(self.post_channel_id) or await client.fetch_channel(self.post_channel_id)
+        target = client.get_channel(_PERFORMANCE_POST_CHANNEL_ID) or await client.fetch_channel(_PERFORMANCE_POST_CHANNEL_ID)
         await target.send(embed=embed, file=file)
-        botlog.event(f"📊 Performance ({self.period}) posted to <#{self.post_channel_id}> by **{interaction.user}**")
+        botlog.event(f"📊 Performance ({self.period}) posted to <#{_PERFORMANCE_POST_CHANNEL_ID}> by **{interaction.user}**")
         await interaction.response.edit_message(content="Posted.", embed=None, attachments=[], view=None)
         self.stop()
 
@@ -2701,8 +2705,8 @@ async def _send_performance_preview(interaction: discord.Interaction, period: st
     else:
         image_bytes = await asyncio.to_thread(performance.render_chart, _performance_title(period), data)
         embed, file = _build_performance_embed_and_file(image_bytes)
-        content = "Preview only - not posted yet. Click below to publish it to this channel."
-        view = PerformancePostView(period, interaction.channel_id, interaction.user.id)
+        content = f"Preview only - not posted yet. Click below to publish it to <#{_PERFORMANCE_POST_CHANNEL_ID}>."
+        view = PerformancePostView(period, interaction.user.id)
     if edit:
         await interaction.response.edit_message(content=content, embed=embed, attachments=[file] if file else [], view=view)
     else:
