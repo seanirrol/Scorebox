@@ -309,6 +309,9 @@ async def _auto_track(
     moneyline - team is still used to find the match either way. team_total
     additionally set means it's one side's own total instead of the combined
     score - team_total is the actual named side being graded."""
+    if pendingtrack.is_queued(channel.id, sport_value, team, total_direction, total_line, team_total):
+        botlog.event(f"⏭️ Skipped: **{team}** ({sport_value}) — already queued, waiting for its match to be found")
+        return "skipped"
     try:
         result = await asyncio.to_thread(scores365.find_match_for_team, team, sport_value)
     except scores365.ScoresError as e:
@@ -650,6 +653,9 @@ async def _complete_soccer_prop_track(
     if soccerpropstracker.is_tracked(channel.id, game_id, member_id, stat_name, direction, line):
         botlog.event(f"⏭️ Skipped (soccer prop): **{player}** {stat} — already being tracked in <#{channel.id}>")
         return "skipped"
+    if pendingsoccerprops.is_queued(channel.id, player, stat, stat_name, direction, line):
+        botlog.event(f"⏭️ Skipped (soccer prop): **{player}** {stat} — already queued, waiting for its match to be found")
+        return "skipped"
 
     fixture_path, psf_match = await _resolve_soccer_psf_match(game, stat_name)
     if stat_name in playerstatsfootball.STAT_CATALOG and not fixture_path:
@@ -717,6 +723,9 @@ async def _auto_soccer_playerprops(
     if not stat_name:
         botlog.event(f"❌ Not tracked (soccer prop): **{player}** {stat} — unknown stat")
         return
+    if pendingsoccerprops.is_queued(channel.id, player, stat, stat_name, direction, line):
+        botlog.event(f"⏭️ Skipped (soccer prop): **{player}** {stat} — already queued, waiting for its match to be found")
+        return "skipped"
     try:
         result = await asyncio.to_thread(scores365.find_soccer_player, player)
     except scores365.ScoresError as e:

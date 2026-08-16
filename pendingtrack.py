@@ -54,6 +54,28 @@ def list_pending() -> list[dict]:
     return list(state.load_pending_track().values())
 
 
+def is_queued(
+    channel_id: int, sport_value: str, team: str,
+    total_direction: Optional[str] = None, total_line: Optional[float] = None, team_total: Optional[str] = None,
+) -> bool:
+    """True if an equivalent pick is already sitting in this queue -
+    confirmed live, reposting a picks message while an earlier queued pick
+    from it hadn't resolved yet spun up a completely independent second
+    queue entry (its own persisted state, its own retry loop) for the
+    exact same lookup instead of being recognized as a duplicate. Doesn't
+    end up double-tracked either way (_complete_track's own is_tracked
+    check catches it once a match is finally found), but this lets the
+    caller skip the wasted duplicate work outright."""
+    for entry in state.load_pending_track().values():
+        if (
+            entry["channel_id"] == channel_id and entry["sport_value"] == sport_value and entry["team"] == team
+            and entry["total_direction"] == total_direction and entry["total_line"] == total_line
+            and entry["team_total"] == team_total
+        ):
+            return True
+    return False
+
+
 async def _retry_loop(entry_id: str, entry: dict, resolve: Callable[[dict], Awaitable[bool]]):
     expires_at = entry["queued_at"] + MAX_WAIT_SECONDS
     while True:

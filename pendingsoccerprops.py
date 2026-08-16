@@ -61,6 +61,21 @@ def list_pending() -> list[dict]:
     return list(state.load_pending_soccer_props().values())
 
 
+def is_queued(channel_id: int, player: str, stat: str, stat_name: str, direction, line) -> bool:
+    """True if an equivalent pick is already sitting in this queue - see
+    pendingtrack.py's identical guard for why this matters. Doubly worth
+    avoiding here specifically: queue() also creates a placeholder dailylog
+    "pending" entry immediately, so an unchecked duplicate would show up
+    twice in /summary until one side resolves (or times out and voids)."""
+    for entry in state.load_pending_soccer_props().values():
+        if (
+            entry["channel_id"] == channel_id and entry["player"] == player and entry["stat"] == stat
+            and entry["stat_name"] == stat_name and entry["direction"] == direction and entry["line"] == line
+        ):
+            return True
+    return False
+
+
 def _give_up(entry_id: str, entry: dict):
     """Voids the placeholder dailylog entry queue() already created for a
     pick that never resolved before its day ended - updated in place
