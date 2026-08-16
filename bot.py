@@ -324,7 +324,7 @@ async def _auto_track(
         botlog.event(
             f"⏳ Queued: **{team}** ({sport_value}) — no match found yet, will retry automatically"
         )
-        return
+        return "queued"
     return await _complete_track(
         channel, sport_value, team, result, total_direction, total_line, team_total, section, label, origin_channel_id,
     )
@@ -666,7 +666,7 @@ async def _complete_soccer_prop_track(
             f"⏳ Queued (soccer prop): **{player}** {stat} — match found, but not yet on our extended "
             f"stats source, will retry automatically"
         )
-        return
+        return "queued"
     return await _complete_soccer_prop_post(
         channel, player, stat, stat_name, direction, line,
         game, member_id, member_competitor_id, resolved_name, photo_url,
@@ -733,7 +733,7 @@ async def _auto_soccer_playerprops(
             f"⏳ Queued (soccer prop): **{player}** {stat} — not in a live/imminent match yet, "
             f"will retry automatically as kickoff nears"
         )
-        return
+        return "queued"
     return await _complete_soccer_prop_track(channel, player, stat, stat_name, direction, line, result, section, label, origin_channel_id)
 
 
@@ -1009,6 +1009,7 @@ async def on_message(message: discord.Message):
         return
 
     not_tracked_lines = []
+    tracked_count = queued_count = skipped_count = not_tracked_count = 0
     for pick in parsed:
         # section/label are the verbatim picks-channel header ("MLB", "WNBA",
         # ...) and raw pick line text (see picks.py's parse_picks_message) -
@@ -1021,12 +1022,32 @@ async def on_message(message: discord.Message):
         # regardless of which target channel a pick ends up tracked into.
         raw_line = pick.get("raw")
         card_id = await _dispatch_pick(target_channel, pick, pick.get("section"), raw_line, message.channel.id)
-        if isinstance(card_id, int) and raw_line:
-            _tracked_lines.setdefault(message.id, {})[raw_line] = card_id
-        elif card_id is None and raw_line:
-            # Excludes "skipped" (a duplicate of a pick already being
-            # tracked elsewhere) - that's expected, not something to check.
-            not_tracked_lines.append(raw_line)
+        # Counted by card_id's type alone, independent of raw_line - keeps
+        # tracked_count + queued_count + skipped_count + not_tracked_count
+        # always equal to len(parsed) exactly (raw_line is only needed for
+        # this loop's own _tracked_lines/not_tracked_lines bookkeeping,
+        # which a handful of pick kinds don't fill in - see picks.py).
+        if isinstance(card_id, int):
+            tracked_count += 1
+            if raw_line:
+                _tracked_lines.setdefault(message.id, {})[raw_line] = card_id
+        elif card_id == "queued":
+            queued_count += 1
+        elif card_id == "skipped":
+            skipped_count += 1
+        else:
+            # Genuinely never tracked (no match found and no retry queue
+            # for this pick kind, unknown stat, ...) - see _dispatch_pick's
+            # own docstring for the full breakdown of what falls here.
+            not_tracked_count += 1
+            if raw_line:
+                not_tracked_lines.append(raw_line)
+    botlog.event(
+        f"📊 {message.author}'s picks message in <#{message.channel.id}>: "
+        f"✅ {tracked_count} tracked, ⏳ {queued_count} queued, "
+        f"⏭️ {skipped_count} skipped, ❌ {not_tracked_count} not tracked "
+        f"(of {len(parsed)} parsed)"
+    )
     await _report_not_tracked_lines(message, not_tracked_lines)
 
 
@@ -1069,10 +1090,13 @@ async def _dispatch_pick(
     returns this on success now, purely so on_message/on_message_edit can
     remember "this raw line -> this card" for later - see _tracked_lines).
     Returns the literal string "skipped" if the pick is a duplicate of one
-    already being tracked - not a card id, but not a failure either, so
-    on_message's not-tracked recap (see _report_not_tracked_lines) knows to
-    leave it out. None means it genuinely never got tracked (no match
-    found, unknown stat, queued for retry, ...)."""
+    already being tracked, or "queued" if it's waiting on pendingtrack/
+    pendingsoccerprops for its match to become findable - neither is a card
+    id, but neither is an outright failure either, so on_message's tally
+    (and its not-tracked recap, see _report_not_tracked_lines) can tell
+    them apart from a genuine miss. None means it genuinely never got
+    tracked (no match found and no retry queue for this pick kind, unknown
+    stat, couldn't reach the data source, ...)."""
     try:
         if pick["kind"] == "track":
             return await _auto_track(target_channel, pick["sport"], pick["team"], section=section, label=label, origin_channel_id=origin_channel_id)
