@@ -151,12 +151,18 @@ def stop_tracking(channel_id: int, pcode: str, stat_label: str, direction: str, 
 
 async def build_embed(
     pcode: str, player_name: str, team_name: Optional[str], is_pitcher: bool, stat_label: str,
-    direction: str, line: float, row: Optional[dict],
+    direction: str, line: float, row: Optional[dict], target_date: Optional[str] = None,
     force_result: Optional[str] = None, message_id: Optional[int] = None,
 ) -> tuple[discord.Embed, discord.File]:
     """row is the player's game-log row for the tracked target_date, or
     None if that game hasn't been played/posted yet - see
-    koreabaseball.find_game_row."""
+    koreabaseball.find_game_row.
+
+    target_date is only used cosmetically (see koreabaseball.game_status's
+    own docstring) - purely to show "Live" instead of misleadingly still
+    looking not-started once the team's game has actually started, since
+    there's no live per-player stat to show either way. Grading itself
+    never depends on it, only on row."""
     result = None
     if row is not None:
         value = kbo.stat_value(row, stat_label, is_pitcher)
@@ -170,12 +176,18 @@ async def build_embed(
     else:
         value = None
 
+    live_status = "notstarted"
+    if row is None and not force_result and team_name and target_date:
+        live_status = kbo.game_status(team_name, target_date)
+
     if force_result:
         color_status = force_result
     elif result:
         color_status = result
     elif row is not None:
         color_status = "finished"
+    elif live_status == "inprogress":
+        color_status = "inprogress"
     else:
         color_status = "notstarted"
 
@@ -187,7 +199,12 @@ async def build_embed(
     embed.set_author(name="KBO")
     embed.description = f"{player_name} {direction.title()} {line:g} {stat_label}"
 
-    period_text = "Final" if row is not None else ""
+    if row is not None:
+        period_text = "Final"
+    elif color_status == "inprogress":
+        period_text = "Live"
+    else:
+        period_text = ""
     value_text = "-" if value is None else (str(int(value)) if float(value).is_integer() else f"{value:g}")
     image_bytes = await asyncio.to_thread(
         scoreimage.render_player_card,
@@ -291,7 +308,8 @@ async def _track_loop(
             consecutive_misses = 0
 
             embed, file = await build_embed(
-                pcode, player_name, team_name, is_pitcher, stat_label, direction, line, row, message_id=message.id,
+                pcode, player_name, team_name, is_pitcher, stat_label, direction, line, row,
+                target_date=target_date, message_id=message.id,
             )
             leg_label = f"{player_name} {direction.title()} {line:g} {stat_label}"
 

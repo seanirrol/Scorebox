@@ -1006,7 +1006,8 @@ async def _auto_kboprop(
         return "skipped"
 
     embed, file = await kboproptracker.build_embed(
-        pcode, player_entry["name"], player_entry["team"], player_entry["is_pitcher"], stat, direction, line, row=None,
+        pcode, player_entry["name"], player_entry["team"], player_entry["is_pitcher"], stat, direction, line,
+        row=None, target_date=target_date,
     )
     message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
     embed.set_footer(text=kboproptracker._footer_text(message.id))

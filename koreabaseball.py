@@ -45,6 +45,7 @@ _BATTING_LEADERS_URL = "https://eng.koreabaseball.com/stats/BattingLeaders.aspx"
 _PITCHING_LEADERS_URL = "https://eng.koreabaseball.com/stats/PitchingLeaders.aspx"
 _HITTER_GAMELOGS_URL = "https://eng.koreabaseball.com/Teams/PlayerInfoHitter/GameLogs.aspx?pcode={pcode}"
 _PITCHER_GAMELOGS_URL = "https://eng.koreabaseball.com/Teams/PlayerInfoPitcher/GameLogs.aspx?pcode={pcode}"
+_SCOREBOARD_URL = "https://eng.koreabaseball.com/Schedule/Scoreboard.aspx?searchDate={date}"
 # Confirmed live on a player's own Summary.aspx page (an <img> tag literally
 # builds this same URL from pcode + the current season year, falling back
 # to a "noimg.png" placeholder client-side on a 404) - deriving it directly
@@ -60,6 +61,11 @@ _LEADERS_CACHE_SECONDS = 3600
 # A game log only ever gains a new row once a day at most (KBO plays one
 # game per team per day) - a shorter cache would just be wasted requests.
 _GAMELOG_CACHE_SECONDS = 15 * 60
+# The scoreboard's own live/final status changes far more often than a game
+# log row does (that only appears once, at the very end) - cached briefly
+# purely to avoid hammering the page if several tracked picks share a poll
+# cycle, not because the status itself is slow-moving.
+_SCOREBOARD_CACHE_SECONDS = 5 * 60
 
 # KBO games are scheduled and played on the Korean calendar day, not
 # whatever day it happens to be wherever this bot's picks get posted from -
@@ -69,6 +75,7 @@ _KST = ZoneInfo("Asia/Seoul")
 
 _leaders_cache: dict = {}  # url -> (players, fetched_at)
 _gamelog_cache: dict = {}  # (pcode, is_pitcher) -> (rows, fetched_at)
+_scoreboard_cache: dict = {}  # date_str ("YYYY-MM-DD") -> (games, fetched_at)
 
 
 class KboError(Exception):
@@ -231,6 +238,60 @@ def find_game_row(pcode: str, is_pitcher: bool, target_date_mmdd: str) -> Option
     state, not an error."""
     rows = _game_rows(pcode, is_pitcher)
     return next((r for r in rows if r.get("DATE") == target_date_mmdd), None)
+
+
+_GAME_BLOCK_RE = re.compile(r'<div class="scoreboard_time">(.*?)</div>', re.DOTALL)
+_TEAM_NAME_RE = re.compile(r'<span class="team_name">([^<]*)</span>')
+_GAME_STATE_RE = re.compile(r'<span class="timer">\s*<span[^>]*>([^<]*)</span>')
+
+
+def _scoreboard_games(date_str: str) -> list[dict]:
+    cached = _scoreboard_cache.get(date_str)
+    if cached and time.time() - cached[1] < _SCOREBOARD_CACHE_SECONDS:
+        return cached[0]
+    html = _get(_SCOREBOARD_URL.format(date=date_str))
+    games = []
+    for block in _GAME_BLOCK_RE.findall(html):
+        teams = _TEAM_NAME_RE.findall(block)
+        if len(teams) < 2:
+            continue
+        state_m = _GAME_STATE_RE.search(block)
+        games.append({
+            "away": teams[0].strip(), "home": teams[1].strip(),
+            "state": state_m.group(1).strip() if state_m else "",
+        })
+    _scoreboard_cache[date_str] = (games, time.time())
+    return games
+
+
+def game_status(team_name: str, target_date_mmdd: str, now: Optional[float] = None) -> str:
+    """"notstarted"/"inprogress"/"finished" for the named team's game on
+    one KST date ("MM.DD") - purely cosmetic (a live in-inning state like
+    "TOP 5" carries no usable per-player stat, so kboproptracker.py's
+    build_embed uses this only to show "Live" instead of misleadingly
+    still looking not-started - see its own docstring for why an actual
+    grade still always waits on find_game_row instead). Falls back to
+    "notstarted" if the team/date can't be matched at all (schedule not
+    published yet, fetch failed, ...) rather than raising - this is
+    display-only, never worth failing a poll cycle over."""
+    dt = datetime.fromtimestamp(now if now is not None else time.time(), tz=_KST)
+    month, day = target_date_mmdd.split(".")
+    date_str = f"{dt.year}-{month}-{day}"
+    try:
+        games = _scoreboard_games(date_str)
+    except KboError:
+        return "notstarted"
+    for game in games:
+        if scores365.names_match(game["away"], team_name) or scores365.names_match(game["home"], team_name):
+            state = game["state"].upper()
+            if state == "FINAL":
+                return "finished"
+            if not state or ":" in state:
+                # Blank (no game-state span at all yet) or a scheduled
+                # clock time ("18:30") - hasn't started.
+                return "notstarted"
+            return "inprogress"
+    return "notstarted"
 
 
 def today_kst_mmdd(now: Optional[float] = None) -> str:
