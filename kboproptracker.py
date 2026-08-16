@@ -150,7 +150,7 @@ def stop_tracking(channel_id: int, pcode: str, stat_label: str, direction: str, 
 
 
 async def build_embed(
-    player_name: str, team_name: Optional[str], is_pitcher: bool, stat_label: str,
+    pcode: str, player_name: str, team_name: Optional[str], is_pitcher: bool, stat_label: str,
     direction: str, line: float, row: Optional[dict],
     force_result: Optional[str] = None, message_id: Optional[int] = None,
 ) -> tuple[discord.Embed, discord.File]:
@@ -191,7 +191,7 @@ async def build_embed(
     value_text = "-" if value is None else (str(int(value)) if float(value).is_integer() else f"{value:g}")
     image_bytes = await asyncio.to_thread(
         scoreimage.render_player_card,
-        team_name or "?", None, player_name, stat_label, value_text, color_status, period_text,
+        team_name or "?", kbo.photo_url(pcode), player_name, stat_label, value_text, color_status, period_text,
     )
     file = discord.File(io.BytesIO(image_bytes), filename="score.png")
     embed.set_image(url="attachment://score.png")
@@ -291,7 +291,7 @@ async def _track_loop(
             consecutive_misses = 0
 
             embed, file = await build_embed(
-                player_name, team_name, is_pitcher, stat_label, direction, line, row, message_id=message.id,
+                pcode, player_name, team_name, is_pitcher, stat_label, direction, line, row, message_id=message.id,
             )
             leg_label = f"{player_name} {direction.title()} {line:g} {stat_label}"
 

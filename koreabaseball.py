@@ -45,6 +45,14 @@ _BATTING_LEADERS_URL = "https://eng.koreabaseball.com/stats/BattingLeaders.aspx"
 _PITCHING_LEADERS_URL = "https://eng.koreabaseball.com/stats/PitchingLeaders.aspx"
 _HITTER_GAMELOGS_URL = "https://eng.koreabaseball.com/Teams/PlayerInfoHitter/GameLogs.aspx?pcode={pcode}"
 _PITCHER_GAMELOGS_URL = "https://eng.koreabaseball.com/Teams/PlayerInfoPitcher/GameLogs.aspx?pcode={pcode}"
+# Confirmed live on a player's own Summary.aspx page (an <img> tag literally
+# builds this same URL from pcode + the current season year, falling back
+# to a "noimg.png" placeholder client-side on a 404) - deriving it directly
+# here avoids a second page fetch just to find a photo. A player with no
+# photo on file 404s, which _fetch_circular_logo (scoreimage.py) already
+# handles gracefully (falls back to no photo), so this is never validated
+# ahead of time.
+_PHOTO_URL = "https://6ptotvmi5753.edge.naverncp.com/KBO_IMAGE/person/middle/{year}/{pcode}.jpg"
 _REQUEST_TIMEOUT = 10
 
 # Leaders lists barely move within a day - no need to refetch every poll.
@@ -101,9 +109,15 @@ def _players_for(url: str, is_pitcher: bool) -> list[dict]:
         players.append({
             "pcode": pm.group(1), "name": pm.group(2).strip(),
             "team": tm.group(1).strip() if tm else None, "is_pitcher": is_pitcher,
+            "photo_url": photo_url(pm.group(1)),
         })
     _leaders_cache[url] = (players, time.time())
     return players
+
+
+def photo_url(pcode: str, now: Optional[float] = None) -> str:
+    year = datetime.fromtimestamp(now if now is not None else time.time(), tz=_KST).year
+    return _PHOTO_URL.format(year=year, pcode=pcode)
 
 
 def find_player(name: str) -> Optional[dict]:
@@ -113,7 +127,7 @@ def find_player(name: str) -> Optional[dict]:
     ("Austin Dean") - scores365.names_match's word-set comparison handles
     that automatically, same as it already does for reordered names
     elsewhere in this bot (no special-casing needed here). Returns
-    {"pcode", "name", "team", "is_pitcher"} or None."""
+    {"pcode", "name", "team", "is_pitcher", "photo_url"} or None."""
     for url, is_pitcher in ((_BATTING_LEADERS_URL, False), (_PITCHING_LEADERS_URL, True)):
         try:
             players = _players_for(url, is_pitcher)
