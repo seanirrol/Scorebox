@@ -245,6 +245,39 @@ class NflSpreadNoMatchup(unittest.TestCase):
         self.assertEqual(pick["kind"], "track")
 
 
+class BasketballSpreadNoMatchup(unittest.TestCase):
+    """Same no-opponent-named spread shape as NflSpreadNoMatchup above, but
+    for WNBA/NBA - confirmed live, a real "Phoenix Mercury -2.5 (Alt
+    Spread)" / "Indiana Fever +5.5 (Alt Spread)" pair under a WNBA header
+    silently vanished with no botlog trace at all (not even a "not
+    tracked" line) because the spread parser was scoped to sport == "nfl"
+    only. _SPORT_MAP maps both "wnba" and "nba" to the same "basketball"
+    sport key, so this covers both."""
+
+    def test_wnba_header_spread_line(self):
+        msg = "WNBA\nPhoenix Mercury -2.5 (Alt Spread) (Bet365 -190)"
+        picked = picks.parse_picks_message(msg)
+        self.assertEqual(len(picked), 1)
+        self.assertEqual(picked[0]["kind"], "team_total")
+        self.assertEqual(picked[0]["sport"], "basketball")
+        self.assertEqual(picked[0]["team"], "Phoenix Mercury")
+        self.assertEqual(picked[0]["direction"], "spread")
+        self.assertEqual(picked[0]["line"], -2.5)
+
+    def test_underdog_positive_spread(self):
+        msg = "WNBA\nIndiana Fever +5.5 (Alt Spread) (Bet365 -170)"
+        picked = picks.parse_picks_message(msg)
+        self.assertEqual(len(picked), 1)
+        self.assertEqual(picked[0]["direction"], "spread")
+        self.assertEqual(picked[0]["line"], 5.5)
+
+    def test_nba_header_also_covered(self):
+        msg = "NBA\nBoston Celtics -6.5 (Fanatics -110)"
+        picked = picks.parse_picks_message(msg)
+        self.assertEqual(len(picked), 1)
+        self.assertEqual(picked[0]["sport"], "basketball")
+
+
 class WinASetNoMatchup(unittest.TestCase):
     """"Player to Win at Least 1 Set" / "Player to Win a Set" with no
     opponent named at all - confirmed live, 7 of 8 picks in one real

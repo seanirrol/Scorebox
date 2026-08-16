@@ -386,9 +386,13 @@ _1H_COMBINED_TOTAL_RE = re.compile(
 # scores365.grade_spread). Distinguished from every other shape in this
 # file by a signed number directly after the team name with nothing else
 # trailing it (unlike the tennis games/sets handicap variants above, which
-# require a trailing "Games"/"Sets" word). Only checked for sport == "nfl"
-# (see _parse_description) - scoped narrowly since it hasn't been
-# confirmed live for any other team sport yet.
+# require a trailing "Games"/"Sets" word). Only checked for sport in
+# ("nfl", "basketball") (see _parse_description) - confirmed live for NFL
+# first, then WNBA (e.g. "Phoenix Mercury -2.5", "Indiana Fever +5.5" -
+# both silently unparsed before this); basketball covers WNBA and NBA alike
+# since _SPORT_MAP maps both to the same "basketball" sport key. Still
+# scoped narrowly rather than opened to every sport - not yet confirmed
+# live anywhere else.
 _TEAM_SPREAD_NOMATCHUP_RE = re.compile(r"^(.+?)\s+([+-]\d+(?:\.\d+)?)\s*$")
 
 
@@ -1515,11 +1519,12 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
         if f5_handicap:
             return f5_handicap
 
-    if sport == "nfl":
+    if sport in ("nfl", "basketball"):
         spread = _parse_team_spread_nomatchup_pick(sport, description)
         if spread:
             return spread
 
+    if sport == "nfl":
         onehalf_combined = _parse_1h_combined_total_pick(description, sport)
         if onehalf_combined:
             return onehalf_combined
