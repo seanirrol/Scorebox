@@ -296,6 +296,40 @@ class SportTournamentWinLoss(DailyLogTestCase):
         self.assertEqual(dailylog.sport_tournament_win_loss()["MLB"], {"MLB": (1, 1)})
         self.assertNotIn("Baseball", dailylog.sport_tournament_win_loss())
 
+    def test_custom_score_channel_ids_isolates_a_separate_route(self):
+        # Confirmed live this matters for real: a second Discord
+        # server/client's own scores channel can end up in the very same
+        # guild as one of the default PERFORMANCE_CHANNEL_IDS - the only
+        # thing keeping their numbers from mixing into the same report is
+        # this explicit score_channel_ids scoping (see bot.py's own
+        # per-invoke-channel routing).
+        other_server_channel = 555555
+        self._log(other_server_channel, "tracker", "k1", "Some Team ML", "NFL", "NFL", "won")
+        self._log(self.IN_CHANNEL, "tracker", "k2", "Other Team ML", "NFL", "NFL", "lost")
+        self.assertEqual(
+            dailylog.sport_tournament_win_loss(score_channel_ids=(other_server_channel,)),
+            {"NFL": {"NFL": (1, 0)}},
+        )
+        # The default scope never sees the other server's pick.
+        self.assertEqual(dailylog.sport_tournament_win_loss()["NFL"], {"NFL": (0, 1)})
+
+    def test_overrides_dont_apply_outside_the_default_channel_scope(self):
+        # _SPORT_DISPLAY_MERGE/_NBA_CLEAN_SLATE_FROM were requested for the
+        # default PERFORMANCE_CHANNEL_IDS dataset specifically - a
+        # different route shouldn't silently inherit them.
+        other_server_channel = 555555
+        self._log(other_server_channel, "tracker", "k1", "Some Team ML", "Basketball", None, "won")
+        self._log(other_server_channel, "proptracker", "k2", "LeBron James Points", "NBA", None, "won", date_str="2026-08-01")
+        result = dailylog.sport_tournament_win_loss(score_channel_ids=(other_server_channel,))
+        self.assertEqual(result["Basketball"], {"Basketball": (1, 0)})
+        self.assertEqual(result["NBA"], {"NBA": (1, 0)})
+
+    def test_available_performance_months_respects_custom_score_channel_ids(self):
+        other_server_channel = 555555
+        self._log(other_server_channel, "tracker", "k1", "Some Team ML", "NFL", "NFL", "won", date_str="2026-07-01")
+        self.assertEqual(dailylog.available_performance_months(score_channel_ids=(other_server_channel,)), ["2026-07"])
+        self.assertEqual(dailylog.available_performance_months(), [])
+
     def test_nba_pick_before_clean_slate_date_is_hidden(self):
         self._log(self.IN_CHANNEL, "proptracker", "k1", "LeBron James Points", "NBA", None, "won", date_str="2026-08-01")
         self.assertNotIn("NBA", dailylog.sport_tournament_win_loss())

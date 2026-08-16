@@ -16,7 +16,7 @@ import asyncio
 import io
 import logging
 import re
-from typing import Optional
+from typing import NamedTuple, Optional
 
 import discord
 from discord import app_commands
@@ -2634,10 +2634,39 @@ async def winlossgraph_command(interaction: discord.Interaction):
 
 
 _PERFORMANCE_ALL_TIME = "All-time"  # not a real "YYYY-MM" value - handled specially wherever a period is passed around
-# /performance can be run from anywhere (no channel restriction, unlike
-# /summary/winlossgraph's config.SUMMARY_ROUTES gate), but always posts to
-# this one fixed channel regardless of where it was invoked.
-_PERFORMANCE_POST_CHANNEL_ID = 1538638629889380412
+
+
+class _PerformanceRoute(NamedTuple):
+    score_channels: tuple[int, ...]
+    post_channel_id: int
+
+
+# Per-invoke-channel /performance routing - same "keep entirely separate
+# Discord servers/clients from ever mixing into the same report" reasoning
+# as config.SUMMARY_ROUTES, just keyed to which scores channels count
+# instead of which picks-source channels do (see dailylog.
+# PERFORMANCE_CHANNEL_IDS' own docstring for why /performance filters by
+# `channel_id` at all). Confirmed live this matters for real: one of the
+# original two scores channels below sits in the very same Discord guild
+# as a channel in this override table, so without an explicit route here,
+# nothing would stop two unrelated clients' numbers from showing up in the
+# same chart depending on which channel the command happened to be run
+# from. An invoke channel not listed here falls back to the original
+# hardcoded scope (dailylog.PERFORMANCE_CHANNEL_IDS / _PERFORMANCE_DEFAULT_
+# POST_CHANNEL_ID) rather than being blocked outright - /performance still
+# has no ALLOWED_CHANNEL_ID-style restriction on where it can run.
+_PERFORMANCE_DEFAULT_POST_CHANNEL_ID = 1538638629889380412
+_PERFORMANCE_ROUTE_OVERRIDES: dict[int, _PerformanceRoute] = {
+    1421347964831399988: _PerformanceRoute((1537081802764845178,), 1537081802764845178),
+    1535311599403798528: _PerformanceRoute((1537081802764845178,), 1537081802764845178),
+}
+
+
+def _performance_route(interaction_channel_id: int) -> _PerformanceRoute:
+    return _PERFORMANCE_ROUTE_OVERRIDES.get(
+        interaction_channel_id,
+        _PerformanceRoute(dailylog.PERFORMANCE_CHANNEL_IDS, _PERFORMANCE_DEFAULT_POST_CHANNEL_ID),
+    )
 
 
 def _performance_title(period: str) -> str:
@@ -2656,15 +2685,16 @@ def _build_performance_embed_and_file(image_bytes: bytes) -> tuple[discord.Embed
 class PerformancePostView(discord.ui.View):
     """Same preview-then-post pattern as WinLossGraphPostView - re-renders
     at click time (not the preview-time snapshot) since a pending pick can
-    resolve in the time between preview and click. Always posts to
-    _PERFORMANCE_POST_CHANNEL_ID regardless of where /performance itself
-    was run - not scoped to a picks-source route the way config.
-    SUMMARY_ROUTES is, /performance is scoped to a fixed pair of scores
-    channels instead (see dailylog.PERFORMANCE_CHANNEL_IDS)."""
+    resolve in the time between preview and click. Always posts to this
+    route's own post_channel_id, resolved once (via _performance_route) at
+    the moment /performance was originally invoked - not re-resolved from
+    wherever this button happens to be clicked, though in practice that's
+    always the same ephemeral message anyway."""
 
-    def __init__(self, period: str, requester_id: int):
+    def __init__(self, period: str, route: _PerformanceRoute, requester_id: int):
         super().__init__(timeout=900)
         self.period = period
+        self.route = route
         self.requester_id = requester_id
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -2676,7 +2706,7 @@ class PerformancePostView(discord.ui.View):
     @discord.ui.button(label="Post to channel", style=discord.ButtonStyle.success)
     async def post(self, interaction: discord.Interaction, button: discord.ui.Button):
         year_month = None if self.period == _PERFORMANCE_ALL_TIME else self.period
-        data = dailylog.sport_tournament_win_loss(year_month)
+        data = dailylog.sport_tournament_win_loss(year_month, self.route.score_channels)
         if not data:
             await interaction.response.edit_message(
                 content="Nothing to post — no decided picks logged for that period.", embed=None, attachments=[], view=None,
@@ -2685,9 +2715,9 @@ class PerformancePostView(discord.ui.View):
             return
         image_bytes = await asyncio.to_thread(performance.render_chart, _performance_title(self.period), data)
         embed, file = _build_performance_embed_and_file(image_bytes)
-        target = client.get_channel(_PERFORMANCE_POST_CHANNEL_ID) or await client.fetch_channel(_PERFORMANCE_POST_CHANNEL_ID)
+        target = client.get_channel(self.route.post_channel_id) or await client.fetch_channel(self.route.post_channel_id)
         await target.send(embed=embed, file=file)
-        botlog.event(f"📊 Performance ({self.period}) posted to <#{_PERFORMANCE_POST_CHANNEL_ID}> by **{interaction.user}**")
+        botlog.event(f"📊 Performance ({self.period}) posted to <#{self.route.post_channel_id}> by **{interaction.user}**")
         await interaction.response.edit_message(content="Posted.", embed=None, attachments=[], view=None)
         self.stop()
 
@@ -2697,16 +2727,16 @@ class PerformancePostView(discord.ui.View):
         self.stop()
 
 
-async def _send_performance_preview(interaction: discord.Interaction, period: str, *, edit: bool):
+async def _send_performance_preview(interaction: discord.Interaction, period: str, route: _PerformanceRoute, *, edit: bool):
     year_month = None if period == _PERFORMANCE_ALL_TIME else period
-    data = dailylog.sport_tournament_win_loss(year_month)
+    data = dailylog.sport_tournament_win_loss(year_month, route.score_channels)
     if not data:
         content, embed, file, view = f"No decided picks logged for {period}.", None, None, None
     else:
         image_bytes = await asyncio.to_thread(performance.render_chart, _performance_title(period), data)
         embed, file = _build_performance_embed_and_file(image_bytes)
-        content = f"Preview only - not posted yet. Click below to publish it to <#{_PERFORMANCE_POST_CHANNEL_ID}>."
-        view = PerformancePostView(period, interaction.user.id)
+        content = f"Preview only - not posted yet. Click below to publish it to <#{route.post_channel_id}>."
+        view = PerformancePostView(period, route, interaction.user.id)
     if edit:
         await interaction.response.edit_message(content=content, embed=embed, attachments=[file] if file else [], view=view)
     else:
@@ -2715,27 +2745,28 @@ async def _send_performance_preview(interaction: discord.Interaction, period: st
 
 class _PerformancePeriodSelect(discord.ui.Select):
     """"All-time" first, then one option per month with at least one
-    decided pick logged in dailylog.PERFORMANCE_CHANNEL_IDS."""
+    decided pick logged in this route's own score_channels."""
 
-    def __init__(self, months: list[str], requester_id: int):
+    def __init__(self, months: list[str], route: _PerformanceRoute, requester_id: int):
         options = [discord.SelectOption(label=_PERFORMANCE_ALL_TIME, description="Every decided pick ever logged")]
         for m in months:
-            decided = sum(w + l for sport_data in dailylog.sport_tournament_win_loss(m).values() for w, l in sport_data.values())
+            decided = sum(w + l for sport_data in dailylog.sport_tournament_win_loss(m, route.score_channels).values() for w, l in sport_data.values())
             options.append(discord.SelectOption(label=m, description=f"{decided} decided pick(s)"))
         super().__init__(placeholder="Pick a period to preview...", min_values=1, max_values=1, options=options)
+        self.route = route
         self.requester_id = requester_id
 
     async def callback(self, interaction: discord.Interaction):
         if interaction.user.id != self.requester_id:
             await interaction.response.send_message("Only the person who ran /performance can use this.", ephemeral=True)
             return
-        await _send_performance_preview(interaction, self.values[0], edit=True)
+        await _send_performance_preview(interaction, self.values[0], self.route, edit=True)
 
 
 class PerformancePeriodPickView(discord.ui.View):
-    def __init__(self, months: list[str], requester_id: int):
+    def __init__(self, months: list[str], route: _PerformanceRoute, requester_id: int):
         super().__init__(timeout=300)
-        self.add_item(_PerformancePeriodSelect(months, requester_id))
+        self.add_item(_PerformancePeriodSelect(months, route, requester_id))
 
 
 @tree.command(name="performance", description="Preview a win-rate chart by sport and tournament, then optionally post it")
@@ -2746,8 +2777,9 @@ async def performance_command(interaction: discord.Interaction):
     _log_command(interaction)
     await interaction.response.defer(ephemeral=True)
 
-    months = dailylog.available_performance_months(limit=12)
-    view = PerformancePeriodPickView(months, interaction.user.id)
+    route = _performance_route(interaction.channel_id)
+    months = dailylog.available_performance_months(limit=12, score_channel_ids=route.score_channels)
+    view = PerformancePeriodPickView(months, route, interaction.user.id)
     await interaction.followup.send("Pick a period to preview:", view=view, ephemeral=True)
 
 

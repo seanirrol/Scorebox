@@ -338,51 +338,65 @@ _SPORT_DISPLAY_MERGE = {"Basketball": "WNBA", "Baseball": "MLB"}
 _NBA_CLEAN_SLATE_FROM = "2026-08-16"
 
 
-def sport_tournament_win_loss(year_month: Optional[str] = None) -> dict[str, dict[str, tuple[int, int]]]:
+def sport_tournament_win_loss(
+    year_month: Optional[str] = None, score_channel_ids: Iterable[int] = PERFORMANCE_CHANNEL_IDS,
+) -> dict[str, dict[str, tuple[int, int]]]:
     """{sport: {tournament: (won, lost)}} for every decided pick logged
-    with channel_id in PERFORMANCE_CHANNEL_IDS - all-time if year_month is
-    None ("YYYY-MM" otherwise). Same "decided only" rule as daily_win_loss
-    (push/void/pending excluded). Every bet type within one tournament is
-    combined into that tournament's own single won/lost count - see
-    picks.py/each tracker's own record_pick call for how `tournament` gets
-    set going forward (e.g. the actual event name for esports/UFC/boxing,
-    the specific league for baseball/tennis/soccer via
-    scores365.tournament_name). See _SPORT_DISPLAY_MERGE/
-    _NBA_CLEAN_SLATE_FROM for the temporary display-only adjustments on
-    top of that.
+    with channel_id in score_channel_ids (defaults to
+    PERFORMANCE_CHANNEL_IDS) - all-time if year_month is None ("YYYY-MM"
+    otherwise). Same "decided only" rule as daily_win_loss (push/void/
+    pending excluded). Every bet type within one tournament is combined
+    into that tournament's own single won/lost count - see picks.py/each
+    tracker's own record_pick call for how `tournament` gets set going
+    forward (e.g. the actual event name for esports/UFC/boxing, the
+    specific league for baseball/tennis/soccer via
+    scores365.tournament_name).
+
+    _SPORT_DISPLAY_MERGE/_NBA_CLEAN_SLATE_FROM only apply for the default
+    PERFORMANCE_CHANNEL_IDS scope - those were requested for that specific
+    dataset (confirmed live against it), not a blanket rule every other
+    /performance route should inherit sight unseen. A different
+    score_channel_ids (see bot.py's own per-invoke-channel routing, kept
+    for entirely separate Discord servers/clients whose numbers must never
+    mix into the same report) gets none of that adjustment.
 
     A pick with no tournament recorded (an old entry logged before that
     field existed, or a sport with no real tournament concept below the
     sport level itself - NBA/NFL/NHL/WNBA/MLB/KBO are each already one
     single league) falls under its own sport's name as a single combined
     tournament bucket, rather than a separate "None" bucket."""
+    ids = tuple(score_channel_ids)
+    apply_overrides = ids == PERFORMANCE_CHANNEL_IDS
     data = state.load_daily_log()
     counts: dict[str, dict[str, list[int]]] = {}
     for entry in data.values():
-        if entry.get("channel_id") not in PERFORMANCE_CHANNEL_IDS:
+        if entry.get("channel_id") not in ids:
             continue
         if entry["status"] not in ("won", "lost"):
             continue
         if year_month and not entry["date"].startswith(year_month):
             continue
         sport = entry.get("sport") or _fallback_sport(entry)
-        if sport == "NBA" and entry["date"] < _NBA_CLEAN_SLATE_FROM:
-            continue
-        sport = _SPORT_DISPLAY_MERGE.get(sport, sport)
+        if apply_overrides:
+            if sport == "NBA" and entry["date"] < _NBA_CLEAN_SLATE_FROM:
+                continue
+            sport = _SPORT_DISPLAY_MERGE.get(sport, sport)
         tournament = entry.get("tournament") or sport
         bucket = counts.setdefault(sport, {}).setdefault(tournament, [0, 0])
         bucket[0 if entry["status"] == "won" else 1] += 1
     return {sport: {t: (w, l) for t, (w, l) in tournaments.items()} for sport, tournaments in counts.items()}
 
 
-def available_performance_months(limit: int = 12) -> list[str]:
+def available_performance_months(limit: int = 12, score_channel_ids: Iterable[int] = PERFORMANCE_CHANNEL_IDS) -> list[str]:
     """Most-recent-first distinct "YYYY-MM" months with at least one
-    decided pick logged in PERFORMANCE_CHANNEL_IDS - used for /performance's
-    month dropdown (alongside its own "All-time" option, which isn't a
-    real month and so isn't in this list)."""
+    decided pick logged in score_channel_ids (defaults to
+    PERFORMANCE_CHANNEL_IDS) - used for /performance's month dropdown
+    (alongside its own "All-time" option, which isn't a real month and so
+    isn't in this list)."""
+    ids = tuple(score_channel_ids)
     data = state.load_daily_log()
     months = {
         entry["date"][:7] for entry in data.values()
-        if entry.get("channel_id") in PERFORMANCE_CHANNEL_IDS and entry["status"] in ("won", "lost")
+        if entry.get("channel_id") in ids and entry["status"] in ("won", "lost")
     }
     return sorted(months, reverse=True)[:limit]
