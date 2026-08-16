@@ -2642,8 +2642,8 @@ _PERFORMANCE_POST_CHANNEL_ID = 1538638629889380412
 
 def _performance_title(period: str) -> str:
     if period == _PERFORMANCE_ALL_TIME:
-        return "Performance — All-Time"
-    return f"Performance — {winlossgraph._month_title(period)}"
+        return "Win Rate - By Sports — All-Time"
+    return f"Win Rate - By Sports — {winlossgraph._month_title(period)}"
 
 
 def _build_performance_embed_and_file(image_bytes: bytes) -> tuple[discord.Embed, discord.File]:
