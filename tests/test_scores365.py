@@ -203,6 +203,12 @@ class SportLabel(unittest.TestCase):
     def test_wnba_competition_name_still_resolves_to_wnba(self):
         self.assertEqual(scores365.sport_label(2, "WNBA"), "WNBA")
 
+    def test_nba_competition_name_resolves_to_nba(self):
+        self.assertEqual(scores365.sport_label(2, "NBA"), "NBA")
+
+    def test_wnba_checked_before_nba_since_nba_is_a_substring(self):
+        self.assertEqual(scores365.sport_label(2, "WNBA"), "WNBA")
+
     def test_basketball_with_no_competition_name_stays_generic(self):
         self.assertEqual(scores365.sport_label(2), "Basketball")
 

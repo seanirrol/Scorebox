@@ -318,6 +318,26 @@ def _fallback_sport(entry: dict) -> str:
     return section or "Other"
 
 
+# Temporary /performance display-only adjustments (per explicit request,
+# scoped "for now") - never touches the underlying dailylog entries
+# themselves, just how sport_tournament_win_loss groups them, so lifting
+# any of these later is a one-line change, not a data migration.
+#
+# "Basketball"/"Baseball" are the generic label tracker.py fell back to
+# before scores365.sport_label learned to tell NBA/WNBA and MLB/KBO apart
+# - real production data confirmed every one of those older entries was
+# actually WNBA/MLB, so they're folded straight in rather than sitting as
+# their own confusingly-tiny buckets.
+_SPORT_DISPLAY_MERGE = {"Basketball": "WNBA", "Baseball": "MLB"}
+
+# A deliberate clean-slate reset for NBA specifically - existing NBA
+# entries (logged before scores365.sport_label could even tell NBA and
+# WNBA apart reliably) are hidden from /performance entirely, while an NBA
+# pick dated on/after this still shows normally, so NBA tracking starts
+# fresh from here rather than carrying old, less-trustworthy numbers.
+_NBA_CLEAN_SLATE_FROM = "2026-08-16"
+
+
 def sport_tournament_win_loss(year_month: Optional[str] = None) -> dict[str, dict[str, tuple[int, int]]]:
     """{sport: {tournament: (won, lost)}} for every decided pick logged
     with channel_id in PERFORMANCE_CHANNEL_IDS - all-time if year_month is
@@ -327,7 +347,9 @@ def sport_tournament_win_loss(year_month: Optional[str] = None) -> dict[str, dic
     picks.py/each tracker's own record_pick call for how `tournament` gets
     set going forward (e.g. the actual event name for esports/UFC/boxing,
     the specific league for baseball/tennis/soccer via
-    scores365.tournament_name).
+    scores365.tournament_name). See _SPORT_DISPLAY_MERGE/
+    _NBA_CLEAN_SLATE_FROM for the temporary display-only adjustments on
+    top of that.
 
     A pick with no tournament recorded (an old entry logged before that
     field existed, or a sport with no real tournament concept below the
@@ -344,6 +366,9 @@ def sport_tournament_win_loss(year_month: Optional[str] = None) -> dict[str, dic
         if year_month and not entry["date"].startswith(year_month):
             continue
         sport = entry.get("sport") or _fallback_sport(entry)
+        if sport == "NBA" and entry["date"] < _NBA_CLEAN_SLATE_FROM:
+            continue
+        sport = _SPORT_DISPLAY_MERGE.get(sport, sport)
         tournament = entry.get("tournament") or sport
         bucket = counts.setdefault(sport, {}).setdefault(tournament, [0, 0])
         bucket[0 if entry["status"] == "won" else 1] += 1

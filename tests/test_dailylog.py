@@ -284,6 +284,26 @@ class SportTournamentWinLoss(DailyLogTestCase):
         self._log(self.OTHER_CHANNEL, "tracker", "k2", "New York Jets ML", "NFL", "NFL", "lost", date_str="2026-09-01")
         self.assertEqual(dailylog.available_performance_months(), ["2026-08"])
 
+    def test_basketball_merges_into_wnba(self):
+        self._log(self.IN_CHANNEL, "tracker", "k1", "Some Team ML", "Basketball", None, "won")
+        self._log(self.IN_CHANNEL, "proptracker", "k2", "Angel Reese Rebounds", "WNBA", None, "lost")
+        self.assertEqual(dailylog.sport_tournament_win_loss()["WNBA"], {"WNBA": (1, 1)})
+        self.assertNotIn("Basketball", dailylog.sport_tournament_win_loss())
+
+    def test_baseball_merges_into_mlb(self):
+        self._log(self.IN_CHANNEL, "tracker", "k1", "Some Team ML", "Baseball", None, "won")
+        self._log(self.IN_CHANNEL, "proptracker", "k2", "Aaron Judge Home Runs", "MLB", None, "lost")
+        self.assertEqual(dailylog.sport_tournament_win_loss()["MLB"], {"MLB": (1, 1)})
+        self.assertNotIn("Baseball", dailylog.sport_tournament_win_loss())
+
+    def test_nba_pick_before_clean_slate_date_is_hidden(self):
+        self._log(self.IN_CHANNEL, "proptracker", "k1", "LeBron James Points", "NBA", None, "won", date_str="2026-08-01")
+        self.assertNotIn("NBA", dailylog.sport_tournament_win_loss())
+
+    def test_nba_pick_on_or_after_clean_slate_date_still_shows(self):
+        self._log(self.IN_CHANNEL, "proptracker", "k1", "LeBron James Points", "NBA", None, "won", date_str="2026-08-16")
+        self.assertEqual(dailylog.sport_tournament_win_loss()["NBA"], {"NBA": (1, 0)})
+
 
 class WinLossGraphOverrides(DailyLogTestCase):
     """set_winlossgraph_override lets /winlossgraph show custom counts for

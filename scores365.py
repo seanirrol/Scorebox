@@ -72,10 +72,22 @@ def sport_label(sport_id: Optional[int], competition_name: Optional[str] = None)
     literally "MLB" or "KBO" for those games), so a plain "Baseball" label
     used to lump every league together and away from proptracker.py's own
     league-specific "MLB"/kboproptracker.py's "KBO" label for the exact
-    same real game - one real-world league is the whole point of /winrate-
-    style grouping (see dailylog.py's WINRATE... constants)."""
-    if sport_id == SPORT_IDS["basketball"] and competition_name and "wnba" in competition_name.lower():
-        return "WNBA"
+    same real game - one real-world league is the whole point of
+    /performance-style grouping (see dailylog.py's PERFORMANCE_CHANNEL_IDS
+    and sport_tournament_win_loss).
+
+    NBA checked here too (not just WNBA) so a tracker.py-driven NBA
+    moneyline/spread pick tags "NBA" - same specific label
+    proptracker.py's own NBA player props already use - instead of
+    falling back to the generic "Basketball" bucket both WNBA and NBA used
+    to share. Checked after "wnba" - "nba" is a substring of "wnba", so
+    order matters here."""
+    if sport_id == SPORT_IDS["basketball"] and competition_name:
+        lowered = competition_name.lower()
+        if "wnba" in lowered:
+            return "WNBA"
+        if "nba" in lowered:
+            return "NBA"
     if sport_id == SPORT_IDS["baseball"] and competition_name:
         lowered = competition_name.lower()
         if "kbo" in lowered:
