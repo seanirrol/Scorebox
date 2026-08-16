@@ -263,6 +263,17 @@ async def _track_loop(
 
     await asyncio.sleep(random.uniform(0, config.UPDATE_INTERVAL_SECONDS))
     refreshed = None
+    # Boxing has no live round/clock data (see this module's own docstring)
+    # - once a fight goes "inprogress" its card renders byte-identical every
+    # single poll until it's finally graded, yet the loop below used to
+    # re-upload that unchanged image every cycle regardless. Confirmed live:
+    # that's exactly what tripped Discord's error 400009 ("This server has
+    # exceeded the message edit attachment upload limit") repeatedly across
+    # several trackers at once, freezing cards (including ones feeding a
+    # /parlay leg) mid-event. Skipping the edit whenever the rendered PNG
+    # hasn't actually changed avoids burning that shared quota on no-op
+    # re-uploads.
+    last_sent_image_bytes = None
     try:
         while time.monotonic() < deadline:
             await asyncio.sleep(config.UPDATE_INTERVAL_SECONDS)
@@ -365,10 +376,15 @@ async def _track_loop(
                     message.channel, channel_id, message, "boxingtracker", key, leg_label, detail, group_ids,
                 )
 
+            image_bytes = file.fp.getvalue()
+            if image_bytes == last_sent_image_bytes:
+                continue
+
             try:
                 await throttle.run(channel_id, lambda: message.edit(embed=embed, attachments=[file]))
                 consecutive_edit_failures = 0
                 consecutive_rate_limit_failures = 0
+                last_sent_image_bytes = image_bytes
             except discord.HTTPException as e:
                 if e.status == 429:
                     consecutive_rate_limit_failures += 1

@@ -358,6 +358,14 @@ async def _track_loop(
 
     await asyncio.sleep(random.uniform(0, config.UPDATE_INTERVAL_SECONDS))
     refreshed = None
+    # See boxingtracker.py's identical guard for why this exists - skips a
+    # redundant image re-upload (and the Discord edit call entirely) when
+    # the rendered card is byte-identical to what's already posted, e.g.
+    # during the "Walkouts" pre-round window where status is live but
+    # nothing about the card has actually changed yet. Confirmed live this
+    # is what was tripping Discord's error 400009 (message edit attachment
+    # upload limit) and freezing cards mid-event.
+    last_sent_image_bytes = None
     try:
         while time.monotonic() < deadline:
             await asyncio.sleep(config.UPDATE_INTERVAL_SECONDS)
@@ -501,10 +509,15 @@ async def _track_loop(
                     message.channel, channel_id, message, "ufctracker", key, leg_label, detail, group_ids,
                 )
 
+            image_bytes = file.fp.getvalue()
+            if image_bytes == last_sent_image_bytes:
+                continue
+
             try:
                 await throttle.run(channel_id, lambda: message.edit(embed=embed, attachments=[file]))
                 consecutive_edit_failures = 0
                 consecutive_rate_limit_failures = 0
+                last_sent_image_bytes = image_bytes
             except discord.HTTPException as e:
                 if e.status == 429:
                     consecutive_rate_limit_failures += 1
