@@ -555,8 +555,18 @@ _AMBIGUOUS_STAT_DEFAULTS = {
 # player-prop lookup is scoped to a single league per sport key, so a WNBA
 # prop needs to be routed to its own "wnba" ESPN sport instead of "basketball"
 # (which only points at the NBA endpoint). Team picks aren't affected by this.
+#
+# "kbo" is the opposite problem: _SPORT_MAP collapses it into "baseball" too
+# (365scores' game-level search does span both leagues), but ESPN has no KBO
+# league at all - only MLB. Confirmed live: without this override, a KBO
+# prop for a former-MLB player (e.g. Austin Dean, Sam Hilliard) silently
+# matched that player's old MLB athlete record and "tracked" against the
+# wrong team/game entirely - it never grades against real KBO stats, just
+# times out later. Tagging it "kbo" here instead lets _auto_playerprops
+# (bot.py) reject it honestly up front instead of mismatching.
 _PROP_SPORT_OVERRIDE = {
     "wnba": "wnba",
+    "kbo": "kbo",
 }
 
 
@@ -841,8 +851,12 @@ def _parse_player_prop(sport_key: str, sport: str, description: str) -> Optional
     direction = pm.group(2).lower()
     line = float(pm.group(3))
     raw_stat = pm.group(4).strip()
+    # Matched against the real underlying sport's catalog (e.g. "baseball"
+    # for a KBO prop) - only the final tagged sport below uses the override,
+    # so a stat like "Strikeouts (Pitching)" still resolves correctly even
+    # for a sport ESPN itself has no dedicated catalog entry for.
+    stat_label = _match_stat_label(sport, raw_stat)
     prop_sport = _PROP_SPORT_OVERRIDE.get(sport_key, sport)
-    stat_label = _match_stat_label(prop_sport, raw_stat)
     if not player or not stat_label:
         return None
     return {

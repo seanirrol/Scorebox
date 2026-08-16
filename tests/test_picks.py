@@ -278,6 +278,43 @@ class BasketballSpreadNoMatchup(unittest.TestCase):
         self.assertEqual(picked[0]["sport"], "basketball")
 
 
+class KboPlayerProps(unittest.TestCase):
+    """A KBO player prop used to parse with sport "baseball" - identical to
+    a real MLB prop - which let ESPN's player search (MLB-only, no KBO
+    league) silently match a former-MLB player's old MLB athlete record and
+    "track" the pick against the wrong team/game entirely. Confirmed live:
+    Austin Dean and Sam Hilliard (both KBO imports with MLB pasts) matched
+    the San Francisco Giants and Colorado Rockies respectively. Tagging the
+    sport "kbo" instead (still using baseball's own stat catalog to resolve
+    the stat name) lets bot.py reject it honestly instead of mismatching."""
+
+    def test_kbo_prop_tagged_distinctly_from_mlb(self):
+        msg = "KBO\nGwak Been Over 4.5 Strikeouts (Alt Line) (Bet365 -200)"
+        picked = picks.parse_picks_message(msg)
+        self.assertEqual(len(picked), 1)
+        self.assertEqual(picked[0]["kind"], "playerprops")
+        self.assertEqual(picked[0]["sport"], "kbo")
+        self.assertEqual(picked[0]["player"], "Gwak Been")
+        self.assertEqual(picked[0]["stat"], "Strikeouts (Pitching)")
+
+    def test_kbo_prop_stat_still_resolves_via_the_baseball_catalog(self):
+        # The whole point: KBO has no catalog of its own on ESPN's side, but
+        # the stat wording is identical to MLB's, so matching must still
+        # succeed - a KBO prop failing to parse at all would be the same
+        # silent-vanish bug this file exists to prevent, just for a
+        # different reason.
+        msg = "KBO\nAustin Dean Over 0.5 Total Bases (Alt Line) (Fanatics -225)"
+        picked = picks.parse_picks_message(msg)
+        self.assertEqual(len(picked), 1)
+        self.assertEqual(picked[0]["stat"], "Total Bases")
+
+    def test_mlb_prop_unaffected(self):
+        msg = "MLB\nElly De La Cruz Over 1.5 Total Bases (Fanatics -150)"
+        picked = picks.parse_picks_message(msg)
+        self.assertEqual(len(picked), 1)
+        self.assertEqual(picked[0]["sport"], "baseball")
+
+
 class WinASetNoMatchup(unittest.TestCase):
     """"Player to Win at Least 1 Set" / "Player to Win a Set" with no
     opponent named at all - confirmed live, 7 of 8 picks in one real

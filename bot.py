@@ -424,6 +424,16 @@ async def _auto_playerprops(
     section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
 ):
     """Mirrors /playerprops' core logic for an auto-detected pick."""
+    if sport_value == "kbo":
+        # ESPN has no KBO league at all (only MLB) - confirmed live, without
+        # this a KBO prop for a former-MLB player silently matched that
+        # player's old MLB athlete record and "tracked" against the wrong
+        # team/game entirely. picks.py tags a KBO prop's sport as "kbo"
+        # (distinct from a real MLB prop's "baseball") specifically so this
+        # can reject it honestly instead of mismatching - see
+        # _PROP_SPORT_OVERRIDE's own comment for the full story.
+        botlog.event(f"❌ Not tracked (prop): **{player}** {stat} — no player-props source for KBO yet")
+        return
     stat_key = espn.STAT_CATALOG.get(sport_value, {}).get(stat)
     if not stat_key:
         botlog.event(f"❌ Not tracked (prop): **{player}** {stat} ({sport_value}) — unknown stat for this sport")
