@@ -93,6 +93,7 @@ def _tracker_modules():
     import halftracker
     import inning1tracker
     import inningtracker
+    import kboproptracker
     import proptracker
     import settracker
     import soccerpropstracker
@@ -105,7 +106,7 @@ def _tracker_modules():
         "f5tracker": f5tracker, "halftracker": halftracker, "inning1tracker": inning1tracker,
         "settracker": settracker, "soccerpropstracker": soccerpropstracker,
         "tennispropstracker": tennispropstracker, "ufctracker": ufctracker, "boxingtracker": boxingtracker,
-        "esportstracker": esportstracker,
+        "esportstracker": esportstracker, "kboproptracker": kboproptracker,
     }
 
 
@@ -201,6 +202,12 @@ def resolve_leg(message_id: int) -> Optional[tuple[str, str, int]]:
         channel_id, fight_id, fighter_id, _owner_id = owner
         key = mods["boxingtracker"].track_key(channel_id, fight_id, fighter_id)
         return "boxingtracker", key, channel_id
+
+    owner = mods["kboproptracker"].get_message_owner(message_id)
+    if owner:
+        channel_id, pcode, stat_label, direction, line, target_date, _owner_id = owner
+        key = mods["kboproptracker"].track_key(channel_id, pcode, stat_label, direction, line, target_date)
+        return "kboproptracker", key, channel_id
 
     owner = mods["esportstracker"].get_message_owner(message_id)
     if owner:

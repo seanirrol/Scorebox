@@ -33,6 +33,7 @@ HALF_FILE = os.path.join(_DIR, "half_state.json")
 PENDING_TRACK_FILE = os.path.join(_DIR, "pending_track_state.json")
 WINLOSSGRAPH_OVERRIDES_FILE = os.path.join(_DIR, "winlossgraph_overrides_state.json")
 BOXING_FILE = os.path.join(_DIR, "boxing_state.json")
+KBO_PROPS_FILE = os.path.join(_DIR, "kbo_props_state.json")
 
 
 def _load(path: str) -> dict[str, Any]:
@@ -128,6 +129,14 @@ def load_boxing() -> dict[str, Any]:
 
 def save_boxing(data: dict[str, Any]):
     _save(BOXING_FILE, data)
+
+
+def load_kbo_props() -> dict[str, Any]:
+    return _load(KBO_PROPS_FILE)
+
+
+def save_kbo_props(data: dict[str, Any]):
+    _save(KBO_PROPS_FILE, data)
 
 
 def load_soccer_props() -> dict[str, Any]:

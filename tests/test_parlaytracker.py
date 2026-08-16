@@ -27,6 +27,7 @@ import f5tracker
 import halftracker
 import inning1tracker
 import inningtracker
+import kboproptracker
 import parlaytracker
 import proptracker
 import settracker
@@ -135,6 +136,13 @@ class ResolveLegMatchesEachModulesOwnerShape(unittest.TestCase):
         self.assertEqual(
             parlaytracker.resolve_leg(13),
             ("boxingtracker", boxingtracker.track_key(555, 10758, 4524), 555),
+        )
+
+    def test_kboproptracker(self):
+        self._register(kboproptracker, 14, 555, "53123", "Total Bases", "over", 0.5, "08.16", 1)
+        self.assertEqual(
+            parlaytracker.resolve_leg(14),
+            ("kboproptracker", kboproptracker.track_key(555, "53123", "Total Bases", "over", 0.5, "08.16"), 555),
         )
 
     def test_esportstracker_unaffected(self):

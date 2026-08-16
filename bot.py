@@ -34,6 +34,8 @@ import f5tracker
 import halftracker
 import inning1tracker
 import inningtracker
+import kboproptracker
+import koreabaseball
 import parlaytracker
 import pendingdelete
 import pendingsoccerprops
@@ -123,6 +125,7 @@ async def on_ready():
     await _safe_resume("soccerpropstracker", soccerpropstracker.resume_all(client))
     await _safe_resume("ufctracker", ufctracker.resume_all(client))
     await _safe_resume("boxingtracker", boxingtracker.resume_all(client))
+    await _safe_resume("kboproptracker", kboproptracker.resume_all(client))
     await _safe_resume("esportstracker", esportstracker.resume_all(client))
     await _safe_resume("parlaytracker", parlaytracker.resume_all(client))
     await _safe_resume("pendingdelete", pendingdelete.resume_all(client))
@@ -145,6 +148,7 @@ def _find_message_owner(card_message_id: int) -> Optional[tuple[str, tuple]]:
         ("tennis_prop", tennispropstracker.get_message_owner),
         ("ufc", ufctracker.get_message_owner),
         ("boxing", boxingtracker.get_message_owner),
+        ("kbo_prop", kboproptracker.get_message_owner),
         ("soccer_prop", soccerpropstracker.get_message_owner),
         ("esports", esportstracker.get_message_owner),
     ):
@@ -190,6 +194,9 @@ def _stop_tracking_by_card_message(card_message_id: int) -> Optional[str]:
     elif kind == "boxing":
         channel_id, fight_id, fighter_id, _ = info
         boxingtracker.stop_tracking(channel_id, fight_id, fighter_id)
+    elif kind == "kbo_prop":
+        channel_id, pcode, stat_label, direction, line, target_date, _ = info
+        kboproptracker.stop_tracking(channel_id, pcode, stat_label, direction, line, target_date)
     elif kind == "esports":
         channel_id, sport, team_a, team_b, market, _ = info
         esportstracker.stop_tracking(channel_id, sport, team_a, team_b, market)
@@ -425,15 +432,18 @@ async def _auto_playerprops(
 ):
     """Mirrors /playerprops' core logic for an auto-detected pick."""
     if sport_value == "kbo":
-        # ESPN has no KBO league at all (only MLB) - confirmed live, without
-        # this a KBO prop for a former-MLB player silently matched that
-        # player's old MLB athlete record and "tracked" against the wrong
+        # ESPN has no KBO league at all (only MLB) - confirmed live, a KBO
+        # prop for a former-MLB player used to silently match that
+        # player's old MLB athlete record and "track" against the wrong
         # team/game entirely. picks.py tags a KBO prop's sport as "kbo"
         # (distinct from a real MLB prop's "baseball") specifically so this
-        # can reject it honestly instead of mismatching - see
-        # _PROP_SPORT_OVERRIDE's own comment for the full story.
-        botlog.event(f"❌ Not tracked (prop): **{player}** {stat} — no player-props source for KBO yet")
-        return
+        # can route it to koreabaseball.py's own dedicated source instead -
+        # see _PROP_SPORT_OVERRIDE's own comment for the full story, and
+        # koreabaseball.py's module docstring for that source itself.
+        if direction is None or line is None:
+            botlog.event(f"❌ Not tracked (KBO prop): **{player}** {stat} — no line to grade against")
+            return
+        return await _auto_kboprop(channel, player, stat, direction, line, section, label, origin_channel_id)
     stat_key = espn.STAT_CATALOG.get(sport_value, {}).get(stat)
     if not stat_key:
         botlog.event(f"❌ Not tracked (prop): **{player}** {stat} ({sport_value}) — unknown stat for this sport")
@@ -963,6 +973,53 @@ async def _auto_boxing(
     )
     log.info("Auto-tracked boxing pick '%s' -> fight %s", fighter, fight_id)
     botlog.event(f"✅ Tracked (Boxing): **{fighter}** — fight `{fight_id}` in <#{channel.id}>")
+    return message.id
+
+
+async def _auto_kboprop(
+    channel: discord.abc.Messageable, player: str, stat: str, direction: str, line: float,
+    section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
+):
+    """KBO player prop picks - backed by koreabaseball.py (the league's own
+    official site), since ESPN (proptracker.py's only source) has no KBO
+    league at all. See koreabaseball.py's/picks.py's own docstrings for the
+    full story of why this needed its own source instead of reusing
+    proptracker.py's ESPN-backed path."""
+    try:
+        player_entry = await asyncio.to_thread(koreabaseball.find_player, player)
+    except koreabaseball.KboError as e:
+        log.info("Auto-KBO-prop: couldn't reach koreabaseball.com for '%s': %s", player, e)
+        botlog.event(f"❌ Not tracked (KBO prop): **{player}** {stat} — couldn't reach koreabaseball.com: {e}")
+        return
+    if not player_entry:
+        log.info("Auto-KBO-prop: no player found for '%s'", player)
+        botlog.event(f"❌ Not tracked (KBO prop): **{player}** {stat} — player not found on koreabaseball.com")
+        return
+    if not koreabaseball.stat_supported(stat, player_entry["is_pitcher"]):
+        botlog.event(f"❌ Not tracked (KBO prop): **{player}** {stat} — unsupported stat for a {'pitcher' if player_entry['is_pitcher'] else 'hitter'}")
+        return
+
+    pcode = player_entry["pcode"]
+    target_date = koreabaseball.today_kst_mmdd()
+    if kboproptracker.is_tracked(channel.id, pcode, stat, direction, line, target_date):
+        botlog.event(f"⏭️ Skipped (KBO prop): **{player}** {stat} — already being tracked in <#{channel.id}>")
+        return "skipped"
+
+    embed, file = await kboproptracker.build_embed(
+        player_entry["name"], player_entry["team"], player_entry["is_pitcher"], stat, direction, line, row=None,
+    )
+    message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
+    embed.set_footer(text=kboproptracker._footer_text(message.id))
+    await throttle.run(channel.id, lambda: message.edit(embed=embed))
+    kboproptracker.register_message(message.id, channel.id, pcode, stat, direction, line, target_date, None)
+    await message.add_reaction(TRASH_EMOJI)
+
+    kboproptracker.start_tracking(
+        message, channel.id, pcode, stat, direction, line, target_date, player_entry["name"],
+        player_entry["team"], player_entry["is_pitcher"], None, section, label, origin_channel_id,
+    )
+    log.info("Auto-tracked KBO prop pick '%s' -> pcode %s", player, pcode)
+    botlog.event(f"✅ Tracked (KBO prop): **{player}** {stat} — pcode `{pcode}` in <#{channel.id}>")
     return message.id
 
 
@@ -1898,6 +1955,15 @@ async def _gather_tracked_items(channel_id: int) -> list[dict]:
             "message_id": entry["message_id"],
             "stop": lambda cid=channel_id, fid=entry["fight_id"], fighter=entry["fighter_id"]:
                 boxingtracker.stop_tracking(cid, fid, fighter),
+        })
+
+    for entry in kboproptracker.list_tracked_details(channel_id):
+        items.append({
+            "kind": "kbo_prop",
+            "label": f"{entry['player_name']} {entry['direction'].title()} {entry['line']:g} {entry['stat_label']}",
+            "id_label": entry["pcode"], "message_id": entry["message_id"],
+            "stop": lambda cid=channel_id, pc=entry["pcode"], sl=entry["stat_label"], d=entry["direction"],
+                l=entry["line"], td=entry["target_date"]: kboproptracker.stop_tracking(cid, pc, sl, d, l, td),
         })
 
     for entry in esportstracker.list_tracked_details(channel_id):
