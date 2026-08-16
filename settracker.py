@@ -744,7 +744,7 @@ def start_tracking(
     _persist(channel_id, game_id, market, message.id, sport_id, owner_id, team, direction, line, original_kickoff)
     dailylog.record_pick(
         channel_id, "settracker", key, section, label or pick_label(market, team, direction, line), message.id,
-        origin_channel_id, sport="Tennis",
+        origin_channel_id, sport="Tennis", tournament=scores365.tournament_name(game),
     )
 
 

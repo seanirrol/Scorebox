@@ -65,10 +65,39 @@ def sport_label(sport_id: Optional[int], competition_name: Optional[str] = None)
     already had "wnba" as an explicit string) - the same real league
     showing up under both "Basketball" and "WNBA" for no reason a bettor
     would expect. Confirmed live: competitionDisplayName is literally
-    "WNBA" for a WNBA game."""
+    "WNBA" for a WNBA game.
+
+    Same reasoning for baseball - 365scores' sport_id 7 spans MLB, KBO,
+    NPB, etc. all at once (confirmed live: competitionDisplayName is
+    literally "MLB" or "KBO" for those games), so a plain "Baseball" label
+    used to lump every league together and away from proptracker.py's own
+    league-specific "MLB"/kboproptracker.py's "KBO" label for the exact
+    same real game - one real-world league is the whole point of /winrate-
+    style grouping (see dailylog.py's WINRATE... constants)."""
     if sport_id == SPORT_IDS["basketball"] and competition_name and "wnba" in competition_name.lower():
         return "WNBA"
+    if sport_id == SPORT_IDS["baseball"] and competition_name:
+        lowered = competition_name.lower()
+        if "kbo" in lowered:
+            return "KBO"
+        if "mlb" in lowered:
+            return "MLB"
     return SPORT_ID_LABELS.get(sport_id)
+
+
+def tournament_name(game: dict) -> Optional[str]:
+    """The specific tournament/competition/league a game belongs to (e.g.
+    "MLB", "KBO", "Cincinnati" for a tennis event, "Premier League" for
+    soccer) - confirmed live, 365scores' own competitionDisplayName
+    already carries exactly this, it just needs a tennis-style trailing
+    round suffix stripped first (e.g. "Cincinnati - 3rd Round", "Hamburg -
+    Final" both need to fold into plain "Cincinnati"/"Hamburg" - a
+    tournament's win rate should combine every round of it, not fragment
+    further round by round)."""
+    name = game.get("competitionDisplayName")
+    if not name:
+        return None
+    return name.split(" - ")[0].strip() or None
 
 
 _LOGO_URL_TEMPLATE = "https://imagecache.365scores.com/image/upload/f_png,w_100,h_100,c_limit,q_auto:eco,dpr_2/v{version}/Competitors/{id}"

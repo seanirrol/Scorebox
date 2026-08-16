@@ -718,6 +718,7 @@ def start_tracking(
     dailylog.record_pick(
         channel_id, "tracker", key, section, label, message.id, origin_channel_id,
         sport=scores365.sport_label(sport_id, game.get("competitionDisplayName")),
+        tournament=scores365.tournament_name(game),
     )
 
 

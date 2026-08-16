@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """
-Renders /winrate's chart as a transparent PNG - one bold header bar per
+Renders /performance's chart as a transparent PNG - one bold header bar per
 sport (its own combined win%), followed by an indented, smaller sub-bar per
-bet type under it - same horizontal stacked win/loss bar style as
-winlossgraph.py, just with two label levels instead of one.
+tournament/competition/league within it - same horizontal stacked win/loss
+bar style as winlossgraph.py, just with two label levels instead of one.
+Every bet type within a tournament is combined into that tournament's own
+single bar (see dailylog.sport_tournament_win_loss).
 
 Push/void/pending picks aren't part of this at all - dailylog.
-sport_bet_type_win_loss already excludes them before this module ever sees
-the data (see that function's own docstring for why).
+sport_tournament_win_loss already excludes them before this module ever
+sees the data (see that function's own docstring for why).
 """
 
 import io
@@ -60,17 +62,25 @@ def _draw_bar(draw: ImageDraw.ImageDraw, x: float, y: float, width: int, height:
 
 
 def render_chart(title: str, data: dict[str, dict[str, tuple[int, int]]]) -> bytes:
-    """data is dailylog.sport_bet_type_win_loss's output:
-    {sport: {bet_type: (won, lost)}}. Sports are ordered by total decided
-    count descending (most-active first), bet types within a sport the
-    same way."""
+    """data is dailylog.sport_tournament_win_loss's output:
+    {sport: {tournament: (won, lost)}}. Sports are ordered by total decided
+    count descending (most-active first), tournaments within a sport the
+    same way. A sport with exactly one tournament sharing its own name
+    (e.g. "NBA" under sport "NBA" - a league with no real sub-tournament
+    concept, see sport_tournament_win_loss's own fallback) skips the
+    redundant sub-row entirely rather than showing the same bar twice."""
     sports = sorted(
         data.items(), key=lambda item: sum(w + l for w, l in item[1].values()), reverse=True,
     )
 
+    def _visible_tournaments(sport: str, tournaments: dict[str, tuple[int, int]]) -> dict[str, tuple[int, int]]:
+        if len(tournaments) == 1 and sport in tournaments:
+            return {}
+        return tournaments
+
     row_count = 0
-    for _sport, bet_types in sports:
-        row_count += 1 + len(bet_types)
+    for sport, tournaments in sports:
+        row_count += 1 + len(_visible_tournaments(sport, tournaments))
     height = TOP_PADDING + row_count * (SUB_BAR_HEIGHT + ROW_GAP) + len(sports) * (SPORT_GAP - ROW_GAP) + LEGEND_HEIGHT + BOTTOM_PADDING
 
     img = Image.new("RGBA", (WIDTH, height), (0, 0, 0, 0))
@@ -78,15 +88,15 @@ def render_chart(title: str, data: dict[str, dict[str, tuple[int, int]]]) -> byt
     draw.text((WIDTH / 2, TOP_PADDING / 2), title, font=_TITLE_FONT, fill=_TITLE_COLOR, anchor="mm")
 
     y = TOP_PADDING
-    for sport, bet_types in sports:
-        sport_won = sum(w for w, _l in bet_types.values())
-        sport_lost = sum(l for _w, l in bet_types.values())
+    for sport, tournaments in sports:
+        sport_won = sum(w for w, _l in tournaments.values())
+        sport_lost = sum(l for _w, l in tournaments.values())
         draw.text((SPORT_LABEL_WIDTH - 10, y + SPORT_BAR_HEIGHT / 2), sport, font=_LABEL_FONT, fill=_LABEL_COLOR, anchor="rm")
         _draw_bar(draw, SPORT_LABEL_WIDTH, y, _SPORT_BAR_WIDTH, SPORT_BAR_HEIGHT, sport_won, sport_lost)
         y += SPORT_BAR_HEIGHT + ROW_GAP
 
-        for bet_type, (won, lost) in sorted(bet_types.items(), key=lambda item: sum(item[1]), reverse=True):
-            draw.text((SUB_LABEL_WIDTH - 10, y + SUB_BAR_HEIGHT / 2), bet_type, font=_LEGEND_FONT, fill=_SUB_LABEL_COLOR, anchor="rm")
+        for tournament, (won, lost) in sorted(_visible_tournaments(sport, tournaments).items(), key=lambda item: sum(item[1]), reverse=True):
+            draw.text((SUB_LABEL_WIDTH - 10, y + SUB_BAR_HEIGHT / 2), tournament, font=_LEGEND_FONT, fill=_SUB_LABEL_COLOR, anchor="rm")
             _draw_bar(draw, SUB_LABEL_WIDTH, y, _SUB_BAR_WIDTH, SUB_BAR_HEIGHT, won, lost)
             y += SUB_BAR_HEIGHT + ROW_GAP
 

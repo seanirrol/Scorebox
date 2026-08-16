@@ -776,6 +776,7 @@ def start_tracking(
     dailylog.record_pick(
         channel_id, "proptracker", key, section, label or player_name, message.id, origin_channel_id,
         sport=espn.SPORT_DISPLAY_LABELS.get(sport, sport.upper()),
+        tournament=espn.SPORT_DISPLAY_LABELS.get(sport, sport.upper()),
     )
 
 

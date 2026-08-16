@@ -187,17 +187,23 @@ class WinRateAggregation(DailyLogTestCase):
         self.assertEqual(rows, [("2026-09-01", 1, 0)])
 
 
-class SportBetTypeWinLoss(DailyLogTestCase):
-    """sport_bet_type_win_loss backs /winrate - filtered by `channel_id`
-    (each tracker's own scores/posting channel), not `origin_channel_id`
-    like every other report in this file, since /winrate is scoped to two
-    fixed scores channels rather than a picks-source route."""
+class SportTournamentWinLoss(DailyLogTestCase):
+    """sport_tournament_win_loss backs /performance - filtered by
+    `channel_id` (each tracker's own scores/posting channel), not
+    `origin_channel_id` like every other report in this file, since
+    /performance is scoped to two fixed scores channels rather than a
+    picks-source route. Every bet type within one tournament is combined
+    into that tournament's own single won/lost count - there's no further
+    sub-split."""
 
-    IN_CHANNEL = dailylog.WINRATE_CHANNEL_IDS[0]
+    IN_CHANNEL = dailylog.PERFORMANCE_CHANNEL_IDS[0]
     OTHER_CHANNEL = 999999
 
-    def _log(self, channel_id, module, key, label, sport, status, date_str="2026-08-13"):
-        dailylog.record_pick(channel_id, module, key, "Section", label, message_id=1, origin_channel_id=1, sport=sport)
+    def _log(self, channel_id, module, key, label, sport, tournament, status, date_str="2026-08-13"):
+        dailylog.record_pick(
+            channel_id, module, key, "Section", label, message_id=1, origin_channel_id=1,
+            sport=sport, tournament=tournament,
+        )
         entry_key = f"{channel_id}:{module}:{key}"
         data = state.load_daily_log()
         data[entry_key]["date"] = date_str
@@ -205,74 +211,78 @@ class SportBetTypeWinLoss(DailyLogTestCase):
         state.save_daily_log(data)
 
     def test_only_configured_channels_counted(self):
-        self._log(self.IN_CHANNEL, "tracker", "k1", "Denver Broncos ML", "NFL", "won")
-        self._log(self.OTHER_CHANNEL, "tracker", "k2", "New York Jets ML", "NFL", "lost")
-        self.assertEqual(dailylog.sport_bet_type_win_loss(), {"NFL": {"Moneyline": (1, 0)}})
+        self._log(self.IN_CHANNEL, "tracker", "k1", "Denver Broncos ML", "NFL", "NFL", "won")
+        self._log(self.OTHER_CHANNEL, "tracker", "k2", "New York Jets ML", "NFL", "NFL", "lost")
+        self.assertEqual(dailylog.sport_tournament_win_loss(), {"NFL": {"NFL": (1, 0)}})
 
-    def test_moneyline_classified_from_ml_label(self):
-        self._log(self.IN_CHANNEL, "tracker", "k1", "Denver Broncos ML", "NFL", "won")
-        self.assertEqual(dailylog.sport_bet_type_win_loss()["NFL"], {"Moneyline": (1, 0)})
+    def test_every_bet_type_within_a_tournament_combines_into_one_count(self):
+        self._log(self.IN_CHANNEL, "tracker", "k1", "Denver Broncos ML", "Tennis", "Wimbledon", "won")
+        self._log(self.IN_CHANNEL, "settracker", "k2", "Iga Swiatek to Win a Set", "Tennis", "Wimbledon", "won")
+        self._log(self.IN_CHANNEL, "tennispropstracker", "k3", "Iga Swiatek Over 4.5 Aces", "Tennis", "Wimbledon", "lost")
+        self.assertEqual(dailylog.sport_tournament_win_loss()["Tennis"], {"Wimbledon": (2, 1)})
 
-    def test_spread_classified_from_trailing_signed_number(self):
-        self._log(self.IN_CHANNEL, "tracker", "k1", "Denver Broncos -3.5", "NFL", "lost")
-        self.assertEqual(dailylog.sport_bet_type_win_loss()["NFL"], {"Spread": (0, 1)})
-
-    def test_total_classified_from_over_under_wording(self):
-        self._log(self.IN_CHANNEL, "tracker", "k1", "Milwaukee Brewers Total Bases Over 0.5", "MLB", "won")
-        self.assertEqual(dailylog.sport_bet_type_win_loss()["MLB"], {"Total": (1, 0)})
-
-    def test_non_tracker_module_uses_fixed_bet_type_regardless_of_label(self):
-        self._log(self.IN_CHANNEL, "inningtracker", "k1", "Milwaukee Brewers YRFI", "MLB", "won")
-        self._log(self.IN_CHANNEL, "kboproptracker", "k2", "Gwak Been Over 4.5 Strikeouts", "KBO", "lost")
-        self.assertEqual(
-            dailylog.sport_bet_type_win_loss()["MLB"], {"YRFI/NRFI": (1, 0)},
-        )
-        self.assertEqual(
-            dailylog.sport_bet_type_win_loss()["KBO"], {"Player Props": (0, 1)},
-        )
+    def test_different_tournaments_under_the_same_sport_stay_separate(self):
+        self._log(self.IN_CHANNEL, "settracker", "k1", "pick", "Tennis", "Wimbledon", "won")
+        self._log(self.IN_CHANNEL, "settracker", "k2", "pick", "Tennis", "US Open", "lost")
+        self.assertEqual(dailylog.sport_tournament_win_loss()["Tennis"], {"Wimbledon": (1, 0), "US Open": (0, 1)})
 
     def test_push_void_pending_excluded(self):
-        self._log(self.IN_CHANNEL, "tracker", "k1", "Denver Broncos ML", "NFL", "won")
-        self._log(self.IN_CHANNEL, "tracker", "k2", "New York Jets ML", "NFL", "push")
-        self._log(self.IN_CHANNEL, "tracker", "k3", "Kansas City Chiefs ML", "NFL", "void")
-        dailylog.record_pick(self.IN_CHANNEL, "tracker", "k4", "Section", "Buffalo Bills ML", message_id=1, origin_channel_id=1, sport="NFL")
-        self.assertEqual(dailylog.sport_bet_type_win_loss()["NFL"], {"Moneyline": (1, 0)})
+        self._log(self.IN_CHANNEL, "tracker", "k1", "Denver Broncos ML", "NFL", "NFL", "won")
+        self._log(self.IN_CHANNEL, "tracker", "k2", "New York Jets ML", "NFL", "NFL", "push")
+        self._log(self.IN_CHANNEL, "tracker", "k3", "Kansas City Chiefs ML", "NFL", "NFL", "void")
+        dailylog.record_pick(self.IN_CHANNEL, "tracker", "k4", "Section", "Buffalo Bills ML", message_id=1, origin_channel_id=1, sport="NFL", tournament="NFL")
+        self.assertEqual(dailylog.sport_tournament_win_loss()["NFL"], {"NFL": (1, 0)})
 
     def test_year_month_filters_by_date(self):
-        self._log(self.IN_CHANNEL, "tracker", "k1", "Denver Broncos ML", "NFL", "won", date_str="2026-08-13")
-        self._log(self.IN_CHANNEL, "tracker", "k2", "New York Jets ML", "NFL", "lost", date_str="2026-09-01")
-        self.assertEqual(dailylog.sport_bet_type_win_loss("2026-08")["NFL"], {"Moneyline": (1, 0)})
-        self.assertEqual(dailylog.sport_bet_type_win_loss("2026-09")["NFL"], {"Moneyline": (0, 1)})
-        self.assertEqual(dailylog.sport_bet_type_win_loss()["NFL"], {"Moneyline": (1, 1)})
+        self._log(self.IN_CHANNEL, "tracker", "k1", "Denver Broncos ML", "NFL", "NFL", "won", date_str="2026-08-13")
+        self._log(self.IN_CHANNEL, "tracker", "k2", "New York Jets ML", "NFL", "NFL", "lost", date_str="2026-09-01")
+        self.assertEqual(dailylog.sport_tournament_win_loss("2026-08")["NFL"], {"NFL": (1, 0)})
+        self.assertEqual(dailylog.sport_tournament_win_loss("2026-09")["NFL"], {"NFL": (0, 1)})
+        self.assertEqual(dailylog.sport_tournament_win_loss()["NFL"], {"NFL": (1, 1)})
+
+    def test_missing_tournament_falls_back_to_sport(self):
+        self._log(self.IN_CHANNEL, "tracker", "k1", "Denver Broncos ML", "NFL", None, "won")
+        self.assertEqual(dailylog.sport_tournament_win_loss()["NFL"], {"NFL": (1, 0)})
 
     def test_missing_sport_falls_back_to_section(self):
         # Same fallback bot.py's own /summary grouping uses for an entry
         # logged before the `sport` field existed - see _fallback_sport.
-        self._log(self.IN_CHANNEL, "tracker", "k1", "Some Team ML", None, "won")
-        self.assertEqual(dailylog.sport_bet_type_win_loss()["Section"], {"Moneyline": (1, 0)})
+        self._log(self.IN_CHANNEL, "tracker", "k1", "Some Team ML", None, None, "won")
+        self.assertEqual(dailylog.sport_tournament_win_loss()["Section"], {"Section": (1, 0)})
 
     def test_missing_sport_strips_props_suffix_from_section(self):
         dailylog.record_pick(self.IN_CHANNEL, "proptracker", "k1", "MLB Props", "Some Player Over 1.5", message_id=1, origin_channel_id=1, sport=None)
         data = state.load_daily_log()
         data[f"{self.IN_CHANNEL}:proptracker:k1"]["status"] = "won"
         state.save_daily_log(data)
-        self.assertEqual(dailylog.sport_bet_type_win_loss()["MLB"], {"Player Props": (1, 0)})
+        self.assertEqual(dailylog.sport_tournament_win_loss()["MLB"], {"MLB": (1, 0)})
+
+    def test_missing_sport_on_an_inningtracker_pick_defaults_to_mlb(self):
+        # inningtracker.py (YRFI/NRFI) is baseball-only by design - a real
+        # legacy entry's own raw picks-channel header was "YRFI/NRFI
+        # Slate", which isn't a sport name at all (confirmed live).
+        dailylog.record_pick(self.IN_CHANNEL, "inningtracker", "k1", "YRFI/NRFI Slate", "Milwaukee Brewers YRFI", message_id=1, origin_channel_id=1, sport=None)
+        data = state.load_daily_log()
+        data[f"{self.IN_CHANNEL}:inningtracker:k1"]["status"] = "won"
+        state.save_daily_log(data)
+        self.assertEqual(dailylog.sport_tournament_win_loss()["MLB"], {"MLB": (1, 0)})
 
     def test_missing_sport_and_section_falls_under_other(self):
         # Can't happen through record_pick itself (it no-ops with no
         # section at all) - simulates a malformed/legacy entry directly.
-        self._log(self.IN_CHANNEL, "tracker", "k1", "Some Team ML", "NFL", "won")
+        self._log(self.IN_CHANNEL, "tracker", "k1", "Some Team ML", "NFL", "NFL", "won")
         data = state.load_daily_log()
         entry_key = f"{self.IN_CHANNEL}:tracker:k1"
         data[entry_key]["sport"] = None
+        data[entry_key]["tournament"] = None
         data[entry_key]["section"] = ""
         state.save_daily_log(data)
-        self.assertEqual(dailylog.sport_bet_type_win_loss()["Other"], {"Moneyline": (1, 0)})
+        self.assertEqual(dailylog.sport_tournament_win_loss()["Other"], {"Other": (1, 0)})
 
-    def test_available_winrate_months_scoped_to_configured_channels(self):
-        self._log(self.IN_CHANNEL, "tracker", "k1", "Denver Broncos ML", "NFL", "won", date_str="2026-08-13")
-        self._log(self.OTHER_CHANNEL, "tracker", "k2", "New York Jets ML", "NFL", "lost", date_str="2026-09-01")
-        self.assertEqual(dailylog.available_winrate_months(), ["2026-08"])
+    def test_available_performance_months_scoped_to_configured_channels(self):
+        self._log(self.IN_CHANNEL, "tracker", "k1", "Denver Broncos ML", "NFL", "NFL", "won", date_str="2026-08-13")
+        self._log(self.OTHER_CHANNEL, "tracker", "k2", "New York Jets ML", "NFL", "NFL", "lost", date_str="2026-09-01")
+        self.assertEqual(dailylog.available_performance_months(), ["2026-08"])
 
 
 class WinLossGraphOverrides(DailyLogTestCase):

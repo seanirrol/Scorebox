@@ -439,7 +439,7 @@ def start_tracking(
     if not label:
         label = f"{fighter_name} ML"
     _persist(channel_id, fight_id, fighter_id, fighter_name, message.id, owner_id, event_name, section, label, origin_channel_id)
-    dailylog.record_pick(channel_id, "boxingtracker", key, section, label, message.id, origin_channel_id, sport="Boxing")
+    dailylog.record_pick(channel_id, "boxingtracker", key, section, label, message.id, origin_channel_id, sport="Boxing", tournament=event_name)
 
 
 async def resume_all(client: discord.Client):

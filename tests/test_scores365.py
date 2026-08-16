@@ -178,5 +178,58 @@ class GradeMoneyline(unittest.TestCase):
         self.assertIsNone(scores365.grade_moneyline(game, "Los Angeles Dodgers"))
 
 
+class SportLabel(unittest.TestCase):
+    """Confirmed live: 365scores' sport_id 7 spans MLB, KBO, NPB, etc. all
+    at once, and sport_id 2 (basketball) spans NBA and WNBA - a bare
+    "Baseball"/"Basketball" label used to lump every one of those leagues
+    together under one /performance sport bucket instead of matching each
+    tracker's own league-specific label (proptracker.py's "MLB"/"NBA"/
+    "WNBA", kboproptracker.py's "KBO")."""
+
+    def test_baseball_with_no_competition_name_stays_generic(self):
+        self.assertEqual(scores365.sport_label(7), "Baseball")
+
+    def test_mlb_competition_name_resolves_to_mlb(self):
+        self.assertEqual(scores365.sport_label(7, "MLB"), "MLB")
+
+    def test_kbo_competition_name_resolves_to_kbo(self):
+        self.assertEqual(scores365.sport_label(7, "KBO"), "KBO")
+
+    def test_unrecognized_baseball_competition_name_stays_generic(self):
+        # A real one confirmed live: "LMB - Playoffs - 1st Round" (Mexican
+        # league) - neither "mlb" nor "kbo" appears in it.
+        self.assertEqual(scores365.sport_label(7, "LMB - Playoffs - 1st Round"), "Baseball")
+
+    def test_wnba_competition_name_still_resolves_to_wnba(self):
+        self.assertEqual(scores365.sport_label(2, "WNBA"), "WNBA")
+
+    def test_basketball_with_no_competition_name_stays_generic(self):
+        self.assertEqual(scores365.sport_label(2), "Basketball")
+
+    def test_unrecognized_sport_id_returns_none(self):
+        self.assertIsNone(scores365.sport_label(999))
+
+
+class TournamentName(unittest.TestCase):
+    """Backs /performance's tournament sub-grouping (see dailylog.
+    sport_tournament_win_loss) - confirmed live, 365scores'
+    competitionDisplayName already carries this directly for baseball
+    ("MLB"/"KBO") and soccer ("Premier League", ...), just needs a
+    tennis-style trailing round suffix stripped (e.g. "Cincinnati - 3rd
+    Round") so a tournament's win rate combines every round of it."""
+
+    def test_plain_competition_name_passes_through(self):
+        self.assertEqual(scores365.tournament_name({"competitionDisplayName": "MLB"}), "MLB")
+
+    def test_tennis_round_suffix_is_stripped(self):
+        self.assertEqual(scores365.tournament_name({"competitionDisplayName": "Cincinnati - 3rd Round"}), "Cincinnati")
+
+    def test_final_suffix_is_stripped(self):
+        self.assertEqual(scores365.tournament_name({"competitionDisplayName": "Hamburg - Final"}), "Hamburg")
+
+    def test_missing_competition_name_returns_none(self):
+        self.assertIsNone(scores365.tournament_name({}))
+
+
 if __name__ == "__main__":
     unittest.main()

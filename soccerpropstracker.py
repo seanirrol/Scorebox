@@ -577,6 +577,7 @@ def start_tracking(
     photo_url: Optional[str], stat_label: str, player_name: str, owner_id: int,
     direction: Optional[str] = None, line: Optional[float] = None, fixture_path: Optional[str] = None,
     section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
+    tournament: Optional[str] = None,
 ):
     key = prop_key(channel_id, game_id, member_id, stat_name, direction, line)
     if key in _active:
@@ -595,7 +596,7 @@ def start_tracking(
     )
     dailylog.record_pick(
         channel_id, "soccerpropstracker", key, section, label or player_name, message.id, origin_channel_id,
-        sport="Soccer",
+        sport="Soccer", tournament=tournament,
     )
 
 

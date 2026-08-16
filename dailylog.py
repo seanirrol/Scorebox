@@ -37,7 +37,6 @@ both belong combined into the same downstream report."""
 
 import datetime
 import logging
-import re
 from typing import Iterable, Optional
 
 import state
@@ -65,7 +64,7 @@ def today_str() -> str:
 
 def record_pick(
     channel_id: int, module: str, track_key_str: str, section: Optional[str], label: str, message_id: int,
-    origin_channel_id: Optional[int] = None, sport: Optional[str] = None,
+    origin_channel_id: Optional[int] = None, sport: Optional[str] = None, tournament: Optional[str] = None,
 ):
     """Called once, right alongside each tracker's start_tracking. No-op if
     section is None - i.e. this pick didn't come from the auto-track
@@ -79,13 +78,23 @@ def record_pick(
     ("YRFI/NRFI Slate" vs. a plain "MLB" header), splitting what should be
     one /summary section into several. /summary groups by this when
     present, falling back to `section` for entries logged before this
-    field existed."""
+    field existed.
+
+    tournament is the specific tournament/competition/league within that
+    sport (e.g. "MLB" and "KBO" both under sport "Baseball" would be
+    confusing - they're tagged as their own sport already via
+    scores365.sport_label's own KBO/MLB detection - but "Wimbledon" vs.
+    "US Open" both need to stay under sport "Tennis" while still being
+    told apart). None for a pick logged before this field existed, or for
+    a source with no real tournament concept below the sport level itself
+    - /performance falls back to the sport's own name in that case (see
+    its own docstring)."""
     if not section:
         return
     data = state.load_daily_log()
     data[_key(channel_id, module, track_key_str)] = {
         "channel_id": channel_id, "origin_channel_id": origin_channel_id, "module": module, "date": today_str(),
-        "section": section, "sport": sport, "label": label, "message_id": message_id,
+        "section": section, "sport": sport, "tournament": tournament, "label": label, "message_id": message_id,
         "status": "pending", "detail": _PENDING_DETAIL,
     }
     state.save_daily_log(data)
@@ -271,7 +280,7 @@ def daily_win_loss(origin_channel_ids: Iterable[int], year_month: str) -> list[t
 def available_months(origin_channel_ids: Iterable[int], limit: int = 12) -> list[str]:
     """Most-recent-first distinct "YYYY-MM" months with at least one
     won/lost decision logged from these origin channels - used for
-    /winrate's month dropdown."""
+    /winlossgraph's month dropdown."""
     ids = {origin_channel_ids} if isinstance(origin_channel_ids, int) else set(origin_channel_ids)
     data = state.load_daily_log()
     months = {
@@ -281,100 +290,74 @@ def available_months(origin_channel_ids: Iterable[int], limit: int = 12) -> list
     return sorted(months, reverse=True)[:limit]
 
 
-# /winrate's own filter axis - deliberately by `channel_id` (each tracker's
-# own posting/scores channel), not `origin_channel_id` (the picks-source
-# channel every other report above filters by) - these two ids are the
-# "scores" channels the report should count, exactly as asked for.
-WINRATE_CHANNEL_IDS = (1530994763829088378, 1536429372217761833)
-
-# module -> a clean bet-type label, for every module whose picks are all one
-# bet type. tracker.py is the one exception (moneyline/spread/total all
-# share it) - classified from its own label text instead, see _bet_type.
-_MODULE_BET_TYPES = {
-    "f5tracker": "1st 5 Innings", "halftracker": "1st Half", "inningtracker": "YRFI/NRFI",
-    "inning1tracker": "1st Inning Result", "settracker": "Tennis Markets",
-    "proptracker": "Player Props", "tennispropstracker": "Player Props",
-    "soccerpropstracker": "Player Props", "kboproptracker": "Player Props",
-    "ufctracker": "UFC/MMA", "boxingtracker": "Boxing", "esportstracker": "Esports Markets",
-}
-
-_MONEYLINE_RE = re.compile(r"\bML\b", re.IGNORECASE)
-_SPREAD_RE = re.compile(r"[+-]\d+(?:\.\d+)?\s*$")
-_TOTAL_RE = re.compile(r"\b(?:over|under)\b", re.IGNORECASE)
-
-
-def _bet_type(module: str, label: str) -> str:
-    """A clean, human-readable bet-type bucket for /winrate - see
-    _MODULE_BET_TYPES for every module that's already one bet type on its
-    own. tracker.py alone covers full-game moneyline, spread, AND total
-    picks, so those are told apart the same way picks.py's own parsers
-    distinguish them in the first place: a moneyline pick's label always
-    ends in "ML" (see picks.py's _parse_team_pick), a spread pick's label
-    always ends in a bare signed number (_TEAM_SPREAD_NOMATCHUP_RE), and a
-    total pick's label always has "Over"/"Under" in it."""
-    if module != "tracker":
-        return _MODULE_BET_TYPES.get(module, module)
-    text = label or ""
-    if _MONEYLINE_RE.search(text):
-        return "Moneyline"
-    if _SPREAD_RE.search(text):
-        return "Spread"
-    if _TOTAL_RE.search(text):
-        return "Total"
-    return "Moneyline/Spread/Total"
+# /performance's own filter axis - deliberately by `channel_id` (each
+# tracker's own posting/scores channel), not `origin_channel_id` (the
+# picks-source channel every other report above filters by) - these two
+# ids are the "scores" channels the report should count, exactly as asked
+# for.
+PERFORMANCE_CHANNEL_IDS = (1530994763829088378, 1536429372217761833)
 
 
 def _fallback_sport(entry: dict) -> str:
     """Same fallback bot.py's own /summary grouping already uses for an
     entry logged before the `sport` field existed (see record_pick's own
     docstring) - not reused directly (bot.py already imports this module,
-    so the reverse would be circular), just mirrored here so /winrate
+    so the reverse would be circular), just mirrored here so /performance
     doesn't dump every one of those older entries into an undifferentiated
-    "Other" bucket the way a bare `entry.get("sport") or "Other"` would."""
+    "Other" bucket the way a bare `entry.get("sport") or "Other"` would.
+    inningtracker.py is baseball-only by design (YRFI/NRFI has no meaning
+    for any other sport) - defaults straight to "MLB" for one logged
+    before even inningtracker.py's own hardcoded sport="MLB" existed,
+    rather than showing its own raw picks-channel header (e.g. "YRFI/NRFI
+    Slate") as if that were a sport."""
+    if entry.get("module") == "inningtracker":
+        return "MLB"
     section = entry.get("section") or ""
     if section.endswith(" Props") and len(section) > len(" Props"):
         section = section[: -len(" Props")]
     return section or "Other"
 
 
-def sport_bet_type_win_loss(year_month: Optional[str] = None) -> dict[str, dict[str, tuple[int, int]]]:
-    """{sport: {bet_type: (won, lost)}} for every decided pick logged with
-    channel_id in WINRATE_CHANNEL_IDS - all-time if year_month is None
-    ("YYYY-MM" otherwise). Same "decided only" rule as daily_win_loss
-    (push/void/pending excluded).
+def sport_tournament_win_loss(year_month: Optional[str] = None) -> dict[str, dict[str, tuple[int, int]]]:
+    """{sport: {tournament: (won, lost)}} for every decided pick logged
+    with channel_id in PERFORMANCE_CHANNEL_IDS - all-time if year_month is
+    None ("YYYY-MM" otherwise). Same "decided only" rule as daily_win_loss
+    (push/void/pending excluded). Every bet type within one tournament is
+    combined into that tournament's own single won/lost count - see
+    picks.py/each tracker's own record_pick call for how `tournament` gets
+    set going forward (e.g. the actual event name for esports/UFC/boxing,
+    the specific league for baseball/tennis/soccer via
+    scores365.tournament_name).
 
-    A baseball pick's `sport` isn't always precise about MLB vs. KBO -
-    tracker.py/f5tracker.py/inningtracker.py/inning1tracker.py all tag
-    baseball picks generically (365scores' own game-level API doesn't
-    distinguish the two leagues at all, or hardcodes "MLB" outright),
-    while only proptracker.py (ESPN, MLB-only) and kboproptracker.py
-    (koreabaseball.com, KBO-only) can actually tell them apart. Same
-    known gap as the deferred tournament/region breakdown - not fixed
-    here."""
+    A pick with no tournament recorded (an old entry logged before that
+    field existed, or a sport with no real tournament concept below the
+    sport level itself - NBA/NFL/NHL/WNBA/MLB/KBO are each already one
+    single league) falls under its own sport's name as a single combined
+    tournament bucket, rather than a separate "None" bucket."""
     data = state.load_daily_log()
     counts: dict[str, dict[str, list[int]]] = {}
     for entry in data.values():
-        if entry.get("channel_id") not in WINRATE_CHANNEL_IDS:
+        if entry.get("channel_id") not in PERFORMANCE_CHANNEL_IDS:
             continue
         if entry["status"] not in ("won", "lost"):
             continue
         if year_month and not entry["date"].startswith(year_month):
             continue
         sport = entry.get("sport") or _fallback_sport(entry)
-        bet_type = _bet_type(entry["module"], entry.get("label") or "")
-        bucket = counts.setdefault(sport, {}).setdefault(bet_type, [0, 0])
+        tournament = entry.get("tournament") or sport
+        bucket = counts.setdefault(sport, {}).setdefault(tournament, [0, 0])
         bucket[0 if entry["status"] == "won" else 1] += 1
-    return {sport: {bt: (w, l) for bt, (w, l) in bet_types.items()} for sport, bet_types in counts.items()}
+    return {sport: {t: (w, l) for t, (w, l) in tournaments.items()} for sport, tournaments in counts.items()}
 
 
-def available_winrate_months(limit: int = 12) -> list[str]:
+def available_performance_months(limit: int = 12) -> list[str]:
     """Most-recent-first distinct "YYYY-MM" months with at least one
-    decided pick logged in WINRATE_CHANNEL_IDS - used for /winrate's month
-    dropdown (alongside its own "All-time" option, which isn't a real month
-    and so isn't in this list)."""
+    decided pick logged in PERFORMANCE_CHANNEL_IDS - used for /performance's
+    month dropdown (alongside its own "All-time" option, which isn't a
+    real month and so isn't in this list)."""
     data = state.load_daily_log()
     months = {
         entry["date"][:7] for entry in data.values()
-        if entry.get("channel_id") in WINRATE_CHANNEL_IDS and entry["status"] in ("won", "lost")
+        if entry.get("channel_id") in PERFORMANCE_CHANNEL_IDS and entry["status"] in ("won", "lost")
     }
     return sorted(months, reverse=True)[:limit]

@@ -524,6 +524,7 @@ def start_tracking(
     stat_label: str, player_name: str, owner_id: int,
     direction: Optional[str] = None, line: Optional[float] = None,
     section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
+    tournament: Optional[str] = None,
 ):
     key = prop_key(channel_id, game_id, competitor_id, stat_name, direction, line)
     if key in _active:
@@ -536,7 +537,7 @@ def start_tracking(
     _persist(channel_id, game_id, competitor_id, stat_name, message.id, sport_id, stat_label, player_name, owner_id, direction, line)
     dailylog.record_pick(
         channel_id, "tennispropstracker", key, section, label or player_name, message.id, origin_channel_id,
-        sport="Tennis",
+        sport="Tennis", tournament=tournament,
     )
 
 

@@ -531,7 +531,7 @@ def start_tracking(
     _persist(channel_id, event_id, pick_type, message.id, team_id, owner_id)
     dailylog.record_pick(
         channel_id, "inningtracker", key, section, label or _PICK_LABELS.get(pick_type, pick_type), message.id, origin_channel_id,
-        sport="MLB",
+        sport="MLB", tournament="MLB",
     )
 
 
