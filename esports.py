@@ -858,29 +858,30 @@ def grade_team_total_kills(series_data: dict, picked_team: str, direction: str, 
 
 def grade_win_at_least_one_map(series_data: dict, picked_team: str, direction: str = "yes") -> Optional[str]:
     """"Wins at Least One Map" (direction="yes") - the underdog isn't swept
-    0-N. Resolves the moment the picked team's map count reaches 1 (can't
-    be undone - same early-decidable reasoning as an Over line elsewhere
-    in this bot), or once the series ends with them still on 0.
+    0-N. direction="no" is the inverse - "does NOT win at least one map",
+    i.e. the picked team gets swept.
 
-    direction="no" is the inverse - "does NOT win at least one map", i.e.
-    the picked team gets swept - equally early-decidable the moment they
-    win their first map (dead for good, can't un-win it) or confirmed the
-    moment the series ends with them still on 0."""
+    Both outcomes are mathematically locked in the moment the picked team's
+    map count reaches 1 - it can't be un-won. That's real, permanent
+    settlement info the moment it happens, same as an Over line elsewhere in
+    this bot - but unlike an Over line, this market only ever needs one
+    more map to know it, so grading it here the instant it locks in would
+    end tracking (and bump the card to "Final") while the series is often
+    still ongoing (confirmed live: a still-live best-of-3 got bumped Final
+    at 1-0). So this waits for the series to actually finish either way -
+    esportstracker.build_embed applies the early "can't lose/win this leg
+    anymore" cosmetic tag instead, the same way it already does for an
+    early-cleared Over line, while polling stays live until the real
+    result."""
+    if not is_decided(series_data):
+        return None
     scores = _oriented_scores(series_data, picked_team)
     if scores is None:
         return None
     picked, _other = scores
     if direction == "no":
-        if picked >= 1:
-            return "lost"
-        if is_decided(series_data):
-            return "won"
-        return None
-    if picked >= 1:
-        return "won"
-    if is_decided(series_data):
-        return "lost"
-    return None
+        return "lost" if picked >= 1 else "won"
+    return "won" if picked >= 1 else "lost"
 
 
 def grade_correct_score(series_data: dict, picked_team: str, picked_maps: int, other_maps: int) -> Optional[str]:

@@ -246,6 +246,18 @@ async def build_embed(
     if market == "total_maps":
         current_maps = series_data["home_score"] + series_data["away_score"]
 
+    # Picked team's own map count so far, for win_at_least_one_map - same
+    # early-lock reasoning as the kill/map totals below, since that market's
+    # own grade_win_at_least_one_map now deliberately waits for the series
+    # to actually finish (see its docstring) rather than bumping the card
+    # to Final the moment it's mathematically locked in.
+    current_picked_maps: Optional[int] = None
+    if market == "win_at_least_one_map":
+        if esports.names_match(series_data["home_team"], picked_team):
+            current_picked_maps = series_data["home_score"]
+        elif esports.names_match(series_data["away_team"], picked_team):
+            current_picked_maps = series_data["away_score"]
+
     # Both the kill total and the maps total only ever grow as more maps
     # get played, so once an Over line is already cleared it can't
     # un-clear - same reasoning as tracker.py's own early-win Over tagging
@@ -257,17 +269,18 @@ async def build_embed(
     # settlement still only happens once `decided` for real, same as
     # every other early-win tag in this bot.
     current_value = current_kills if current_kills is not None else current_maps
-    early_win = (
-        not result and current_value is not None and direction == "over"
-        and line is not None and current_value > line
-    )
+    early_result: Optional[str] = None
+    if not result and current_value is not None and direction == "over" and line is not None and current_value > line:
+        early_result = "won"
+    elif not result and current_picked_maps is not None and current_picked_maps >= 1:
+        early_result = "lost" if direction == "no" else "won"
 
     if force_result:
         color_status = force_result
     elif result:
         color_status = result
-    elif early_win:
-        color_status = "won"
+    elif early_result:
+        color_status = early_result
     elif status in ("notstarted", "finished"):
         color_status = status
     else:
@@ -276,8 +289,8 @@ async def build_embed(
     embed = discord.Embed(color=scoreimage.EMBED_COLOR[color_status])
     if result:
         embed.title = _RESULT_TITLES[result]
-    elif early_win:
-        embed.title = _RESULT_TITLES["won"]
+    elif early_result:
+        embed.title = _RESULT_TITLES[early_result]
 
     author_bits = [b for b in (_SPORT_LABELS.get(series_data["sport"]), series_data.get("tournament")) if b]
     if author_bits:
