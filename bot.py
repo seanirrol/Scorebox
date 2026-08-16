@@ -51,6 +51,7 @@ import throttle
 import tracker
 import ufctracker
 import winlossgraph
+import winrate
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("scorebox.bot")
@@ -2628,6 +2629,120 @@ async def winlossgraph_command(interaction: discord.Interaction):
         return
     view = WinLossGraphMonthPickView(route.origins, route.post_channel_id, months, interaction.user.id)
     await interaction.followup.send("Pick a month to preview:", view=view, ephemeral=True)
+
+
+_WINRATE_ALL_TIME = "All-time"  # not a real "YYYY-MM" value - handled specially wherever a period is passed around
+
+
+def _winrate_title(period: str) -> str:
+    if period == _WINRATE_ALL_TIME:
+        return "Win Rate — All-Time"
+    return f"Win Rate — {winlossgraph._month_title(period)}"
+
+
+def _build_winrate_embed_and_file(image_bytes: bytes) -> tuple[discord.Embed, discord.File]:
+    file = discord.File(io.BytesIO(image_bytes), filename="winrate.png")
+    embed = discord.Embed(color=0x2B2D31)
+    embed.set_image(url="attachment://winrate.png")
+    return embed, file
+
+
+class WinRatePostView(discord.ui.View):
+    """Same preview-then-post pattern as WinLossGraphPostView - re-renders
+    at click time (not the preview-time snapshot) since a pending pick can
+    resolve in the time between preview and click. Posts to wherever the
+    command was run rather than a config.SUMMARY_ROUTES destination -
+    /winrate isn't scoped to a picks-source route, it's a fixed pair of
+    scores channels (see dailylog.WINRATE_CHANNEL_IDS)."""
+
+    def __init__(self, period: str, post_channel_id: int, requester_id: int):
+        super().__init__(timeout=900)
+        self.period = period
+        self.post_channel_id = post_channel_id
+        self.requester_id = requester_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.requester_id:
+            await interaction.response.send_message("Only the person who ran /winrate can use this.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="Post to channel", style=discord.ButtonStyle.success)
+    async def post(self, interaction: discord.Interaction, button: discord.ui.Button):
+        year_month = None if self.period == _WINRATE_ALL_TIME else self.period
+        data = dailylog.sport_bet_type_win_loss(year_month)
+        if not data:
+            await interaction.response.edit_message(
+                content="Nothing to post — no decided picks logged for that period.", embed=None, attachments=[], view=None,
+            )
+            self.stop()
+            return
+        image_bytes = await asyncio.to_thread(winrate.render_chart, _winrate_title(self.period), data)
+        embed, file = _build_winrate_embed_and_file(image_bytes)
+        target = client.get_channel(self.post_channel_id) or await client.fetch_channel(self.post_channel_id)
+        await target.send(embed=embed, file=file)
+        botlog.event(f"📊 Win rate ({self.period}) posted to <#{self.post_channel_id}> by **{interaction.user}**")
+        await interaction.response.edit_message(content="Posted.", embed=None, attachments=[], view=None)
+        self.stop()
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content="Cancelled - nothing posted.", embed=None, attachments=[], view=None)
+        self.stop()
+
+
+async def _send_winrate_preview(interaction: discord.Interaction, period: str, *, edit: bool):
+    year_month = None if period == _WINRATE_ALL_TIME else period
+    data = dailylog.sport_bet_type_win_loss(year_month)
+    if not data:
+        content, embed, file, view = f"No decided picks logged for {period}.", None, None, None
+    else:
+        image_bytes = await asyncio.to_thread(winrate.render_chart, _winrate_title(period), data)
+        embed, file = _build_winrate_embed_and_file(image_bytes)
+        content = "Preview only - not posted yet. Click below to publish it to this channel."
+        view = WinRatePostView(period, interaction.channel_id, interaction.user.id)
+    if edit:
+        await interaction.response.edit_message(content=content, embed=embed, attachments=[file] if file else [], view=view)
+    else:
+        await interaction.followup.send(content=content, embed=embed, file=file, view=view, ephemeral=True)
+
+
+class _WinRatePeriodSelect(discord.ui.Select):
+    """"All-time" first, then one option per month with at least one
+    decided pick logged in dailylog.WINRATE_CHANNEL_IDS."""
+
+    def __init__(self, months: list[str], requester_id: int):
+        options = [discord.SelectOption(label=_WINRATE_ALL_TIME, description="Every decided pick ever logged")]
+        for m in months:
+            decided = sum(w + l for sport_data in dailylog.sport_bet_type_win_loss(m).values() for w, l in sport_data.values())
+            options.append(discord.SelectOption(label=m, description=f"{decided} decided pick(s)"))
+        super().__init__(placeholder="Pick a period to preview...", min_values=1, max_values=1, options=options)
+        self.requester_id = requester_id
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.requester_id:
+            await interaction.response.send_message("Only the person who ran /winrate can use this.", ephemeral=True)
+            return
+        await _send_winrate_preview(interaction, self.values[0], edit=True)
+
+
+class WinRatePeriodPickView(discord.ui.View):
+    def __init__(self, months: list[str], requester_id: int):
+        super().__init__(timeout=300)
+        self.add_item(_WinRatePeriodSelect(months, requester_id))
+
+
+@tree.command(name="winrate", description="Preview a win-rate chart by sport and bet type, then optionally post it")
+async def winrate_command(interaction: discord.Interaction):
+    if not _summary_allowed(interaction):
+        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+        return
+    _log_command(interaction)
+    await interaction.response.defer(ephemeral=True)
+
+    months = dailylog.available_winrate_months(limit=12)
+    view = WinRatePeriodPickView(months, interaction.user.id)
+    await interaction.followup.send("Pick a period to preview:", view=view, ephemeral=True)
 
 
 def main():

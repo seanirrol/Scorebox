@@ -37,6 +37,7 @@ both belong combined into the same downstream report."""
 
 import datetime
 import logging
+import re
 from typing import Iterable, Optional
 
 import state
@@ -276,5 +277,104 @@ def available_months(origin_channel_ids: Iterable[int], limit: int = 12) -> list
     months = {
         entry["date"][:7] for entry in data.values()
         if entry.get("origin_channel_id") in ids and entry["status"] in ("won", "lost")
+    }
+    return sorted(months, reverse=True)[:limit]
+
+
+# /winrate's own filter axis - deliberately by `channel_id` (each tracker's
+# own posting/scores channel), not `origin_channel_id` (the picks-source
+# channel every other report above filters by) - these two ids are the
+# "scores" channels the report should count, exactly as asked for.
+WINRATE_CHANNEL_IDS = (1530994763829088378, 1536429372217761833)
+
+# module -> a clean bet-type label, for every module whose picks are all one
+# bet type. tracker.py is the one exception (moneyline/spread/total all
+# share it) - classified from its own label text instead, see _bet_type.
+_MODULE_BET_TYPES = {
+    "f5tracker": "1st 5 Innings", "halftracker": "1st Half", "inningtracker": "YRFI/NRFI",
+    "inning1tracker": "1st Inning Result", "settracker": "Tennis Markets",
+    "proptracker": "Player Props", "tennispropstracker": "Player Props",
+    "soccerpropstracker": "Player Props", "kboproptracker": "Player Props",
+    "ufctracker": "UFC/MMA", "boxingtracker": "Boxing", "esportstracker": "Esports Markets",
+}
+
+_MONEYLINE_RE = re.compile(r"\bML\b", re.IGNORECASE)
+_SPREAD_RE = re.compile(r"[+-]\d+(?:\.\d+)?\s*$")
+_TOTAL_RE = re.compile(r"\b(?:over|under)\b", re.IGNORECASE)
+
+
+def _bet_type(module: str, label: str) -> str:
+    """A clean, human-readable bet-type bucket for /winrate - see
+    _MODULE_BET_TYPES for every module that's already one bet type on its
+    own. tracker.py alone covers full-game moneyline, spread, AND total
+    picks, so those are told apart the same way picks.py's own parsers
+    distinguish them in the first place: a moneyline pick's label always
+    ends in "ML" (see picks.py's _parse_team_pick), a spread pick's label
+    always ends in a bare signed number (_TEAM_SPREAD_NOMATCHUP_RE), and a
+    total pick's label always has "Over"/"Under" in it."""
+    if module != "tracker":
+        return _MODULE_BET_TYPES.get(module, module)
+    text = label or ""
+    if _MONEYLINE_RE.search(text):
+        return "Moneyline"
+    if _SPREAD_RE.search(text):
+        return "Spread"
+    if _TOTAL_RE.search(text):
+        return "Total"
+    return "Moneyline/Spread/Total"
+
+
+def _fallback_sport(entry: dict) -> str:
+    """Same fallback bot.py's own /summary grouping already uses for an
+    entry logged before the `sport` field existed (see record_pick's own
+    docstring) - not reused directly (bot.py already imports this module,
+    so the reverse would be circular), just mirrored here so /winrate
+    doesn't dump every one of those older entries into an undifferentiated
+    "Other" bucket the way a bare `entry.get("sport") or "Other"` would."""
+    section = entry.get("section") or ""
+    if section.endswith(" Props") and len(section) > len(" Props"):
+        section = section[: -len(" Props")]
+    return section or "Other"
+
+
+def sport_bet_type_win_loss(year_month: Optional[str] = None) -> dict[str, dict[str, tuple[int, int]]]:
+    """{sport: {bet_type: (won, lost)}} for every decided pick logged with
+    channel_id in WINRATE_CHANNEL_IDS - all-time if year_month is None
+    ("YYYY-MM" otherwise). Same "decided only" rule as daily_win_loss
+    (push/void/pending excluded).
+
+    A baseball pick's `sport` isn't always precise about MLB vs. KBO -
+    tracker.py/f5tracker.py/inningtracker.py/inning1tracker.py all tag
+    baseball picks generically (365scores' own game-level API doesn't
+    distinguish the two leagues at all, or hardcodes "MLB" outright),
+    while only proptracker.py (ESPN, MLB-only) and kboproptracker.py
+    (koreabaseball.com, KBO-only) can actually tell them apart. Same
+    known gap as the deferred tournament/region breakdown - not fixed
+    here."""
+    data = state.load_daily_log()
+    counts: dict[str, dict[str, list[int]]] = {}
+    for entry in data.values():
+        if entry.get("channel_id") not in WINRATE_CHANNEL_IDS:
+            continue
+        if entry["status"] not in ("won", "lost"):
+            continue
+        if year_month and not entry["date"].startswith(year_month):
+            continue
+        sport = entry.get("sport") or _fallback_sport(entry)
+        bet_type = _bet_type(entry["module"], entry.get("label") or "")
+        bucket = counts.setdefault(sport, {}).setdefault(bet_type, [0, 0])
+        bucket[0 if entry["status"] == "won" else 1] += 1
+    return {sport: {bt: (w, l) for bt, (w, l) in bet_types.items()} for sport, bet_types in counts.items()}
+
+
+def available_winrate_months(limit: int = 12) -> list[str]:
+    """Most-recent-first distinct "YYYY-MM" months with at least one
+    decided pick logged in WINRATE_CHANNEL_IDS - used for /winrate's month
+    dropdown (alongside its own "All-time" option, which isn't a real month
+    and so isn't in this list)."""
+    data = state.load_daily_log()
+    months = {
+        entry["date"][:7] for entry in data.values()
+        if entry.get("channel_id") in WINRATE_CHANNEL_IDS and entry["status"] in ("won", "lost")
     }
     return sorted(months, reverse=True)[:limit]
