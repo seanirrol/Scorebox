@@ -645,7 +645,7 @@ def start_tracking(
     picked_team: Optional[str] = None, direction: Optional[str] = None, line: Optional[float] = None,
     map_number: Optional[int] = None, picked_maps: Optional[int] = None, other_maps: Optional[int] = None,
     section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
-    tournament: Optional[str] = None,
+    tournament: Optional[str] = None, game_date: Optional[str] = None,
 ):
     key = track_key(channel_id, sport, team_a, team_b, market)
     if key in _active:
@@ -662,7 +662,7 @@ def start_tracking(
     dailylog.record_pick(
         channel_id, "esportstracker", key, section,
         label or pick_label(market, picked_team, direction, line, map_number, picked_maps, other_maps), message.id,
-        origin_channel_id, sport="Esports", tournament=tournament,
+        origin_channel_id, sport="Esports", tournament=tournament, game_date=game_date,
     )
 
 

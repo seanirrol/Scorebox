@@ -548,7 +548,10 @@ def start_tracking(
         channel_id, game_id, message.id, sport_id, owner_id, picked_team, total_direction, total_line,
         section, label, origin_channel_id,
     )
-    dailylog.record_pick(channel_id, "halftracker", key, section, label, message.id, origin_channel_id, sport="NFL", tournament="NFL")
+    dailylog.record_pick(
+        channel_id, "halftracker", key, section, label, message.id, origin_channel_id, sport="NFL", tournament="NFL",
+        game_date=scores365.eastern_date_str(scores365.start_epoch(game)),
+    )
 
 
 async def resume_all(client: discord.Client):

@@ -65,6 +65,7 @@ def today_str() -> str:
 def record_pick(
     channel_id: int, module: str, track_key_str: str, section: Optional[str], label: str, message_id: int,
     origin_channel_id: Optional[int] = None, sport: Optional[str] = None, tournament: Optional[str] = None,
+    game_date: Optional[str] = None,
 ):
     """Called once, right alongside each tracker's start_tracking. No-op if
     section is None - i.e. this pick didn't come from the auto-track
@@ -88,12 +89,21 @@ def record_pick(
     told apart). None for a pick logged before this field existed, or for
     a source with no real tournament concept below the sport level itself
     - /performance falls back to the sport's own name in that case (see
-    its own docstring)."""
+    its own docstring).
+
+    game_date ("YYYY-MM-DD", Eastern) is the match's own start date, per
+    explicit request - a pick posted tonight for a game starting tomorrow
+    morning files under tomorrow, not the night it was posted. Falls back
+    to today_str() (the old post-time behavior) when not given - either a
+    caller that hasn't been updated to pass it, or a genuine data gap
+    (e.g. the match's own start time couldn't be determined at track
+    time)."""
     if not section:
         return
     data = state.load_daily_log()
     data[_key(channel_id, module, track_key_str)] = {
-        "channel_id": channel_id, "origin_channel_id": origin_channel_id, "module": module, "date": today_str(),
+        "channel_id": channel_id, "origin_channel_id": origin_channel_id, "module": module,
+        "date": game_date or today_str(),
         "section": section, "sport": sport, "tournament": tournament, "label": label, "message_id": message_id,
         "status": "pending", "detail": _PENDING_DETAIL,
     }

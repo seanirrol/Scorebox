@@ -531,7 +531,7 @@ async def _auto_playerprops(
     proptracker.start_tracking(
         message, channel.id, event_id, entity["id"], entity["team_id"], entity["photo_url"],
         sport_value, stat_key, stat, entity["name"], None, direction, line, entity["team_name"],
-        section, label, origin_channel_id,
+        section, label, origin_channel_id, game_date=espn.eastern_date_str(event),
     )
     log.info("Auto-tracked player prop pick: %s - %s", player, stat)
     botlog.event(f"✅ Tracked (prop): **{player}** {stat} ({sport_value}) in <#{channel.id}>")
@@ -584,6 +584,7 @@ async def _auto_tennis_playerprops(
     tennispropstracker.start_tracking(
         message, sport_id, game_id, channel.id, competitor_id, stat_name, stat, resolved_name, None, direction, line,
         section, label, origin_channel_id, tournament=scores365.tournament_name(game),
+        game_date=scores365.eastern_date_str(scores365.start_epoch(game)),
     )
     log.info("Auto-tracked tennis player prop pick: %s - %s", player, stat)
     botlog.event(f"✅ Tracked (tennis prop): **{player}** {stat} in <#{channel.id}>")
@@ -637,6 +638,7 @@ async def _complete_soccer_prop_post(
         message, game_id, channel.id, member_id, member_competitor_id, stat_name, photo_url,
         stat, resolved_name, None, direction, line, fixture_path, section, label, origin_channel_id,
         tournament=scores365.tournament_name(game),
+        game_date=scores365.eastern_date_str(scores365.start_epoch(game)),
     )
     log.info("Auto-tracked soccer player prop pick: %s - %s", player, stat)
     botlog.event(f"✅ Tracked (soccer prop): **{player}** {stat} in <#{channel.id}>")
@@ -826,6 +828,7 @@ async def _auto_inning_runs(
 
     inningtracker.start_tracking(
         message, channel.id, event_id, pick_type, entity["id"], None, section, label, origin_channel_id,
+        game_date=espn.eastern_date_str(event),
     )
     log.info("Auto-tracked inning-runs pick '%s' (%s) -> event %s", team, pick_type, event_id)
     botlog.event(f"✅ Tracked ({pick_type}): **{team}** — event `{event_id}` in <#{channel.id}>")
@@ -991,7 +994,7 @@ async def _auto_boxing(
 
     boxingtracker.start_tracking(
         message, channel.id, fight_id, fighter_id, fighter_name, None, result.get("event_name") or "",
-        section, label, origin_channel_id,
+        section, label, origin_channel_id, game_date=scores365.eastern_date_str(boxing.start_epoch(result)),
     )
     log.info("Auto-tracked boxing pick '%s' -> fight %s", fighter, fight_id)
     botlog.event(f"✅ Tracked (Boxing): **{fighter}** — fight `{fight_id}` in <#{channel.id}>")
@@ -1080,6 +1083,7 @@ async def _auto_esports(
         message, sport, team_a, team_b, channel.id, market, None,
         picked_team, direction, line, map_number, picked_maps, other_maps, section, label, origin_channel_id,
         tournament=series_data.get("tournament"),
+        game_date=scores365.eastern_date_str(esports.start_epoch(series_data)),
     )
     log.info("Auto-tracked esports (%s) pick '%s v %s' -> %s", market, team_a, team_b, sport)
     botlog.event(f"✅ Tracked ({category_label}): **{team_a} v {team_b}** in <#{channel.id}>")

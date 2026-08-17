@@ -9,6 +9,7 @@ tests, even though the bug shows up one step removed.
 Run with: python -m unittest discover -s tests -t .
 """
 
+import datetime
 import os
 import sys
 import unittest
@@ -176,6 +177,122 @@ class GradeMoneyline(unittest.TestCase):
         # exact class of test-data mistake to avoid here.
         game = self._game("New York Yankees", "Boston Red Sox", home_score=5.0, away_score=2.0)
         self.assertIsNone(scores365.grade_moneyline(game, "Los Angeles Dodgers"))
+
+
+class FindMatchForTeam(unittest.TestCase):
+    """find_match_for_team backs every auto-tracked pick's match lookup -
+    monkeypatches _fetch_games_for_sport so this exercises the real
+    date/status bounding logic without a live 365scores request."""
+
+    def setUp(self):
+        self._orig_fetch = scores365._fetch_games_for_sport
+        self._games: list = []
+        scores365._fetch_games_for_sport = lambda sport_id: self._games
+
+    def tearDown(self):
+        scores365._fetch_games_for_sport = self._orig_fetch
+
+    def _game(self, home, away, status_group, days_offset, hour=18):
+        # A KST/Eastern-agnostic "days from today, at a fixed local hour"
+        # anchor - avoids the test being sensitive to what time it's
+        # actually run at, the same reasoning as koreabaseball.py's own
+        # 2 PM KST anchor.
+        now = datetime.datetime.now(tz=scores365.EASTERN)
+        start = (now + datetime.timedelta(days=days_offset)).replace(hour=hour, minute=0, second=0, microsecond=0)
+        return {
+            "homeCompetitor": {"name": home}, "awayCompetitor": {"name": away},
+            "statusGroup": status_group, "startTime": start.astimezone(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
+        }
+
+    def test_default_never_returns_an_already_finished_game(self):
+        # The exact bug this was built to stop: confirmed live, a team
+        # that already finished playing today still resolved to that same
+        # stale finished game hours later.
+        self._games = [self._game("Milwaukee Brewers", "Los Angeles Dodgers", status_group=4, days_offset=0)]
+        self.assertIsNone(scores365.find_match_for_team("Milwaukee Brewers", "baseball"))
+
+    def test_default_finds_tomorrows_game_when_todays_already_finished(self):
+        self._games = [
+            self._game("Milwaukee Brewers", "Los Angeles Dodgers", status_group=4, days_offset=0),
+            self._game("Milwaukee Brewers", "San Diego Padres", status_group=2, days_offset=1),
+        ]
+        result = scores365.find_match_for_team("Milwaukee Brewers", "baseball")
+        self.assertIsNotNone(result)
+        self.assertEqual(result[0]["awayCompetitor"]["name"], "San Diego Padres")
+
+    def test_default_never_looks_more_than_a_day_ahead(self):
+        # Confirmed live concern: a team's actual next game sitting several
+        # days out (bye day, rescheduled) must never get silently attached
+        # to a pick posted today - GreenFox only ever posts for today's or
+        # the next day's slate.
+        self._games = [self._game("Milwaukee Brewers", "San Diego Padres", status_group=2, days_offset=3)]
+        self.assertIsNone(scores365.find_match_for_team("Milwaukee Brewers", "baseball"))
+
+    def test_default_still_finds_todays_live_or_upcoming_game(self):
+        self._games = [self._game("Milwaukee Brewers", "Los Angeles Dodgers", status_group=2, days_offset=0)]
+        result = scores365.find_match_for_team("Milwaukee Brewers", "baseball")
+        self.assertIsNotNone(result)
+        self.assertEqual(result[0]["awayCompetitor"]["name"], "Los Angeles Dodgers")
+
+    def test_default_never_resolves_to_a_stale_past_day_game(self):
+        self._games = [self._game("Milwaukee Brewers", "Los Angeles Dodgers", status_group=4, days_offset=-1)]
+        self.assertIsNone(scores365.find_match_for_team("Milwaukee Brewers", "baseball"))
+
+    def test_tracktoday_bounds_find_todays_finished_game(self):
+        self._games = [self._game("Milwaukee Brewers", "Los Angeles Dodgers", status_group=4, days_offset=0)]
+        result = scores365.find_match_for_team(
+            "Milwaukee Brewers", "baseball", days_ahead=0, days_back=1, allow_finished=True,
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result[0]["awayCompetitor"]["name"], "Los Angeles Dodgers")
+
+    def test_tracktoday_bounds_fall_back_to_yesterdays_finished_game(self):
+        self._games = [self._game("Milwaukee Brewers", "San Diego Padres", status_group=4, days_offset=-1)]
+        result = scores365.find_match_for_team(
+            "Milwaukee Brewers", "baseball", days_ahead=0, days_back=1, allow_finished=True,
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result[0]["awayCompetitor"]["name"], "San Diego Padres")
+
+    def test_tracktoday_bounds_never_reach_two_days_back(self):
+        self._games = [self._game("Milwaukee Brewers", "San Diego Padres", status_group=4, days_offset=-2)]
+        result = scores365.find_match_for_team(
+            "Milwaukee Brewers", "baseball", days_ahead=0, days_back=1, allow_finished=True,
+        )
+        self.assertIsNone(result)
+
+    def test_tracktoday_bounds_never_reach_tomorrow(self):
+        self._games = [self._game("Milwaukee Brewers", "San Diego Padres", status_group=2, days_offset=1)]
+        result = scores365.find_match_for_team(
+            "Milwaukee Brewers", "baseball", days_ahead=0, days_back=1, allow_finished=True,
+        )
+        self.assertIsNone(result)
+
+    def test_live_game_always_wins_regardless_of_bounds(self):
+        self._games = [
+            self._game("Milwaukee Brewers", "Los Angeles Dodgers", status_group=4, days_offset=0),
+            self._game("Milwaukee Brewers", "San Diego Padres", status_group=3, days_offset=0),
+        ]
+        result = scores365.find_match_for_team("Milwaukee Brewers", "baseball")
+        self.assertEqual(result[0]["awayCompetitor"]["name"], "San Diego Padres")
+
+
+class EasternDateHelpers(unittest.TestCase):
+    def test_eastern_date_str_from_epoch(self):
+        epoch = datetime.datetime(2026, 8, 17, 12, 0, tzinfo=scores365.EASTERN).timestamp()
+        self.assertEqual(scores365.eastern_date_str(epoch), "2026-08-17")
+
+    def test_eastern_date_str_missing_epoch_sentinel_returns_none(self):
+        self.assertIsNone(scores365.eastern_date_str(0.0))
+
+    def test_eastern_date_str_from_iso(self):
+        self.assertEqual(scores365.eastern_date_str_from_iso("2026-08-17T20:00Z"), "2026-08-17")
+
+    def test_eastern_date_str_from_iso_missing_returns_none(self):
+        self.assertIsNone(scores365.eastern_date_str_from_iso(None))
+
+    def test_eastern_date_str_from_iso_unparseable_returns_none(self):
+        self.assertIsNone(scores365.eastern_date_str_from_iso("not a date"))
 
 
 class SportLabel(unittest.TestCase):

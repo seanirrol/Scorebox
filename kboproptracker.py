@@ -417,7 +417,10 @@ def start_tracking(
         channel_id, pcode, stat_label, direction, line, target_date,
         player_name, team_name, is_pitcher, message.id, owner_id, section, label, origin_channel_id,
     )
-    dailylog.record_pick(channel_id, "kboproptracker", key, section, label or player_name, message.id, origin_channel_id, sport="KBO", tournament="KBO")
+    dailylog.record_pick(
+        channel_id, "kboproptracker", key, section, label or player_name, message.id, origin_channel_id,
+        sport="KBO", tournament="KBO", game_date=kbo.game_date_eastern(target_date),
+    )
 
 
 async def resume_all(client: discord.Client):

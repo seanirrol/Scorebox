@@ -779,31 +779,44 @@ def _candidates_for_team(games: list[dict], team: str) -> list[dict]:
     return out
 
 
-def find_match_for_team(team: str, sport: Optional[str] = None) -> Optional[tuple[dict, int]]:
+def find_match_for_team(
+    team: str, sport: Optional[str] = None, days_ahead: int = 1, days_back: int = 0, allow_finished: bool = False,
+) -> Optional[tuple[dict, int]]:
     """
     Search 365scores' live game lists for a team, across all supported sports
     unless a specific one is given. Prefers a live match, then the
-    soonest/most-recently scheduled or finished one. Returns (game, sport_id).
+    soonest not-yet-started one within the allowed window. Returns
+    (game, sport_id).
 
-    A "notstarted" or "finished" candidate is only accepted if it's actually
-    today (Eastern) - a fresh pick is always about today's slate (dailylog's
-    own date reflects when it was posted, never when its game happens to
-    fall), so a team with matches on both today and tomorrow must never
-    silently resolve to tomorrow's just because today's hadn't been
-    published to this feed yet at lookup time. Confirmed live: several
-    tennis picks posted for a player's today match instead attached to that
-    same player's match the following day, with no error or "not found" -
-    this rejects that outright rather than accepting the nearest-in-time
-    candidate regardless of which day it's actually on. "inprogress" is
-    always accepted regardless - a live match is unambiguous."""
+    "inprogress" is always accepted regardless of date - a live match is
+    unambiguous. A "notstarted" candidate is only accepted within
+    [today, today + days_ahead] (Eastern) - never in the past, and never
+    further ahead than days_ahead lets it. A "finished" candidate is only
+    ever accepted at all if allow_finished is set, and then only within
+    [today - days_back, today].
+
+    Defaults (days_ahead=1, days_back=0, allow_finished=False) are the
+    auto-track pipeline's own rule: a fresh pick posted from a picks
+    channel is always about a live match, or the soonest upcoming one
+    today or tomorrow - never an already-finished game, at any date, and
+    never anything further out than tomorrow (confirmed live: GreenFox
+    only ever posts for today's or the next day's slate - a team's actual
+    next game sitting several days out, e.g. a bye day, must resolve to
+    nothing here rather than silently attaching a pick to a match it was
+    never about). bot.py's /tracktoday command is the one caller that
+    passes different bounds (days_ahead=0, days_back=1, allow_finished=
+    True) - today's or yesterday's match, live/upcoming/already finished,
+    whichever is most recent - since it exists specifically to manually
+    track a pick against a match that's already wrapped up."""
     sport_ids = [SPORT_IDS[sport.lower()]] if sport and sport.lower() in SPORT_IDS else UNIQUE_SPORT_IDS
+    now = time.time()
+    today = datetime.datetime.now(tz=EASTERN).date()
+    earliest_finished_date = today - datetime.timedelta(days=days_back)
+    latest_notstarted_date = today + datetime.timedelta(days=days_ahead)
 
     best = None
     best_sport_id = None
     best_rank = None
-    now = time.time()
-    today = datetime.datetime.now(tz=EASTERN).date()
-
     for sport_id in sport_ids:
         try:
             games = _fetch_games_for_sport(sport_id)
@@ -811,7 +824,14 @@ def find_match_for_team(team: str, sport: Optional[str] = None) -> Optional[tupl
             continue
         for game in _candidates_for_team(games, team):
             status = map_status_type(game.get("statusGroup"))
-            if status in ("notstarted", "finished") and eastern_date(start_epoch(game)) != today:
+            date = eastern_date(start_epoch(game))
+            if status == "finished":
+                if not allow_finished or date < earliest_finished_date or date > today:
+                    continue
+            elif status == "notstarted":
+                if date < today or date > latest_notstarted_date:
+                    continue
+            elif status != "inprogress":
                 continue
             rank = _STATUS_RANK.get(status, 3)
             if best is None or rank < best_rank or (
@@ -1292,6 +1312,32 @@ def eastern_date(epoch: float) -> datetime.date:
     a match that's simply still hours away on the same day it was always
     scheduled for."""
     return datetime.datetime.fromtimestamp(epoch, tz=EASTERN).date()
+
+
+def eastern_date_str(epoch: float) -> Optional[str]:
+    """Same as eastern_date, but "YYYY-MM-DD" (matches dailylog.today_str's
+    own format, since this is what every tracker passes as record_pick's
+    game_date) - None for start_epoch's 0.0 "genuinely missing" sentinel
+    rather than silently returning the 1970 epoch date, so callers fall
+    back to today_str() instead of logging a nonsense date."""
+    if not epoch:
+        return None
+    return eastern_date(epoch).isoformat()
+
+
+def eastern_date_str_from_iso(iso_str: Optional[str]) -> Optional[str]:
+    """Same as eastern_date_str, but takes a raw ISO 8601 UTC date string
+    directly (ESPN/UFC/boxing's own "date" fields are always this shape,
+    e.g. competition["date"]) instead of an already-computed epoch - saves
+    every caller from repeating the same fromisoformat/"Z"-replace
+    boilerplate. None for a missing or unparseable string."""
+    if not iso_str:
+        return None
+    try:
+        epoch = datetime.datetime.fromisoformat(iso_str.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+    return eastern_date_str(epoch)
 
 
 def status_line(game: dict, sport_id: Optional[int] = None) -> str:

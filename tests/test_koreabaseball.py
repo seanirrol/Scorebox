@@ -111,5 +111,24 @@ class FindGameRow(unittest.TestCase):
         self.assertIsNone(kbo.find_game_row("68220", True, "08.20"))
 
 
+class GameDateEastern(unittest.TestCase):
+    """Backs kboproptracker.py's own record_pick game_date - confirmed
+    live noon KST wasn't a safe anchor (it converts to 11 PM the
+    *previous* Eastern day, crossing midnight), so this locks in the 2 PM
+    KST anchor actually being used instead."""
+
+    def test_matches_the_kst_date_number(self):
+        # A realistic KBO start time (2 PM+ KST) should land on the same
+        # numbered Eastern date, not the day before or after. `now` is
+        # 2026-06-01 noon KST, purely to fix the year used.
+        self.assertEqual(kbo.game_date_eastern("08.17", now=1780282800.0), "2026-08-17")
+
+    def test_year_is_derived_from_now_not_hardcoded(self):
+        # `now` is 2024-01-01 noon KST - a year far from the other test's,
+        # to prove the year comes from `now` rather than a baked-in
+        # constant.
+        self.assertEqual(kbo.game_date_eastern("01.05", now=1704078000.0), "2024-01-05")
+
+
 if __name__ == "__main__":
     unittest.main()

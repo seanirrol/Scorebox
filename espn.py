@@ -287,6 +287,16 @@ def get_event(sport: str, event_id: str) -> Optional[dict]:
         return None
 
 
+def eastern_date_str(event: dict) -> Optional[str]:
+    """The event's own start date, "YYYY-MM-DD" Eastern (matches
+    dailylog.today_str's own format) - for record_pick's game_date, same
+    "file under the match's own day, not whenever it was posted" reasoning
+    as scores365.eastern_date_str_from_iso's identical helper. None if the
+    event's own date can't be parsed."""
+    comp = (event.get("header", {}).get("competitions") or [{}])[0]
+    return scores365.eastern_date_str_from_iso(comp.get("date"))
+
+
 def is_finished(event: dict) -> bool:
     """True only for an actually-completed game - ESPN buckets postponed/
     suspended/canceled games under the same state="post" as a real finish

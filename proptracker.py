@@ -757,6 +757,7 @@ def start_tracking(
     section: Optional[str] = None,
     label: Optional[str] = None,
     origin_channel_id: Optional[int] = None,
+    game_date: Optional[str] = None,
 ):
     key = prop_key(channel_id, event_id, entity_id, stat_key, direction, line)
     if key in _active_props:
@@ -777,6 +778,7 @@ def start_tracking(
         channel_id, "proptracker", key, section, label or player_name, message.id, origin_channel_id,
         sport=espn.SPORT_DISPLAY_LABELS.get(sport, sport.upper()),
         tournament=espn.SPORT_DISPLAY_LABELS.get(sport, sport.upper()),
+        game_date=game_date,
     )
 
 

@@ -745,6 +745,7 @@ def start_tracking(
     dailylog.record_pick(
         channel_id, "settracker", key, section, label or pick_label(market, team, direction, line), message.id,
         origin_channel_id, sport="Tennis", tournament=scores365.tournament_name(game),
+        game_date=scores365.eastern_date_str(scores365.start_epoch(game)),
     )
 
 

@@ -429,6 +429,7 @@ async def _track_loop(
 def start_tracking(
     message: discord.Message, channel_id: int, fight_id, fighter_id, fighter_name: str, owner_id: int, event_name: str,
     section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
+    game_date: Optional[str] = None,
 ):
     key = track_key(channel_id, fight_id, fighter_id)
     if key in _active:
@@ -439,7 +440,10 @@ def start_tracking(
     if not label:
         label = f"{fighter_name} ML"
     _persist(channel_id, fight_id, fighter_id, fighter_name, message.id, owner_id, event_name, section, label, origin_channel_id)
-    dailylog.record_pick(channel_id, "boxingtracker", key, section, label, message.id, origin_channel_id, sport="Boxing", tournament=event_name)
+    dailylog.record_pick(
+        channel_id, "boxingtracker", key, section, label, message.id, origin_channel_id, sport="Boxing", tournament=event_name,
+        game_date=game_date,
+    )
 
 
 async def resume_all(client: discord.Client):

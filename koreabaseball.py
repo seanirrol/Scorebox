@@ -299,6 +299,26 @@ def today_kst_mmdd(now: Optional[float] = None) -> str:
     return f"{dt.month:02d}.{dt.day:02d}"
 
 
+def game_date_eastern(target_date_mmdd: str, now: Optional[float] = None) -> str:
+    """The Eastern-calendar-day equivalent of a KST target date ("MM.DD",
+    no year - see today_kst_mmdd) - for kboproptracker.py's own
+    record_pick game_date, per explicit request.
+
+    Confirmed live this needs a real anchor time, not just relabeling the
+    KST date number as-is: KST is far enough ahead of Eastern that only a
+    KST time before roughly 9 AM would ever roll back to the *previous*
+    Eastern calendar day once converted - and no KBO game starts anywhere
+    near that early (first pitch is always afternoon/evening KST at the
+    earliest). Anchored at 2 PM KST specifically (not noon - confirmed
+    live noon KST converts to 11 PM the *previous* Eastern day, crossing
+    midnight, which a real 2 PM+ KBO start time never does) so this always
+    lands on the same date a real game's own start time would."""
+    year = datetime.fromtimestamp(now if now is not None else time.time(), tz=_KST).year
+    month, day = (int(part) for part in target_date_mmdd.split("."))
+    kbo_anchor = datetime(year, month, day, 14, 0, tzinfo=_KST)
+    return scores365.eastern_date_str(kbo_anchor.timestamp())
+
+
 def next_kst_midnight_epoch(now: Optional[float] = None) -> float:
     dt = datetime.fromtimestamp(now if now is not None else time.time(), tz=_KST)
     next_midnight = dt.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)

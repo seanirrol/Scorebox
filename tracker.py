@@ -719,6 +719,7 @@ def start_tracking(
         channel_id, "tracker", key, section, label, message.id, origin_channel_id,
         sport=scores365.sport_label(sport_id, game.get("competitionDisplayName")),
         tournament=scores365.tournament_name(game),
+        game_date=scores365.eastern_date_str(scores365.start_epoch(game)),
     )
 
 
