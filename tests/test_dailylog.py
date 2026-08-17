@@ -341,23 +341,44 @@ class SportTournamentWinLoss(DailyLogTestCase):
         self._log(self.IN_CHANNEL, "proptracker", "k1", "LeBron James Points", "NBA", None, "won", date_str="2026-08-16")
         self.assertEqual(dailylog.sport_tournament_win_loss()["NBA"], {"NBA": (1, 0)})
 
-    def test_sport_month_override_replaces_real_data_for_that_month(self):
-        # Real UFC picks logged this month would otherwise show their own
-        # per-event tournament breakdown - the override replaces the whole
-        # sport's bucket for that month with a single hand-counted total.
+    def test_sport_baseline_absorbs_picks_before_its_as_of_date(self):
+        # Real UFC picks logged before the baseline's as_of_date (2026-08-16)
+        # would otherwise show their own per-event breakdown - excluded
+        # entirely, replaced by the single hand-counted baseline instead.
         self._log(self.IN_CHANNEL, "ufctracker", "k1", "Jon Jones ML", "UFC", "UFC 330", "won", date_str="2026-08-01")
         self._log(self.IN_CHANNEL, "ufctracker", "k2", "Israel Adesanya ML", "UFC", "UFC 331", "lost", date_str="2026-08-08")
         self.assertEqual(dailylog.sport_tournament_win_loss("2026-08")["UFC"], {"UFC": (34, 13)})
 
-    def test_sport_month_override_applies_to_all_time_view_too(self):
+    def test_sport_baseline_applies_to_all_time_view_too(self):
         self._log(self.IN_CHANNEL, "ufctracker", "k1", "Jon Jones ML", "UFC", "UFC 330", "won", date_str="2026-08-01")
         self.assertEqual(dailylog.sport_tournament_win_loss()["UFC"], {"UFC": (34, 13)})
 
-    def test_sport_month_override_never_touches_a_different_month(self):
+    def test_sport_baseline_never_shows_for_an_earlier_month(self):
+        # A pre-baseline pick is absorbed regardless of which month it's
+        # in - July's own view has nothing left to show for UFC at all.
         self._log(self.IN_CHANNEL, "ufctracker", "k1", "Jon Jones ML", "UFC", "UFC 300", "won", date_str="2026-07-01")
-        self.assertEqual(dailylog.sport_tournament_win_loss("2026-07")["UFC"], {"UFC 300": (1, 0)})
+        self.assertNotIn("UFC", dailylog.sport_tournament_win_loss("2026-07"))
 
-    def test_sport_month_override_doesnt_apply_outside_the_default_channel_scope(self):
+    def test_sport_baseline_new_picks_on_or_after_as_of_date_add_on_top(self):
+        # A new pick tracked after the baseline's as_of_date combines with
+        # it (as its own tournament row) instead of replacing it, so the
+        # sport-level total (a sum across tournaments - see performance.py)
+        # keeps moving as new picks resolve rather than staying frozen.
+        self._log(self.IN_CHANNEL, "ufctracker", "k1", "Alex Pereira ML", "UFC", "UFC 332", "won", date_str="2026-08-20")
+        result = dailylog.sport_tournament_win_loss("2026-08")["UFC"]
+        self.assertEqual(result, {"UFC": (34, 13), "UFC 332": (1, 0)})
+        self.assertEqual(
+            (sum(w for w, _l in result.values()), sum(l for _w, l in result.values())), (35, 13),
+        )
+
+    def test_sport_baseline_doesnt_carry_into_a_later_months_own_filtered_view(self):
+        # A September-only view shows just September's own real picks, not
+        # the standing August baseline mixed in - only the all-time view
+        # and the exact month the baseline was set for get it.
+        self._log(self.IN_CHANNEL, "ufctracker", "k1", "Alex Pereira ML", "UFC", "UFC 335", "won", date_str="2026-09-05")
+        self.assertEqual(dailylog.sport_tournament_win_loss("2026-09")["UFC"], {"UFC 335": (1, 0)})
+
+    def test_sport_baseline_doesnt_apply_outside_the_default_channel_scope(self):
         other_server_channel = 555555
         self._log(other_server_channel, "ufctracker", "k1", "Jon Jones ML", "UFC", "UFC 330", "won", date_str="2026-08-01")
         result = dailylog.sport_tournament_win_loss(score_channel_ids=(other_server_channel,))

@@ -347,20 +347,20 @@ _SPORT_DISPLAY_MERGE = {"Basketball": "WNBA", "Baseball": "MLB"}
 # fresh from here rather than carrying old, less-trustworthy numbers.
 _NBA_CLEAN_SLATE_FROM = "2026-08-16"
 
-# Manual reconciliation for one sport, one month (per explicit request) -
+# Manual reconciliation baseline for one sport (per explicit request) -
 # Scorebox's own UFC tally only ever sees picks that actually got posted
 # and parsed through it; a real share of this account's UFC plays are
 # placed directly and never go through the bot at all, so the automated
-# won/lost count understates the true record. Replaces that sport's ENTIRE
-# breakdown for that month with a single hand-counted total rather than
-# itemizing per event, since the correction is a whole-month
-# reconciliation, not attributable to any one fight card - the individual
-# UFC tournament entries dailylog already has for that month are excluded
-# below rather than left to double-count alongside this. Scoped to
-# PERFORMANCE_CHANNEL_IDS only, same as _SPORT_DISPLAY_MERGE. A different
-# month's real UFC data (before/after this one, if any) is unaffected.
-_SPORT_MONTH_OVERRIDE = {
-    ("UFC", "2026-08"): (34, 13),
+# won/lost count understates the true record. Every real UFC pick logged
+# BEFORE as_of_date is excluded (absorbed into the hand-counted baseline
+# below rather than double-counted alongside it); every real UFC pick
+# logged ON or AFTER as_of_date is counted completely normally, as its own
+# tournament bucket, and ADDS to this baseline going forward - so /
+# performance keeps moving as new picks resolve rather than staying frozen
+# at the baseline number forever. Scoped to PERFORMANCE_CHANNEL_IDS only,
+# same as _SPORT_DISPLAY_MERGE.
+_SPORT_BASELINE_OVERRIDE = {
+    "UFC": ("2026-08-16", 34, 13),
 }
 
 
@@ -378,7 +378,7 @@ def sport_tournament_win_loss(
     specific league for baseball/tennis/soccer via
     scores365.tournament_name).
 
-    _SPORT_DISPLAY_MERGE/_NBA_CLEAN_SLATE_FROM/_SPORT_MONTH_OVERRIDE only
+    _SPORT_DISPLAY_MERGE/_NBA_CLEAN_SLATE_FROM/_SPORT_BASELINE_OVERRIDE only
     apply for the default PERFORMANCE_CHANNEL_IDS scope - those were
     requested for that specific dataset (confirmed live against it), not a
     blanket rule every other /performance route should inherit sight
@@ -408,17 +408,25 @@ def sport_tournament_win_loss(
             if sport == "NBA" and entry["date"] < _NBA_CLEAN_SLATE_FROM:
                 continue
             sport = _SPORT_DISPLAY_MERGE.get(sport, sport)
-            if (sport, entry["date"][:7]) in _SPORT_MONTH_OVERRIDE:
-                continue  # replaced wholesale below, not itemized per pick
+            baseline = _SPORT_BASELINE_OVERRIDE.get(sport)
+            if baseline and entry["date"] < baseline[0]:
+                continue  # absorbed into the baseline below, not itemized per pick
         tournament = entry.get("tournament") or sport
         bucket = counts.setdefault(sport, {}).setdefault(tournament, [0, 0])
         bucket[0 if entry["status"] == "won" else 1] += 1
 
     if apply_overrides:
-        for (sport, month), (won, lost) in _SPORT_MONTH_OVERRIDE.items():
-            if year_month and year_month != month:
+        for sport, (as_of_date, won, lost) in _SPORT_BASELINE_OVERRIDE.items():
+            # Shows for the all-time view and for the exact month the
+            # baseline was set in (this month's picks combine with it) -
+            # not for any other specific month, past or future, so a
+            # month-only view of e.g. September shows just September's own
+            # real picks rather than perpetually re-showing this baseline.
+            if year_month and year_month != as_of_date[:7]:
                 continue
-            counts.setdefault(sport, {})[sport] = [won, lost]
+            counts.setdefault(sport, {}).setdefault(sport, [0, 0])
+            counts[sport][sport][0] += won
+            counts[sport][sport][1] += lost
 
     return {sport: {t: (w, l) for t, (w, l) in tournaments.items()} for sport, tournaments in counts.items()}
 
