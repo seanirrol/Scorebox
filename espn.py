@@ -209,42 +209,34 @@ def find_team(name: str, sport: str) -> Optional[dict]:
 _STATUS_RANK = {"in": 0, "pre": 1, "post": 2}
 
 
-def find_current_event_id(sport: str, team_id: str) -> Optional[str]:
+def find_current_event_id(
+    sport: str, team_id: str, days_ahead: int = 1, days_back: int = 0, allow_finished: bool = False,
+) -> Optional[str]:
     """Search the league's current scoreboard for an event involving this
-    team, preferring in-progress, then soonest scheduled, then most recent.
+    team, preferring in-progress, then soonest scheduled, then most recent
+    (within whatever window is allowed).
 
-    Explicitly queries a +-1 day window around today (Eastern) instead of
-    relying on ESPN's own no-date-param default - confirmed live, that
-    default can still be showing YESTERDAY's date as late as mid-morning
-    Eastern (reproduced independently for both MLB and WNBA scoreboards),
-    silently missing today's actual game from the results entirely. Every
-    tracker now grades an already-finished event immediately instead of
-    skipping it (see bot.py's _auto_* handlers) - so a fresh pick used to
-    silently resolve to a stale, already-decided game from the day before
-    and report a false result, not just fail with "no match found".
+    Explicitly queries a window around today (Eastern) instead of relying
+    on ESPN's own no-date-param default - confirmed live, that default can
+    still be showing YESTERDAY's date as late as mid-morning Eastern
+    (reproduced independently for both MLB and WNBA scoreboards), silently
+    missing today's actual game from the results entirely.
 
-    That +-1 day window reintroduces the same trap one level up: confirmed
-    live, a team's next game can still be entirely missing from ESPN's feed
-    as late as mid-morning Eastern on gameday itself, leaving that team's
-    already-FINISHED game from the day before as the only candidate in the
-    window - silently winning by default even though a real future/live game
-    exists, it just hasn't been published yet. So a "post" (finished)
-    candidate is only accepted if it actually finished today (Eastern) -
-    yesterday's final is never eligible, matching this function's whole
-    purpose of finding what a FRESH pick should attach to.
-
-    Same reasoning applies to "pre" (scheduled) candidates: a fresh pick is
-    always about today's slate (dailylog's own date reflects when it was
-    posted, never when its game happens to fall), so if a team has games on
-    both today and tomorrow and today's hasn't kicked off yet, only today's
-    is eligible - tomorrow's must never win by default just because it's
-    also sitting in the +-1 day window. Confirmed live: several MLB picks
-    for a team's today game instead silently attached to that same team's
-    game the next day, with no error or "not found"."""
+    Same days_ahead/days_back/allow_finished bounding as scores365.
+    find_match_for_team - see that function's own docstring for the full
+    reasoning (both were built for the same confirmed-live bugs and now
+    share the same fix). Defaults (days_ahead=1, days_back=0,
+    allow_finished=False) are the auto-track pipeline's own rule: never an
+    already-finished event, at any date - only live, or the soonest
+    not-yet-started one today or tomorrow, never further out. bot.py's
+    /tracktoday command passes the opposite bounds (days_ahead=0,
+    days_back=1, allow_finished=True) to deliberately find today's or
+    yesterday's event, whichever is most recent, including an
+    already-finished one."""
     sport_slug, league_slug = SPORT_PATHS[sport]
     today = datetime.datetime.now(tz=scores365.EASTERN).date()
-    start = (today - datetime.timedelta(days=1)).strftime("%Y%m%d")
-    end = (today + datetime.timedelta(days=1)).strftime("%Y%m%d")
+    start = (today - datetime.timedelta(days=days_back)).strftime("%Y%m%d")
+    end = (today + datetime.timedelta(days=days_ahead)).strftime("%Y%m%d")
     data = _get(f"{SITE_BASE}/{sport_slug}/{league_slug}/scoreboard", dates=f"{start}-{end}")
 
     best = None
@@ -259,12 +251,16 @@ def find_current_event_id(sport: str, team_id: str) -> Optional[str]:
             event_dt = datetime.datetime.fromisoformat(comp_date.replace("Z", "+00:00"))
         except (AttributeError, ValueError):
             continue
-        if state in ("post", "pre"):
-            if event_dt.astimezone(scores365.EASTERN).date() != today:
+        event_date = event_dt.astimezone(scores365.EASTERN).date()
+        if state == "post":
+            if not allow_finished or event_date < today - datetime.timedelta(days=days_back) or event_date > today:
+                continue
+        elif state == "pre":
+            if event_date < today or event_date > today + datetime.timedelta(days=days_ahead):
                 continue
         rank = _STATUS_RANK.get(state, 3)
         # Within the same rank tier, a team can have more than one candidate
-        # in the +-1 day window (e.g. games on both today and tomorrow) -
+        # in the allowed window (e.g. games on both today and tomorrow) -
         # confirmed live, two "pre" (not-yet-started) games for the same
         # team a day apart, and this used to have no tie-break at all,
         # silently keeping whichever the API happened to list first rather

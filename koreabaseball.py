@@ -299,6 +299,14 @@ def today_kst_mmdd(now: Optional[float] = None) -> str:
     return f"{dt.month:02d}.{dt.day:02d}"
 
 
+def yesterday_kst_mmdd(now: Optional[float] = None) -> str:
+    """For /tracktoday's KBO path - "today's or yesterday's game, whichever
+    is most recent" needs an explicit fallback date to check, same bounds
+    as scores365.find_match_for_team's own manual mode."""
+    dt = datetime.fromtimestamp(now if now is not None else time.time(), tz=_KST) - timedelta(days=1)
+    return f"{dt.month:02d}.{dt.day:02d}"
+
+
 def game_date_eastern(target_date_mmdd: str, now: Optional[float] = None) -> str:
     """The Eastern-calendar-day equivalent of a KST target date ("MM.DD",
     no year - see today_kst_mmdd) - for kboproptracker.py's own

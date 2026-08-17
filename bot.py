@@ -326,7 +326,7 @@ async def _auto_track(
     channel: discord.abc.Messageable, sport_value: str, team: str,
     total_direction: Optional[str] = None, total_line: Optional[float] = None,
     team_total: Optional[str] = None, section: Optional[str] = None, label: Optional[str] = None,
-    origin_channel_id: Optional[int] = None,
+    origin_channel_id: Optional[int] = None, manual: bool = False,
 ):
     """Mirrors /track's core logic for an auto-detected pick - posts via
     channel.send() since there's no interaction to reply to, and has no
@@ -336,17 +336,29 @@ async def _auto_track(
     None otherwise) is for a game-total Over/Under pick instead of a
     moneyline - team is still used to find the match either way. team_total
     additionally set means it's one side's own total instead of the combined
-    score - team_total is the actual named side being graded."""
-    if pendingtrack.is_queued(channel.id, sport_value, team, total_direction, total_line, team_total):
+    score - team_total is the actual named side being graded.
+
+    manual=True is /tracktoday's own one-shot mode: searches today-or-
+    yesterday INCLUDING an already-finished match (find_match_for_team's
+    opposite bounds from auto-track's own "never finished" default - see
+    that function's docstring), and reports a miss immediately instead of
+    queuing a 24h retry, since a manual command has an interaction to reply
+    to right away rather than a silent channel.send()."""
+    if not manual and pendingtrack.is_queued(channel.id, sport_value, team, total_direction, total_line, team_total):
         botlog.event(f"⏭️ Skipped: **{team}** ({sport_value}) — already queued, waiting for its match to be found")
         return "skipped"
+    find_kwargs = {"days_ahead": 0, "days_back": 1, "allow_finished": True} if manual else {}
     try:
-        result = await asyncio.to_thread(scores365.find_match_for_team, team, sport_value)
+        result = await asyncio.to_thread(scores365.find_match_for_team, team, sport_value, **find_kwargs)
     except scores365.ScoresError as e:
         log.info("Auto-track: couldn't reach 365scores for '%s': %s", team, e)
         botlog.event(f"❌ Not tracked: **{team}** ({sport_value}) — couldn't reach 365scores: {e}")
         return
     if not result:
+        if manual:
+            log.info("Manual track: no match found for '%s' (%s)", team, sport_value)
+            botlog.event(f"❌ Not tracked: **{team}** ({sport_value}) — no match found (manual /tracktoday)")
+            return
         log.info("Auto-track: no match found for '%s' (%s), queuing retry", team, sport_value)
         pendingtrack.queue(
             channel.id, sport_value, team, total_direction, total_line, team_total,
@@ -366,14 +378,16 @@ async def _auto_f5(
     total_direction: Optional[str] = None, total_line: Optional[float] = None,
     combined: bool = False, handicap_line: Optional[float] = None,
     section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
+    manual: bool = False,
 ):
     """F5 (First 5 Innings) picks - moneyline, team total, combined total, or
     handicap/run-line - settle after the 5th inning, not the whole game - see
     f5tracker.py. combined=True means total_direction/total_line grade both
     sides' F5 runs summed together, not team's own - team is still used to
-    find the match either way."""
+    find the match either way. manual - see _auto_track's own docstring."""
+    find_kwargs = {"days_ahead": 0, "days_back": 1, "allow_finished": True} if manual else {}
     try:
-        result = await asyncio.to_thread(scores365.find_match_for_team, team, sport_value)
+        result = await asyncio.to_thread(scores365.find_match_for_team, team, sport_value, **find_kwargs)
     except scores365.ScoresError as e:
         log.info("Auto-F5: couldn't reach 365scores for '%s': %s", team, e)
         botlog.event(f"❌ Not tracked (F5): **{team}** ({sport_value}) — couldn't reach 365scores: {e}")
@@ -408,14 +422,16 @@ async def _auto_f5(
 async def _auto_1h_total(
     channel: discord.abc.Messageable, sport_value: str, team: str, total_direction: str, total_line: float,
     combined: bool = False, section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
+    manual: bool = False,
 ):
     """1H (1st Half) team total or combined total - settles after the 2nd
     quarter, not the whole game - see halftracker.py. combined=True means
     total_direction/total_line grade both sides' Q1+Q2 points summed
     together, not team's own - team is still used to find the match either
-    way."""
+    way. manual - see _auto_track's own docstring."""
+    find_kwargs = {"days_ahead": 0, "days_back": 1, "allow_finished": True} if manual else {}
     try:
-        result = await asyncio.to_thread(scores365.find_match_for_team, team, sport_value)
+        result = await asyncio.to_thread(scores365.find_match_for_team, team, sport_value, **find_kwargs)
     except scores365.ScoresError as e:
         log.info("Auto-1H: couldn't reach 365scores for '%s': %s", team, e)
         botlog.event(f"❌ Not tracked (1H): **{team}** ({sport_value}) — couldn't reach 365scores: {e}")
@@ -450,8 +466,10 @@ async def _auto_playerprops(
     channel: discord.abc.Messageable, sport_value: str, player: str, stat: str,
     direction: Optional[str] = None, line: Optional[float] = None,
     section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
+    manual: bool = False,
 ):
-    """Mirrors /playerprops' core logic for an auto-detected pick."""
+    """Mirrors /playerprops' core logic for an auto-detected pick. manual -
+    see _auto_track's own docstring."""
     if sport_value == "kbo":
         # ESPN has no KBO league at all (only MLB) - confirmed live, a KBO
         # prop for a former-MLB player used to silently match that
@@ -464,7 +482,7 @@ async def _auto_playerprops(
         if direction is None or line is None:
             botlog.event(f"❌ Not tracked (KBO prop): **{player}** {stat} — no line to grade against")
             return
-        return await _auto_kboprop(channel, player, stat, direction, line, section, label, origin_channel_id)
+        return await _auto_kboprop(channel, player, stat, direction, line, section, label, origin_channel_id, manual=manual)
     stat_key = espn.STAT_CATALOG.get(sport_value, {}).get(stat)
     if not stat_key:
         botlog.event(f"❌ Not tracked (prop): **{player}** {stat} ({sport_value}) — unknown stat for this sport")
@@ -505,7 +523,8 @@ async def _auto_playerprops(
         botlog.event(f"❌ Not tracked (prop): **{player}** {stat} ({sport_value}) — player not found on ESPN")
         return
 
-    event_id = await asyncio.to_thread(espn.find_current_event_id, sport_value, entity["team_id"])
+    find_kwargs = {"days_ahead": 0, "days_back": 1, "allow_finished": True} if manual else {}
+    event_id = await asyncio.to_thread(espn.find_current_event_id, sport_value, entity["team_id"], **find_kwargs)
     if not event_id:
         botlog.event(f"❌ Not tracked (prop): **{player}** {stat} — no current/upcoming match found on ESPN")
         return
@@ -542,18 +561,21 @@ async def _auto_tennis_playerprops(
     channel: discord.abc.Messageable, player: str, stat: str,
     direction: Optional[str] = None, line: Optional[float] = None,
     section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
+    manual: bool = False,
 ):
     """Tennis-only equivalent of _auto_playerprops, backed by 365scores
     instead of ESPN (which doesn't support tennis at all) - see
     tennispropstracker.py. A tennis player is its own "competitor" in
     365scores' data, found via find_match_for_team same as every other
-    365scores-backed tennis tracker (F5/1st-set/moneyline)."""
+    365scores-backed tennis tracker (F5/1st-set/moneyline). manual - see
+    _auto_track's own docstring."""
     stat_name = scores365.TENNIS_STAT_CATALOG.get(stat)
     if not stat_name:
         botlog.event(f"❌ Not tracked (tennis prop): **{player}** {stat} — unknown stat")
         return
+    find_kwargs = {"days_ahead": 0, "days_back": 1, "allow_finished": True} if manual else {}
     try:
-        result = await asyncio.to_thread(scores365.find_match_for_team, player, "tennis")
+        result = await asyncio.to_thread(scores365.find_match_for_team, player, "tennis", **find_kwargs)
     except scores365.ScoresError as e:
         log.info("Auto-tennis-playerprops: couldn't reach 365scores for '%s': %s", player, e)
         botlog.event(f"❌ Not tracked (tennis prop): **{player}** {stat} — couldn't reach 365scores: {e}")
@@ -793,9 +815,11 @@ async def _auto_soccer_playerprops(
 async def _auto_inning_runs(
     channel: discord.abc.Messageable, team: str, pick_type: str,
     section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
+    manual: bool = False,
 ):
     """YRFI/NRFI picks settle after just the 1st inning, not the whole game
-    - see inningtracker.py. Always baseball, so no sport param needed."""
+    - see inningtracker.py. Always baseball, so no sport param needed.
+    manual - see _auto_track's own docstring."""
     try:
         entity = await asyncio.to_thread(espn.find_team, team, "baseball")
     except espn.EspnError as e:
@@ -807,7 +831,8 @@ async def _auto_inning_runs(
         botlog.event(f"❌ Not tracked ({pick_type}): **{team}** — team not found on ESPN")
         return
 
-    event_id = await asyncio.to_thread(espn.find_current_event_id, "baseball", entity["id"])
+    find_kwargs = {"days_ahead": 0, "days_back": 1, "allow_finished": True} if manual else {}
+    event_id = await asyncio.to_thread(espn.find_current_event_id, "baseball", entity["id"], **find_kwargs)
     if not event_id:
         botlog.event(f"❌ Not tracked ({pick_type}): **{team}** — no current/upcoming match found on ESPN")
         return
@@ -838,12 +863,15 @@ async def _auto_inning_runs(
 async def _auto_inning1_result(
     channel: discord.abc.Messageable, team: str, pick: str,
     section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
+    manual: bool = False,
 ):
     """1st Inning Result (3-way: team or Draw) picks settle after the 1st
     inning, not the whole game - see inning1tracker.py. Backed by 365scores
-    (like f5tracker.py), not ESPN - always baseball."""
+    (like f5tracker.py), not ESPN - always baseball. manual - see
+    _auto_track's own docstring."""
+    find_kwargs = {"days_ahead": 0, "days_back": 1, "allow_finished": True} if manual else {}
     try:
-        result = await asyncio.to_thread(scores365.find_match_for_team, team, "baseball")
+        result = await asyncio.to_thread(scores365.find_match_for_team, team, "baseball", **find_kwargs)
     except scores365.ScoresError as e:
         log.info("Auto-1st-inning-result: couldn't reach 365scores for '%s': %s", team, e)
         botlog.event(f"❌ Not tracked (1st inning result): **{team}** — couldn't reach 365scores: {e}")
@@ -877,6 +905,7 @@ async def _auto_tennis_market(
     channel: discord.abc.Messageable, team: str, market: str,
     direction: Optional[str] = None, line: Optional[float] = None,
     section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
+    manual: bool = False,
 ):
     """Tennis "extra market" picks (1st Set ML/Total Games, Match Total
     Games, Win a Set) all settle on some part of the match rather than the
@@ -884,9 +913,10 @@ async def _auto_tennis_market(
     (like f5tracker.py), not ESPN - always tennis. team is either the named
     player (set1_moneyline/win_a_set) or just one of the two matchup sides
     used to look the match up (set1_total_games/match_total_games, no
-    specific team being graded)."""
+    specific team being graded). manual - see _auto_track's own docstring."""
+    find_kwargs = {"days_ahead": 0, "days_back": 1, "allow_finished": True} if manual else {}
     try:
-        result = await asyncio.to_thread(scores365.find_match_for_team, team, "tennis")
+        result = await asyncio.to_thread(scores365.find_match_for_team, team, "tennis", **find_kwargs)
     except scores365.ScoresError as e:
         log.info("Auto-tennis-market (%s): couldn't reach 365scores for '%s': %s", market, team, e)
         botlog.event(f"❌ Not tracked ({market}): **{team}** — couldn't reach 365scores: {e}")
@@ -1004,12 +1034,20 @@ async def _auto_boxing(
 async def _auto_kboprop(
     channel: discord.abc.Messageable, player: str, stat: str, direction: str, line: float,
     section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
+    manual: bool = False,
 ):
     """KBO player prop picks - backed by koreabaseball.py (the league's own
     official site), since ESPN (proptracker.py's only source) has no KBO
     league at all. See koreabaseball.py's/picks.py's own docstrings for the
     full story of why this needed its own source instead of reusing
-    proptracker.py's ESPN-backed path."""
+    proptracker.py's ESPN-backed path.
+
+    manual=True is /tracktoday's own mode: unlike auto-track (which always
+    targets today's KST date and waits/polls for that game log row to
+    appear), this checks for an already-posted row under today's date
+    first, then yesterday's, reporting a miss immediately rather than
+    polling - same "today or yesterday, whichever is most recent, no
+    further back" bound as every other manual-tracked sport."""
     try:
         player_entry = await asyncio.to_thread(koreabaseball.find_player, player)
     except koreabaseball.KboError as e:
@@ -1026,6 +1064,17 @@ async def _auto_kboprop(
 
     pcode = player_entry["pcode"]
     target_date = koreabaseball.today_kst_mmdd()
+    if manual:
+        row = await asyncio.to_thread(koreabaseball.find_game_row, pcode, player_entry["is_pitcher"], target_date)
+        if not row:
+            yesterday = koreabaseball.yesterday_kst_mmdd()
+            row = await asyncio.to_thread(koreabaseball.find_game_row, pcode, player_entry["is_pitcher"], yesterday)
+            if row:
+                target_date = yesterday
+        if not row:
+            log.info("Manual KBO prop: no game found for '%s' today or yesterday", player)
+            botlog.event(f"❌ Not tracked (KBO prop): **{player}** {stat} — no game found today or yesterday (manual /tracktoday)")
+            return
     if kboproptracker.is_tracked(channel.id, pcode, stat, direction, line, target_date):
         botlog.event(f"⏭️ Skipped (KBO prop): **{player}** {stat} — already being tracked in <#{channel.id}>")
         return "skipped"
@@ -1184,7 +1233,7 @@ async def _report_not_tracked_lines(message: discord.Message, raw_lines: list[st
 
 async def _dispatch_pick(
     target_channel: discord.abc.Messageable, pick: dict,
-    section: Optional[str], label: Optional[str], origin_channel_id: Optional[int],
+    section: Optional[str], label: Optional[str], origin_channel_id: Optional[int], manual: bool = False,
 ) -> Optional[int | str]:
     """Routes one already-parsed pick to its tracker, mirroring exactly
     which _auto_* function on_message would have called - shared with
@@ -1200,88 +1249,97 @@ async def _dispatch_pick(
     (and its not-tracked recap, see _report_not_tracked_lines) can tell
     them apart from a genuine miss. None means it genuinely never got
     tracked (no match found and no retry queue for this pick kind, unknown
-    stat, couldn't reach the data source, ...)."""
+    stat, couldn't reach the data source, ...).
+
+    manual=True is /tracktoday's own one-shot mode - see _auto_track's own
+    docstring for what that changes. Not accepted for soccer_playerprops
+    (see _auto_soccer_playerprops' own narrower live+imminent-only
+    architecture) - /tracktoday rejects that combination before ever
+    reaching here."""
     try:
         if pick["kind"] == "track":
-            return await _auto_track(target_channel, pick["sport"], pick["team"], section=section, label=label, origin_channel_id=origin_channel_id)
+            return await _auto_track(target_channel, pick["sport"], pick["team"], section=section, label=label, origin_channel_id=origin_channel_id, manual=manual)
         elif pick["kind"] == "total":
             return await _auto_track(
                 target_channel, pick["sport"], pick["team"], pick["direction"], pick["line"],
-                section=section, label=label, origin_channel_id=origin_channel_id,
+                section=section, label=label, origin_channel_id=origin_channel_id, manual=manual,
             )
         elif pick["kind"] == "team_total":
             return await _auto_track(
                 target_channel, pick["sport"], pick["team"], pick["direction"], pick["line"], pick["team"],
-                section=section, label=label, origin_channel_id=origin_channel_id,
+                section=section, label=label, origin_channel_id=origin_channel_id, manual=manual,
             )
         elif pick["kind"] == "f5_moneyline":
-            return await _auto_f5(target_channel, pick["sport"], pick["team"], section=section, label=label, origin_channel_id=origin_channel_id)
+            return await _auto_f5(target_channel, pick["sport"], pick["team"], section=section, label=label, origin_channel_id=origin_channel_id, manual=manual)
         elif pick["kind"] == "f5_total":
             return await _auto_f5(
                 target_channel, pick["sport"], pick["team"], pick["direction"], pick["line"],
-                section=section, label=label, origin_channel_id=origin_channel_id,
+                section=section, label=label, origin_channel_id=origin_channel_id, manual=manual,
             )
         elif pick["kind"] == "f5_combined_total":
             return await _auto_f5(
                 target_channel, pick["sport"], pick["team"], pick["direction"], pick["line"], combined=True,
-                section=section, label=label, origin_channel_id=origin_channel_id,
+                section=section, label=label, origin_channel_id=origin_channel_id, manual=manual,
             )
         elif pick["kind"] == "f5_handicap":
             return await _auto_f5(
                 target_channel, pick["sport"], pick["team"], handicap_line=pick["line"],
-                section=section, label=label, origin_channel_id=origin_channel_id,
+                section=section, label=label, origin_channel_id=origin_channel_id, manual=manual,
             )
         elif pick["kind"] == "1h_total":
             return await _auto_1h_total(
                 target_channel, pick["sport"], pick["team"], pick["direction"], pick["line"],
-                section=section, label=label, origin_channel_id=origin_channel_id,
+                section=section, label=label, origin_channel_id=origin_channel_id, manual=manual,
             )
         elif pick["kind"] == "1h_combined_total":
             return await _auto_1h_total(
                 target_channel, pick["sport"], pick["team"], pick["direction"], pick["line"], combined=True,
-                section=section, label=label, origin_channel_id=origin_channel_id,
+                section=section, label=label, origin_channel_id=origin_channel_id, manual=manual,
             )
         elif pick["kind"] == "inning_runs":
-            return await _auto_inning_runs(target_channel, pick["team"], pick["pick_type"], section=section, label=label, origin_channel_id=origin_channel_id)
+            return await _auto_inning_runs(target_channel, pick["team"], pick["pick_type"], section=section, label=label, origin_channel_id=origin_channel_id, manual=manual)
         elif pick["kind"] == "inning1_result":
-            return await _auto_inning1_result(target_channel, pick["team"], pick["pick"], section=section, label=label, origin_channel_id=origin_channel_id)
+            return await _auto_inning1_result(target_channel, pick["team"], pick["pick"], section=section, label=label, origin_channel_id=origin_channel_id, manual=manual)
         elif pick["kind"] == "set1_moneyline":
-            return await _auto_tennis_market(target_channel, pick["team"], "set1_moneyline", section=section, label=label, origin_channel_id=origin_channel_id)
+            return await _auto_tennis_market(target_channel, pick["team"], "set1_moneyline", section=section, label=label, origin_channel_id=origin_channel_id, manual=manual)
         elif pick["kind"] == "tennis_set1_total_games":
             return await _auto_tennis_market(
                 target_channel, pick["team"], "set1_total_games", pick["direction"], pick["line"],
-                section=section, label=label, origin_channel_id=origin_channel_id,
+                section=section, label=label, origin_channel_id=origin_channel_id, manual=manual,
             )
         elif pick["kind"] == "tennis_match_total_games":
             return await _auto_tennis_market(
                 target_channel, pick["team"], "match_total_games", pick["direction"], pick["line"],
-                section=section, label=label, origin_channel_id=origin_channel_id,
+                section=section, label=label, origin_channel_id=origin_channel_id, manual=manual,
             )
         elif pick["kind"] == "tennis_player_total_games":
             return await _auto_tennis_market(
                 target_channel, pick["team"], "player_total_games", pick["direction"], pick["line"],
-                section=section, label=label, origin_channel_id=origin_channel_id,
+                section=section, label=label, origin_channel_id=origin_channel_id, manual=manual,
             )
         elif pick["kind"] == "tennis_win_a_set":
             return await _auto_tennis_market(
-                target_channel, pick["team"], "win_a_set", pick["direction"], section=section, label=label, origin_channel_id=origin_channel_id,
+                target_channel, pick["team"], "win_a_set", pick["direction"], section=section, label=label, origin_channel_id=origin_channel_id, manual=manual,
             )
         elif pick["kind"] == "tennis_games_handicap":
             return await _auto_tennis_market(
                 target_channel, pick["team"], "games_handicap", None, pick["line"],
-                section=section, label=label, origin_channel_id=origin_channel_id,
+                section=section, label=label, origin_channel_id=origin_channel_id, manual=manual,
             )
         elif pick["kind"] == "tennis_sets_handicap":
             return await _auto_tennis_market(
                 target_channel, pick["team"], "sets_handicap", None, pick["line"],
-                section=section, label=label, origin_channel_id=origin_channel_id,
+                section=section, label=label, origin_channel_id=origin_channel_id, manual=manual,
             )
         elif pick["kind"] == "tennis_playerprops":
             return await _auto_tennis_playerprops(
                 target_channel, pick["player"], pick["stat"], pick.get("direction"), pick.get("line"),
-                section=section, label=label, origin_channel_id=origin_channel_id,
+                section=section, label=label, origin_channel_id=origin_channel_id, manual=manual,
             )
         elif pick["kind"] == "soccer_playerprops":
+            if manual:
+                botlog.event(f"❌ Not tracked: **{pick['player']}** {pick['stat']} — /tracktoday doesn't support soccer player props yet")
+                return None
             return await _auto_soccer_playerprops(
                 target_channel, pick["player"], pick["stat"], pick.get("direction"), pick.get("line"),
                 section=section, label=label, origin_channel_id=origin_channel_id,
@@ -1345,6 +1403,7 @@ async def _dispatch_pick(
             return await _auto_playerprops(
                 target_channel, pick["sport"], pick["player"], pick["stat"],
                 pick.get("direction"), pick.get("line"), section=section, label=label, origin_channel_id=origin_channel_id,
+                manual=manual,
             )
     except Exception as e:
         log.warning("Failed to auto-track pick %s: %s", pick, e)
@@ -1522,6 +1581,83 @@ async def track(interaction: discord.Interaction, sport: app_commands.Choice[str
 
     tracker.start_tracking(message, sport_id, game, interaction.channel_id, interaction.user.id, team)
     botlog.event(f"✅ Tracked (manual): **{team}** ({sport.name}) — game `{game_id}` in <#{interaction.channel_id}>, by **{interaction.user}**")
+
+
+# Distinct from SPORT_CHOICES (/track's own, coarser dropdown) - this needs
+# to line up with picks.py's actual "[Category]" bracket tags (see
+# picks._SPORT_MAP) so parse_pick_line can reuse its exact same parser
+# below, rather than /track's collapsed "baseball"/"basketball" values that
+# can't distinguish MLB from KBO or NBA from WNBA.
+_TRACKTODAY_SPORT_CHOICES = [
+    app_commands.Choice(name="MLB", value="MLB"),
+    app_commands.Choice(name="KBO", value="KBO"),
+    app_commands.Choice(name="YRFI/NRFI (MLB 1st inning)", value="YRFI/NRFI"),
+    app_commands.Choice(name="NBA", value="NBA"),
+    app_commands.Choice(name="WNBA", value="WNBA"),
+    app_commands.Choice(name="NFL", value="NFL"),
+    app_commands.Choice(name="NHL", value="NHL"),
+    app_commands.Choice(name="Soccer", value="Soccer"),
+    app_commands.Choice(name="Tennis", value="Tennis"),
+    app_commands.Choice(name="Rugby", value="Rugby"),
+    app_commands.Choice(name="Volleyball", value="Volleyball"),
+    app_commands.Choice(name="UFC/MMA", value="UFC"),
+    app_commands.Choice(name="Boxing", value="Boxing"),
+    app_commands.Choice(name="Dota 2", value="Dota 2"),
+    app_commands.Choice(name="CS2", value="CS2"),
+]
+
+
+@tree.command(
+    name="tracktoday",
+    description="Manually track a pick against today's or yesterday's match, even an already-finished one",
+)
+@app_commands.describe(
+    sport="Sport/league the pick is for",
+    pick='The pick itself, e.g. "Los Angeles ML" or "Fernando Tatis Jr. Over 0.5 Total Bases"',
+)
+@app_commands.choices(sport=_TRACKTODAY_SPORT_CHOICES)
+async def tracktoday(interaction: discord.Interaction, sport: app_commands.Choice[str], pick: str):
+    """Unlike every _auto_* pick this bot detects on its own (which only
+    ever attach to a live or not-yet-started match - see find_match_for_
+    team/find_current_event_id's own docstrings), this deliberately also
+    accepts an already-finished match from today or yesterday, for a pick
+    the user wants tracked/graded after the fact. Reuses picks.py's exact
+    parser by reconstructing the same "[Category] description" line format
+    every picks-channel message already uses - see picks.parse_pick_line."""
+    if not _channel_allowed(interaction):
+        await _reject_wrong_channel(interaction)
+        return
+    _log_command(interaction, sport=sport.name, pick=pick)
+
+    parsed = picks.parse_pick_line(f"[{sport.value}] {pick.strip()}")
+    if not parsed:
+        await interaction.response.send_message(
+            f"Couldn't understand that {sport.name} pick. Try wording it the same way a picks-channel "
+            f'message would, e.g. "Los Angeles ML", "Tampa Bay Rays First 5 Innings ML", or '
+            f'"Fernando Tatis Jr. Over 0.5 Total Bases".',
+            ephemeral=True,
+        )
+        return
+    if parsed["kind"] == "soccer_playerprops":
+        await interaction.response.send_message(
+            "/tracktoday doesn't support soccer player props yet - try /playerprops once the match is live instead.",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    result = await _dispatch_pick(
+        interaction.channel, parsed, section=None, label=pick.strip(), origin_channel_id=interaction.channel_id, manual=True,
+    )
+    if result is None:
+        await interaction.followup.send(
+            f"No {sport.name} match found for that pick within today or yesterday.", ephemeral=True,
+        )
+    elif result in ("skipped", "queued"):
+        await interaction.followup.send("That pick is already being tracked in this channel.", ephemeral=True)
+    else:
+        await interaction.followup.send(f"Tracked in <#{interaction.channel_id}>.", ephemeral=True)
+        botlog.event(f"✅ Tracked (manual /tracktoday): **{pick.strip()}** ({sport.name}) in <#{interaction.channel_id}>, by **{interaction.user}**")
 
 
 async def stat_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
