@@ -548,6 +548,16 @@ _AMBIGUOUS_STAT_DEFAULTS = {
     ("basketball", "pra"): "Points + Rebounds + Assists",
     ("wnba", "p+r+a"): "Points + Rebounds + Assists",
     ("wnba", "pra"): "Points + Rebounds + Assists",
+    # "Pts + Rebs + Asts"/"Pts+Rebs+Asts" (spelled-out-shorthand, as opposed
+    # to the P+R+A/PRA initialism above) - confirmed live, a real
+    # "Gabby Williams Over 14.5 Pts + Rebs + Asts" pick silently failed to
+    # parse even with a correct [WNBA Props] tag, since _match_stat_label
+    # only strips/lowercases (no internal whitespace collapsing), so the
+    # spaced and unspaced forms need their own separate entries here.
+    ("basketball", "pts + rebs + asts"): "Points + Rebounds + Assists",
+    ("basketball", "pts+rebs+asts"): "Points + Rebounds + Assists",
+    ("wnba", "pts + rebs + asts"): "Points + Rebounds + Assists",
+    ("wnba", "pts+rebs+asts"): "Points + Rebounds + Assists",
 }
 
 # _SPORT_MAP collapses "nba"/"wnba" to the same "basketball" key since
