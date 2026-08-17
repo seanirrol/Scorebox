@@ -38,6 +38,7 @@ import kboproptracker
 import koreabaseball
 import parlaytracker
 import pendingdelete
+import pendingauto
 import pendingsoccerprops
 import pendingtrack
 import picks
@@ -152,6 +153,15 @@ async def on_ready():
     await _safe_resume("pendingdelete", pendingdelete.resume_all(client))
     await _safe_resume("pendingsoccerprops", pendingsoccerprops.resume_all(_resolve_pending_soccer_prop))
     await _safe_resume("pendingtrack", pendingtrack.resume_all(_resolve_pending_track))
+    await _safe_resume("pendingauto", pendingauto.resume_all({
+        "f5": _resolve_pending_f5,
+        "1h": _resolve_pending_1h,
+        "tennis_market": _resolve_pending_tennis_market,
+        "tennis_playerprops": _resolve_pending_tennis_playerprops,
+        "inning_runs": _resolve_pending_inning_runs,
+        "inning1_result": _resolve_pending_inning1_result,
+        "playerprops": _resolve_pending_playerprops,
+    }))
 
 
 def _find_message_owner(card_message_id: int) -> Optional[tuple[str, tuple]]:
@@ -373,18 +383,32 @@ async def _auto_track(
     )
 
 
+async def _resolve_pending_f5(payload: dict) -> bool:
+    try:
+        channel = client.get_channel(payload["channel_id"]) or await client.fetch_channel(payload["channel_id"])
+    except discord.HTTPException as e:
+        log.warning("Pending F5: couldn't resolve channel %s: %s", payload["channel_id"], e)
+        return False
+    result = await _auto_f5(channel, **{k: v for k, v in payload.items() if k != "channel_id"}, queue_on_miss=False)
+    return result is not None
+
+
 async def _auto_f5(
     channel: discord.abc.Messageable, sport_value: str, team: str,
     total_direction: Optional[str] = None, total_line: Optional[float] = None,
     combined: bool = False, handicap_line: Optional[float] = None,
     section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
-    manual: bool = False,
+    manual: bool = False, queue_on_miss: bool = True,
 ):
     """F5 (First 5 Innings) picks - moneyline, team total, combined total, or
     handicap/run-line - settle after the 5th inning, not the whole game - see
     f5tracker.py. combined=True means total_direction/total_line grade both
     sides' F5 runs summed together, not team's own - team is still used to
-    find the match either way. manual - see _auto_track's own docstring."""
+    find the match either way. manual - see _auto_track's own docstring.
+    queue_on_miss=False (only set by _resolve_pending_f5's own retry call)
+    skips re-queuing on a repeat miss - pendingauto's own retry loop is
+    already driving this attempt, so a second miss just means "try again
+    later", not "start a brand new queue entry"."""
     find_kwargs = {"days_ahead": 0, "days_back": 1, "allow_finished": True} if manual else {}
     try:
         result = await asyncio.to_thread(scores365.find_match_for_team, team, sport_value, **find_kwargs)
@@ -393,6 +417,16 @@ async def _auto_f5(
         botlog.event(f"❌ Not tracked (F5): **{team}** ({sport_value}) — couldn't reach 365scores: {e}")
         return
     if not result:
+        payload = {
+            "channel_id": channel.id, "sport_value": sport_value, "team": team,
+            "total_direction": total_direction, "total_line": total_line, "combined": combined,
+            "handicap_line": handicap_line, "section": section, "label": label, "origin_channel_id": origin_channel_id,
+        }
+        if not manual and queue_on_miss and not pendingauto.is_queued("f5", payload):
+            pendingauto.queue("f5", payload, _resolve_pending_f5)
+            log.info("Auto-F5: no match found for '%s' (%s), queuing retry", team, sport_value)
+            botlog.event(f"⏳ Queued (F5): **{team}** ({sport_value}) — no match found yet, will retry automatically")
+            return "queued"
         log.info("Auto-F5: no match found for '%s' (%s)", team, sport_value)
         botlog.event(f"❌ Not tracked (F5): **{team}** ({sport_value}) — no match found")
         return
@@ -419,16 +453,27 @@ async def _auto_f5(
     return message.id
 
 
+async def _resolve_pending_1h(payload: dict) -> bool:
+    try:
+        channel = client.get_channel(payload["channel_id"]) or await client.fetch_channel(payload["channel_id"])
+    except discord.HTTPException as e:
+        log.warning("Pending 1H: couldn't resolve channel %s: %s", payload["channel_id"], e)
+        return False
+    result = await _auto_1h_total(channel, **{k: v for k, v in payload.items() if k != "channel_id"}, queue_on_miss=False)
+    return result is not None
+
+
 async def _auto_1h_total(
     channel: discord.abc.Messageable, sport_value: str, team: str, total_direction: str, total_line: float,
     combined: bool = False, section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
-    manual: bool = False,
+    manual: bool = False, queue_on_miss: bool = True,
 ):
     """1H (1st Half) team total or combined total - settles after the 2nd
     quarter, not the whole game - see halftracker.py. combined=True means
     total_direction/total_line grade both sides' Q1+Q2 points summed
     together, not team's own - team is still used to find the match either
-    way. manual - see _auto_track's own docstring."""
+    way. manual/queue_on_miss - see _auto_track's/_auto_f5's own
+    docstrings."""
     find_kwargs = {"days_ahead": 0, "days_back": 1, "allow_finished": True} if manual else {}
     try:
         result = await asyncio.to_thread(scores365.find_match_for_team, team, sport_value, **find_kwargs)
@@ -437,6 +482,16 @@ async def _auto_1h_total(
         botlog.event(f"❌ Not tracked (1H): **{team}** ({sport_value}) — couldn't reach 365scores: {e}")
         return
     if not result:
+        payload = {
+            "channel_id": channel.id, "sport_value": sport_value, "team": team,
+            "total_direction": total_direction, "total_line": total_line, "combined": combined,
+            "section": section, "label": label, "origin_channel_id": origin_channel_id,
+        }
+        if not manual and queue_on_miss and not pendingauto.is_queued("1h", payload):
+            pendingauto.queue("1h", payload, _resolve_pending_1h)
+            log.info("Auto-1H: no match found for '%s' (%s), queuing retry", team, sport_value)
+            botlog.event(f"⏳ Queued (1H): **{team}** ({sport_value}) — no match found yet, will retry automatically")
+            return "queued"
         log.info("Auto-1H: no match found for '%s' (%s)", team, sport_value)
         botlog.event(f"❌ Not tracked (1H): **{team}** ({sport_value}) — no match found")
         return
@@ -462,14 +517,26 @@ async def _auto_1h_total(
     return message.id
 
 
+async def _resolve_pending_playerprops(payload: dict) -> bool:
+    try:
+        channel = client.get_channel(payload["channel_id"]) or await client.fetch_channel(payload["channel_id"])
+    except discord.HTTPException as e:
+        log.warning("Pending playerprops: couldn't resolve channel %s: %s", payload["channel_id"], e)
+        return False
+    result = await _auto_playerprops(channel, **{k: v for k, v in payload.items() if k != "channel_id"}, queue_on_miss=False)
+    return result is not None
+
+
 async def _auto_playerprops(
     channel: discord.abc.Messageable, sport_value: str, player: str, stat: str,
     direction: Optional[str] = None, line: Optional[float] = None,
     section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
-    manual: bool = False,
+    manual: bool = False, queue_on_miss: bool = True,
 ):
-    """Mirrors /playerprops' core logic for an auto-detected pick. manual -
-    see _auto_track's own docstring."""
+    """Mirrors /playerprops' core logic for an auto-detected pick. manual/
+    queue_on_miss - see _auto_track's/_auto_f5's own docstrings. Only the
+    event lookup (not the player lookup - a bad name won't fix itself on
+    retry) gets queued on a miss."""
     if sport_value == "kbo":
         # ESPN has no KBO league at all (only MLB) - confirmed live, a KBO
         # prop for a former-MLB player used to silently match that
@@ -526,6 +593,15 @@ async def _auto_playerprops(
     find_kwargs = {"days_ahead": 0, "days_back": 1, "allow_finished": True} if manual else {}
     event_id = await asyncio.to_thread(espn.find_current_event_id, sport_value, entity["team_id"], **find_kwargs)
     if not event_id:
+        payload = {
+            "channel_id": channel.id, "sport_value": sport_value, "player": player, "stat": stat,
+            "direction": direction, "line": line, "section": section, "label": label, "origin_channel_id": origin_channel_id,
+        }
+        if not manual and queue_on_miss and not pendingauto.is_queued("playerprops", payload):
+            pendingauto.queue("playerprops", payload, _resolve_pending_playerprops)
+            log.info("Auto-playerprops: no current/upcoming match found for '%s', queuing retry", player)
+            botlog.event(f"⏳ Queued (prop): **{player}** {stat} — no current/upcoming match found on ESPN yet, will retry automatically")
+            return "queued"
         botlog.event(f"❌ Not tracked (prop): **{player}** {stat} — no current/upcoming match found on ESPN")
         return
     event = await asyncio.to_thread(espn.get_event, sport_value, event_id)
@@ -557,18 +633,28 @@ async def _auto_playerprops(
     return message.id
 
 
+async def _resolve_pending_tennis_playerprops(payload: dict) -> bool:
+    try:
+        channel = client.get_channel(payload["channel_id"]) or await client.fetch_channel(payload["channel_id"])
+    except discord.HTTPException as e:
+        log.warning("Pending tennis playerprops: couldn't resolve channel %s: %s", payload["channel_id"], e)
+        return False
+    result = await _auto_tennis_playerprops(channel, **{k: v for k, v in payload.items() if k != "channel_id"}, queue_on_miss=False)
+    return result is not None
+
+
 async def _auto_tennis_playerprops(
     channel: discord.abc.Messageable, player: str, stat: str,
     direction: Optional[str] = None, line: Optional[float] = None,
     section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
-    manual: bool = False,
+    manual: bool = False, queue_on_miss: bool = True,
 ):
     """Tennis-only equivalent of _auto_playerprops, backed by 365scores
     instead of ESPN (which doesn't support tennis at all) - see
     tennispropstracker.py. A tennis player is its own "competitor" in
     365scores' data, found via find_match_for_team same as every other
-    365scores-backed tennis tracker (F5/1st-set/moneyline). manual - see
-    _auto_track's own docstring."""
+    365scores-backed tennis tracker (F5/1st-set/moneyline). manual/
+    queue_on_miss - see _auto_track's/_auto_f5's own docstrings."""
     stat_name = scores365.TENNIS_STAT_CATALOG.get(stat)
     if not stat_name:
         botlog.event(f"❌ Not tracked (tennis prop): **{player}** {stat} — unknown stat")
@@ -581,6 +667,15 @@ async def _auto_tennis_playerprops(
         botlog.event(f"❌ Not tracked (tennis prop): **{player}** {stat} — couldn't reach 365scores: {e}")
         return
     if not result:
+        payload = {
+            "channel_id": channel.id, "player": player, "stat": stat, "direction": direction, "line": line,
+            "section": section, "label": label, "origin_channel_id": origin_channel_id,
+        }
+        if not manual and queue_on_miss and not pendingauto.is_queued("tennis_playerprops", payload):
+            pendingauto.queue("tennis_playerprops", payload, _resolve_pending_tennis_playerprops)
+            log.info("Auto-tennis-playerprops: no match found for '%s', queuing retry", player)
+            botlog.event(f"⏳ Queued (tennis prop): **{player}** {stat} — no match found yet, will retry automatically")
+            return "queued"
         log.info("Auto-tennis-playerprops: no match found for '%s'", player)
         botlog.event(f"❌ Not tracked (tennis prop): **{player}** {stat} — no match found")
         return
@@ -812,14 +907,26 @@ async def _auto_soccer_playerprops(
     return await _complete_soccer_prop_track(channel, player, stat, stat_name, direction, line, result, section, label, origin_channel_id)
 
 
+async def _resolve_pending_inning_runs(payload: dict) -> bool:
+    try:
+        channel = client.get_channel(payload["channel_id"]) or await client.fetch_channel(payload["channel_id"])
+    except discord.HTTPException as e:
+        log.warning("Pending inning-runs: couldn't resolve channel %s: %s", payload["channel_id"], e)
+        return False
+    result = await _auto_inning_runs(channel, **{k: v for k, v in payload.items() if k != "channel_id"}, queue_on_miss=False)
+    return result is not None
+
+
 async def _auto_inning_runs(
     channel: discord.abc.Messageable, team: str, pick_type: str,
     section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
-    manual: bool = False,
+    manual: bool = False, queue_on_miss: bool = True,
 ):
     """YRFI/NRFI picks settle after just the 1st inning, not the whole game
     - see inningtracker.py. Always baseball, so no sport param needed.
-    manual - see _auto_track's own docstring."""
+    manual/queue_on_miss - see _auto_track's/_auto_f5's own docstrings.
+    Only the event lookup (not the team lookup - a bad team name won't fix
+    itself on retry) gets queued on a miss."""
     try:
         entity = await asyncio.to_thread(espn.find_team, team, "baseball")
     except espn.EspnError as e:
@@ -834,6 +941,15 @@ async def _auto_inning_runs(
     find_kwargs = {"days_ahead": 0, "days_back": 1, "allow_finished": True} if manual else {}
     event_id = await asyncio.to_thread(espn.find_current_event_id, "baseball", entity["id"], **find_kwargs)
     if not event_id:
+        payload = {
+            "channel_id": channel.id, "team": team, "pick_type": pick_type,
+            "section": section, "label": label, "origin_channel_id": origin_channel_id,
+        }
+        if not manual and queue_on_miss and not pendingauto.is_queued("inning_runs", payload):
+            pendingauto.queue("inning_runs", payload, _resolve_pending_inning_runs)
+            log.info("Auto-inning-runs: no match found for '%s', queuing retry", team)
+            botlog.event(f"⏳ Queued ({pick_type}): **{team}** — no current/upcoming match found on ESPN yet, will retry automatically")
+            return "queued"
         botlog.event(f"❌ Not tracked ({pick_type}): **{team}** — no current/upcoming match found on ESPN")
         return
     event = await asyncio.to_thread(espn.get_event, "baseball", event_id)
@@ -860,15 +976,25 @@ async def _auto_inning_runs(
     return message.id
 
 
+async def _resolve_pending_inning1_result(payload: dict) -> bool:
+    try:
+        channel = client.get_channel(payload["channel_id"]) or await client.fetch_channel(payload["channel_id"])
+    except discord.HTTPException as e:
+        log.warning("Pending 1st-inning-result: couldn't resolve channel %s: %s", payload["channel_id"], e)
+        return False
+    result = await _auto_inning1_result(channel, **{k: v for k, v in payload.items() if k != "channel_id"}, queue_on_miss=False)
+    return result is not None
+
+
 async def _auto_inning1_result(
     channel: discord.abc.Messageable, team: str, pick: str,
     section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
-    manual: bool = False,
+    manual: bool = False, queue_on_miss: bool = True,
 ):
     """1st Inning Result (3-way: team or Draw) picks settle after the 1st
     inning, not the whole game - see inning1tracker.py. Backed by 365scores
-    (like f5tracker.py), not ESPN - always baseball. manual - see
-    _auto_track's own docstring."""
+    (like f5tracker.py), not ESPN - always baseball. manual/queue_on_miss -
+    see _auto_track's/_auto_f5's own docstrings."""
     find_kwargs = {"days_ahead": 0, "days_back": 1, "allow_finished": True} if manual else {}
     try:
         result = await asyncio.to_thread(scores365.find_match_for_team, team, "baseball", **find_kwargs)
@@ -877,6 +1003,15 @@ async def _auto_inning1_result(
         botlog.event(f"❌ Not tracked (1st inning result): **{team}** — couldn't reach 365scores: {e}")
         return
     if not result:
+        payload = {
+            "channel_id": channel.id, "team": team, "pick": pick,
+            "section": section, "label": label, "origin_channel_id": origin_channel_id,
+        }
+        if not manual and queue_on_miss and not pendingauto.is_queued("inning1_result", payload):
+            pendingauto.queue("inning1_result", payload, _resolve_pending_inning1_result)
+            log.info("Auto-1st-inning-result: no match found for '%s', queuing retry", team)
+            botlog.event(f"⏳ Queued (1st inning result): **{team}** — no match found yet, will retry automatically")
+            return "queued"
         log.info("Auto-1st-inning-result: no match found for '%s'", team)
         botlog.event(f"❌ Not tracked (1st inning result): **{team}** — no match found")
         return
@@ -901,11 +1036,21 @@ async def _auto_inning1_result(
     return message.id
 
 
+async def _resolve_pending_tennis_market(payload: dict) -> bool:
+    try:
+        channel = client.get_channel(payload["channel_id"]) or await client.fetch_channel(payload["channel_id"])
+    except discord.HTTPException as e:
+        log.warning("Pending tennis market: couldn't resolve channel %s: %s", payload["channel_id"], e)
+        return False
+    result = await _auto_tennis_market(channel, **{k: v for k, v in payload.items() if k != "channel_id"}, queue_on_miss=False)
+    return result is not None
+
+
 async def _auto_tennis_market(
     channel: discord.abc.Messageable, team: str, market: str,
     direction: Optional[str] = None, line: Optional[float] = None,
     section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
-    manual: bool = False,
+    manual: bool = False, queue_on_miss: bool = True,
 ):
     """Tennis "extra market" picks (1st Set ML/Total Games, Match Total
     Games, Win a Set) all settle on some part of the match rather than the
@@ -913,7 +1058,8 @@ async def _auto_tennis_market(
     (like f5tracker.py), not ESPN - always tennis. team is either the named
     player (set1_moneyline/win_a_set) or just one of the two matchup sides
     used to look the match up (set1_total_games/match_total_games, no
-    specific team being graded). manual - see _auto_track's own docstring."""
+    specific team being graded). manual/queue_on_miss - see _auto_track's/
+    _auto_f5's own docstrings."""
     find_kwargs = {"days_ahead": 0, "days_back": 1, "allow_finished": True} if manual else {}
     try:
         result = await asyncio.to_thread(scores365.find_match_for_team, team, "tennis", **find_kwargs)
@@ -922,6 +1068,15 @@ async def _auto_tennis_market(
         botlog.event(f"❌ Not tracked ({market}): **{team}** — couldn't reach 365scores: {e}")
         return
     if not result:
+        payload = {
+            "channel_id": channel.id, "team": team, "market": market, "direction": direction, "line": line,
+            "section": section, "label": label, "origin_channel_id": origin_channel_id,
+        }
+        if not manual and queue_on_miss and not pendingauto.is_queued("tennis_market", payload):
+            pendingauto.queue("tennis_market", payload, _resolve_pending_tennis_market)
+            log.info("Auto-tennis-market (%s): no match found for '%s', queuing retry", market, team)
+            botlog.event(f"⏳ Queued ({market}): **{team}** — no match found yet, will retry automatically")
+            return "queued"
         log.info("Auto-tennis-market (%s): no match found for '%s'", market, team)
         botlog.event(f"❌ Not tracked ({market}): **{team}** — no match found")
         return

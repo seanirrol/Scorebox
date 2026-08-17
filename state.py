@@ -31,6 +31,7 @@ DAILY_LOG_FILE = os.path.join(_DIR, "daily_log_state.json")
 PENDING_SOCCER_PROPS_FILE = os.path.join(_DIR, "pending_soccer_props_state.json")
 HALF_FILE = os.path.join(_DIR, "half_state.json")
 PENDING_TRACK_FILE = os.path.join(_DIR, "pending_track_state.json")
+PENDING_AUTO_FILE = os.path.join(_DIR, "pending_auto_state.json")
 WINLOSSGRAPH_OVERRIDES_FILE = os.path.join(_DIR, "winlossgraph_overrides_state.json")
 BOXING_FILE = os.path.join(_DIR, "boxing_state.json")
 KBO_PROPS_FILE = os.path.join(_DIR, "kbo_props_state.json")
@@ -193,6 +194,14 @@ def load_pending_track() -> dict[str, Any]:
 
 def save_pending_track(data: dict[str, Any]):
     _save(PENDING_TRACK_FILE, data)
+
+
+def load_pending_auto() -> dict[str, Any]:
+    return _load(PENDING_AUTO_FILE)
+
+
+def save_pending_auto(data: dict[str, Any]):
+    _save(PENDING_AUTO_FILE, data)
 
 
 def load_winlossgraph_overrides() -> dict[str, Any]:
