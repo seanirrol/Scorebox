@@ -347,6 +347,22 @@ _SPORT_DISPLAY_MERGE = {"Basketball": "WNBA", "Baseball": "MLB"}
 # fresh from here rather than carrying old, less-trustworthy numbers.
 _NBA_CLEAN_SLATE_FROM = "2026-08-16"
 
+# Manual reconciliation for one sport, one month (per explicit request) -
+# Scorebox's own UFC tally only ever sees picks that actually got posted
+# and parsed through it; a real share of this account's UFC plays are
+# placed directly and never go through the bot at all, so the automated
+# won/lost count understates the true record. Replaces that sport's ENTIRE
+# breakdown for that month with a single hand-counted total rather than
+# itemizing per event, since the correction is a whole-month
+# reconciliation, not attributable to any one fight card - the individual
+# UFC tournament entries dailylog already has for that month are excluded
+# below rather than left to double-count alongside this. Scoped to
+# PERFORMANCE_CHANNEL_IDS only, same as _SPORT_DISPLAY_MERGE. A different
+# month's real UFC data (before/after this one, if any) is unaffected.
+_SPORT_MONTH_OVERRIDE = {
+    ("UFC", "2026-08"): (34, 13),
+}
+
 
 def sport_tournament_win_loss(
     year_month: Optional[str] = None, score_channel_ids: Iterable[int] = PERFORMANCE_CHANNEL_IDS,
@@ -362,13 +378,14 @@ def sport_tournament_win_loss(
     specific league for baseball/tennis/soccer via
     scores365.tournament_name).
 
-    _SPORT_DISPLAY_MERGE/_NBA_CLEAN_SLATE_FROM only apply for the default
-    PERFORMANCE_CHANNEL_IDS scope - those were requested for that specific
-    dataset (confirmed live against it), not a blanket rule every other
-    /performance route should inherit sight unseen. A different
-    score_channel_ids (see bot.py's own per-invoke-channel routing, kept
-    for entirely separate Discord servers/clients whose numbers must never
-    mix into the same report) gets none of that adjustment.
+    _SPORT_DISPLAY_MERGE/_NBA_CLEAN_SLATE_FROM/_SPORT_MONTH_OVERRIDE only
+    apply for the default PERFORMANCE_CHANNEL_IDS scope - those were
+    requested for that specific dataset (confirmed live against it), not a
+    blanket rule every other /performance route should inherit sight
+    unseen. A different score_channel_ids (see bot.py's own per-invoke-
+    channel routing, kept for entirely separate Discord servers/clients
+    whose numbers must never mix into the same report) gets none of that
+    adjustment.
 
     A pick with no tournament recorded (an old entry logged before that
     field existed, or a sport with no real tournament concept below the
@@ -391,9 +408,18 @@ def sport_tournament_win_loss(
             if sport == "NBA" and entry["date"] < _NBA_CLEAN_SLATE_FROM:
                 continue
             sport = _SPORT_DISPLAY_MERGE.get(sport, sport)
+            if (sport, entry["date"][:7]) in _SPORT_MONTH_OVERRIDE:
+                continue  # replaced wholesale below, not itemized per pick
         tournament = entry.get("tournament") or sport
         bucket = counts.setdefault(sport, {}).setdefault(tournament, [0, 0])
         bucket[0 if entry["status"] == "won" else 1] += 1
+
+    if apply_overrides:
+        for (sport, month), (won, lost) in _SPORT_MONTH_OVERRIDE.items():
+            if year_month and year_month != month:
+                continue
+            counts.setdefault(sport, {})[sport] = [won, lost]
+
     return {sport: {t: (w, l) for t, (w, l) in tournaments.items()} for sport, tournaments in counts.items()}
 
 

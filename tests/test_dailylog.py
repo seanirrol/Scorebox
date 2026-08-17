@@ -213,7 +213,10 @@ class SportTournamentWinLoss(DailyLogTestCase):
     def test_only_configured_channels_counted(self):
         self._log(self.IN_CHANNEL, "tracker", "k1", "Denver Broncos ML", "NFL", "NFL", "won")
         self._log(self.OTHER_CHANNEL, "tracker", "k2", "New York Jets ML", "NFL", "NFL", "lost")
-        self.assertEqual(dailylog.sport_tournament_win_loss(), {"NFL": {"NFL": (1, 0)}})
+        # Checks the NFL key specifically, not the whole dict - the default
+        # scope also always carries the standing UFC/2026-08 override (see
+        # _SPORT_MONTH_OVERRIDE) regardless of what's logged in a test.
+        self.assertEqual(dailylog.sport_tournament_win_loss()["NFL"], {"NFL": (1, 0)})
 
     def test_every_bet_type_within_a_tournament_combines_into_one_count(self):
         self._log(self.IN_CHANNEL, "tracker", "k1", "Denver Broncos ML", "Tennis", "Wimbledon", "won")
@@ -337,6 +340,28 @@ class SportTournamentWinLoss(DailyLogTestCase):
     def test_nba_pick_on_or_after_clean_slate_date_still_shows(self):
         self._log(self.IN_CHANNEL, "proptracker", "k1", "LeBron James Points", "NBA", None, "won", date_str="2026-08-16")
         self.assertEqual(dailylog.sport_tournament_win_loss()["NBA"], {"NBA": (1, 0)})
+
+    def test_sport_month_override_replaces_real_data_for_that_month(self):
+        # Real UFC picks logged this month would otherwise show their own
+        # per-event tournament breakdown - the override replaces the whole
+        # sport's bucket for that month with a single hand-counted total.
+        self._log(self.IN_CHANNEL, "ufctracker", "k1", "Jon Jones ML", "UFC", "UFC 330", "won", date_str="2026-08-01")
+        self._log(self.IN_CHANNEL, "ufctracker", "k2", "Israel Adesanya ML", "UFC", "UFC 331", "lost", date_str="2026-08-08")
+        self.assertEqual(dailylog.sport_tournament_win_loss("2026-08")["UFC"], {"UFC": (34, 13)})
+
+    def test_sport_month_override_applies_to_all_time_view_too(self):
+        self._log(self.IN_CHANNEL, "ufctracker", "k1", "Jon Jones ML", "UFC", "UFC 330", "won", date_str="2026-08-01")
+        self.assertEqual(dailylog.sport_tournament_win_loss()["UFC"], {"UFC": (34, 13)})
+
+    def test_sport_month_override_never_touches_a_different_month(self):
+        self._log(self.IN_CHANNEL, "ufctracker", "k1", "Jon Jones ML", "UFC", "UFC 300", "won", date_str="2026-07-01")
+        self.assertEqual(dailylog.sport_tournament_win_loss("2026-07")["UFC"], {"UFC 300": (1, 0)})
+
+    def test_sport_month_override_doesnt_apply_outside_the_default_channel_scope(self):
+        other_server_channel = 555555
+        self._log(other_server_channel, "ufctracker", "k1", "Jon Jones ML", "UFC", "UFC 330", "won", date_str="2026-08-01")
+        result = dailylog.sport_tournament_win_loss(score_channel_ids=(other_server_channel,))
+        self.assertEqual(result["UFC"], {"UFC 330": (1, 0)})
 
 
 class WinLossGraphOverrides(DailyLogTestCase):
