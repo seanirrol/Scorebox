@@ -219,15 +219,36 @@ class SportTournamentWinLoss(DailyLogTestCase):
         self.assertEqual(dailylog.sport_tournament_win_loss()["NFL"], {"NFL": (1, 0)})
 
     def test_every_bet_type_within_a_tournament_combines_into_one_count(self):
-        self._log(self.IN_CHANNEL, "tracker", "k1", "Denver Broncos ML", "Tennis", "Wimbledon", "won")
-        self._log(self.IN_CHANNEL, "settracker", "k2", "Iga Swiatek to Win a Set", "Tennis", "Wimbledon", "won")
-        self._log(self.IN_CHANNEL, "tennispropstracker", "k3", "Iga Swiatek Over 4.5 Aces", "Tennis", "Wimbledon", "lost")
-        self.assertEqual(dailylog.sport_tournament_win_loss()["Tennis"], {"Wimbledon": (2, 1)})
+        # Soccer, not Tennis - Tennis is in _SINGLE_BUCKET_SPORTS and always
+        # collapses to one bucket regardless of tournament (see the tests
+        # below), so it can't exercise "different tournaments stay separate"
+        # anymore.
+        self._log(self.IN_CHANNEL, "tracker", "k1", "Arsenal ML", "Soccer", "Premier League", "won")
+        self._log(self.IN_CHANNEL, "soccerpropstracker", "k2", "Bukayo Saka Over 0.5 Goals", "Soccer", "Premier League", "won")
+        self._log(self.IN_CHANNEL, "soccerpropstracker", "k3", "Bukayo Saka Over 2.5 Shots", "Soccer", "Premier League", "lost")
+        self.assertEqual(dailylog.sport_tournament_win_loss()["Soccer"], {"Premier League": (2, 1)})
 
     def test_different_tournaments_under_the_same_sport_stay_separate(self):
-        self._log(self.IN_CHANNEL, "settracker", "k1", "pick", "Tennis", "Wimbledon", "won")
-        self._log(self.IN_CHANNEL, "settracker", "k2", "pick", "Tennis", "US Open", "lost")
-        self.assertEqual(dailylog.sport_tournament_win_loss()["Tennis"], {"Wimbledon": (1, 0), "US Open": (0, 1)})
+        self._log(self.IN_CHANNEL, "tracker", "k1", "pick", "Soccer", "Premier League", "won")
+        self._log(self.IN_CHANNEL, "tracker", "k2", "pick", "Soccer", "Champions League", "lost")
+        self.assertEqual(dailylog.sport_tournament_win_loss()["Soccer"], {"Premier League": (1, 0), "Champions League": (0, 1)})
+
+    def test_tennis_always_collapses_every_tournament_into_one_bucket(self):
+        # Explicit request: unlike every other multi-tournament sport,
+        # Tennis never shows a per-tournament breakdown - every tournament
+        # combines into a single "Tennis" bar.
+        self._log(self.IN_CHANNEL, "settracker", "k1", "pick", "Tennis", "Cincinnati", "won")
+        self._log(self.IN_CHANNEL, "settracker", "k2", "pick", "Tennis", "Cincinnati", "won")
+        self._log(self.IN_CHANNEL, "tennispropstracker", "k3", "pick", "Tennis", "Wimbledon", "won")
+        self._log(self.IN_CHANNEL, "tennispropstracker", "k4", "pick", "Tennis", "Wimbledon", "lost")
+        self.assertEqual(dailylog.sport_tournament_win_loss()["Tennis"], {"Tennis": (3, 1)})
+
+    def test_tennis_single_bucket_doesnt_apply_outside_the_default_channel_scope(self):
+        other_server_channel = 555555
+        self._log(other_server_channel, "settracker", "k1", "pick", "Tennis", "Cincinnati", "won")
+        self._log(other_server_channel, "settracker", "k2", "pick", "Tennis", "Wimbledon", "lost")
+        result = dailylog.sport_tournament_win_loss(score_channel_ids=(other_server_channel,))
+        self.assertEqual(result["Tennis"], {"Cincinnati": (1, 0), "Wimbledon": (0, 1)})
 
     def test_push_void_pending_excluded(self):
         self._log(self.IN_CHANNEL, "tracker", "k1", "Denver Broncos ML", "NFL", "NFL", "won")

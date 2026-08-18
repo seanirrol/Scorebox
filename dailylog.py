@@ -340,6 +340,13 @@ def _fallback_sport(entry: dict) -> str:
 # their own confusingly-tiny buckets.
 _SPORT_DISPLAY_MERGE = {"Basketball": "WNBA", "Baseball": "MLB"}
 
+# Tennis picks span many real tournaments (Cincinnati, US Open, ...), each
+# normally getting its own tournament sub-row - explicitly NOT wanted for
+# Tennis specifically (per request): every tennis pick combines into one
+# single "Tennis" bar regardless of which tournament it was actually from,
+# unlike UFC/esports where the per-event breakdown is the point.
+_SINGLE_BUCKET_SPORTS = {"Tennis"}
+
 # A deliberate clean-slate reset for NBA specifically - existing NBA
 # entries (logged before scores365.sport_label could even tell NBA and
 # WNBA apart reliably) are hidden from /performance entirely, while an NBA
@@ -378,7 +385,8 @@ def sport_tournament_win_loss(
     specific league for baseball/tennis/soccer via
     scores365.tournament_name).
 
-    _SPORT_DISPLAY_MERGE/_NBA_CLEAN_SLATE_FROM/_SPORT_BASELINE_OVERRIDE only
+    _SPORT_DISPLAY_MERGE/_NBA_CLEAN_SLATE_FROM/_SPORT_BASELINE_OVERRIDE/
+    _SINGLE_BUCKET_SPORTS only
     apply for the default PERFORMANCE_CHANNEL_IDS scope - those were
     requested for that specific dataset (confirmed live against it), not a
     blanket rule every other /performance route should inherit sight
@@ -411,7 +419,10 @@ def sport_tournament_win_loss(
             baseline = _SPORT_BASELINE_OVERRIDE.get(sport)
             if baseline and entry["date"] < baseline[0]:
                 continue  # absorbed into the baseline below, not itemized per pick
-        tournament = entry.get("tournament") or sport
+        if apply_overrides and sport in _SINGLE_BUCKET_SPORTS:
+            tournament = sport
+        else:
+            tournament = entry.get("tournament") or sport
         bucket = counts.setdefault(sport, {}).setdefault(tournament, [0, 0])
         bucket[0 if entry["status"] == "won" else 1] += 1
 
