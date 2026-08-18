@@ -197,7 +197,8 @@ async def build_embed(
     elif result:
         embed.title = _RESULT_TITLES[result]
     embed.set_author(name="KBO")
-    embed.description = f"{player_name} {direction.title()} {line:g} {stat_label}"
+    total_suffix = f" ({value:g})" if value is not None else ""
+    embed.description = f"{player_name} {direction.title()} {line:g} {stat_label}{total_suffix}"
 
     if row is not None:
         period_text = "Final"

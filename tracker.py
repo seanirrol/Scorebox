@@ -111,6 +111,25 @@ async def build_embed(
     if not result and has_pick and scores365.is_cancelled(game):
         result = "void"
 
+    # The live (or final) running total for an Over/Under pick - shown
+    # alongside the line in the description below (e.g. "Over 17.5 (14)")
+    # once a score actually exists (None pre-match, same as main_scores
+    # itself). Computed once here since both the early-win check below and
+    # the description text need the same number.
+    current_total_value = None
+    if total_direction in ("over", "under") and total_line is not None:
+        current_scores = scores365.main_scores(game)
+        if current_scores:
+            if team_total:
+                home = home_competitor.get("name", "")
+                away = away_competitor.get("name", "")
+                if scores365.names_match(home, team_total):
+                    current_total_value = current_scores[0]
+                elif scores365.names_match(away, team_total):
+                    current_total_value = current_scores[1]
+            else:
+                current_total_value = current_scores[0] + current_scores[1]
+
     early_win = False
     if not result and status == "inprogress" and total_direction == "over" and total_line is not None:
         # A score only ever climbs during a game - once an Over line is
@@ -119,21 +138,8 @@ async def build_embed(
         # deliberately excluded here - a leading score can still change, and
         # an Under total could still climb past the line later, so only a
         # cleared Over is ever safe to call early.
-        current_scores = scores365.main_scores(game)
-        if current_scores:
-            if team_total:
-                home = home_competitor.get("name", "")
-                away = away_competitor.get("name", "")
-                if scores365.names_match(home, team_total):
-                    value = current_scores[0]
-                elif scores365.names_match(away, team_total):
-                    value = current_scores[1]
-                else:
-                    value = None
-            else:
-                value = current_scores[0] + current_scores[1]
-            if value is not None and value > total_line:
-                early_win = True
+        if current_total_value is not None and current_total_value > total_line:
+            early_win = True
 
     if force_result:
         color_status = force_result
@@ -162,14 +168,15 @@ async def build_embed(
     # already localized to whoever's viewing it - no need to compute that
     # ourselves per-viewer. Only shown pre-match; dropped once live to save
     # space, since the card itself covers it from then on.
+    total_suffix = f" ({current_total_value:g})" if current_total_value is not None else ""
     if picked_team:
         description_lines = [f"{picked_team} ML"]
     elif team_total and total_direction == "spread" and total_line is not None:
         description_lines = [f"{team_total} {total_line:+g}"]
     elif team_total and total_direction and total_line is not None:
-        description_lines = [f"{team_total} {total_direction.title()} {total_line:g}"]
+        description_lines = [f"{team_total} {total_direction.title()} {total_line:g}{total_suffix}"]
     elif total_direction and total_line is not None:
-        description_lines = [f"{total_direction.title()} {total_line:g}"]
+        description_lines = [f"{total_direction.title()} {total_line:g}{total_suffix}"]
     else:
         description_lines = []
     if status == "notstarted":

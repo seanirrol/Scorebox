@@ -190,18 +190,22 @@ async def build_embed(
     else:
         result = None
 
-    # ESPN's live "period" field is the round currently being fought - once
-    # it's already past the Over line, the fight has definitively gone that
-    # far (round numbers only climb during a live bout, never reset), so an
-    # Over pick is locked in regardless of how the fight eventually ends -
-    # same "can't un-clear" reasoning as tracker.py's own early-win tagging
-    # elsewhere in this bot. An early Under can't be called the same way
-    # (the fight could still end in a later round than line), so this is
-    # Over-only. Purely cosmetic: actual dailylog settlement still waits
-    # for is_finished for real.
+    # ESPN's live "period" field is the round currently being fought (and,
+    # once decided, the round the fight actually ended in - same field,
+    # see grade_ufc_round_total) - shown alongside the line in the
+    # description below (e.g. "Fight Over 2.5 Rounds (3)").
+    current_round = competition.get("status", {}).get("period")
+
+    # Once it's already past the Over line, the fight has definitively gone
+    # that far (round numbers only climb during a live bout, never reset),
+    # so an Over pick is locked in regardless of how the fight eventually
+    # ends - same "can't un-clear" reasoning as tracker.py's own early-win
+    # tagging elsewhere in this bot. An early Under can't be called the
+    # same way (the fight could still end in a later round than line), so
+    # this is Over-only. Purely cosmetic: actual dailylog settlement still
+    # waits for is_finished for real.
     early_win = False
     if not decided and total_direction == "over" and total_line is not None:
-        current_round = competition.get("status", {}).get("period")
         if current_round is not None and current_round > total_line:
             early_win = True
 
@@ -227,7 +231,8 @@ async def build_embed(
     if fighter_id is not None:
         description_lines = [f"{fighter_name} ML"]
     elif total_direction and total_line is not None:
-        description_lines = [f"Fight {total_direction.title()} {total_line:g} Rounds"]
+        total_suffix = f" ({current_round:g})" if current_round is not None else ""
+        description_lines = [f"Fight {total_direction.title()} {total_line:g} Rounds{total_suffix}"]
     else:
         description_lines = []
     if not decided:

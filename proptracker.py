@@ -305,7 +305,17 @@ async def build_embed(
     # scoreimage.render_player_card), same treatment as /track's cards.
     description_lines = [matchup]
     if direction is not None and line is not None:
-        description_lines.append(f"{player_name} {direction.title()} {line:g} {stat_label}")
+        # Live (or final) current value shown alongside the line, e.g.
+        # "Chris Sale Over 6.5 Strikeouts (4)" - suppressed pre-event
+        # (current_value is typically None then anyway, but status_type is
+        # the authoritative guard against a stray "(0)" showing too early).
+        total_suffix = ""
+        if status_type != "notstarted" and current_value is not None:
+            try:
+                total_suffix = f" ({float(current_value):g})"
+            except (TypeError, ValueError):
+                pass
+        description_lines.append(f"{player_name} {direction.title()} {line:g} {stat_label}{total_suffix}")
     if status_type == "notstarted" and comp.get("date"):
         try:
             kickoff = int(datetime.datetime.fromisoformat(comp["date"].replace("Z", "+00:00")).timestamp())

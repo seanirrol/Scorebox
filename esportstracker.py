@@ -307,6 +307,10 @@ async def build_embed(
     if current_kills is not None:
         # e.g. "Over 108.5 Total Kills (100)" - progress toward the line.
         label = f"{label} ({current_kills})"
+    elif current_maps is not None:
+        # e.g. "Over 3.5 Total Maps (2)" - same idea, total_maps just
+        # didn't get this when total_kills/team_total_kills did.
+        label = f"{label} ({current_maps})"
     description_lines = [label]
     if status == "notstarted" and series_data.get("start_epoch"):
         description_lines.append(f"<t:{int(series_data['start_epoch'])}:f>")

@@ -221,7 +221,8 @@ async def build_embed(
 
     description_lines = [f"{player_name} vs {opponent}"]
     if direction is not None and line is not None:
-        description_lines.append(f"{player_name} {direction.title()} {line:g} {stat_label}")
+        total_suffix = f" ({current_value:g})" if current_value is not None else ""
+        description_lines.append(f"{player_name} {direction.title()} {line:g} {stat_label}{total_suffix}")
     if status == "notstarted":
         kickoff = scores365.start_epoch(game)
         if kickoff:

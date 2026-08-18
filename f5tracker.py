@@ -217,6 +217,25 @@ async def build_embed(
     else:
         result = None
 
+    # The live (through however many innings have completed so far) or
+    # final (through inning 5) F5 total - shown alongside the line in the
+    # description below (e.g. "F5 Over 4.5 (3)"). Computed once here since
+    # both the early-win check below and the description text need the
+    # same number.
+    current_total_value = None
+    if total_direction in ("over", "under") and total_line is not None and status != "notstarted":
+        if decided:
+            if picked_team:
+                current_total_value = breakdown[0] if scores365.names_match(home_name, picked_team) else breakdown[1]
+            else:
+                current_total_value = breakdown[0] + breakdown[1]
+        elif picked_team:
+            current_total_value = await asyncio.to_thread(
+                scores365.partial_f5_team_total, game.get("id"), picked_team, home_name, away_name
+            )
+        else:
+            current_total_value = await asyncio.to_thread(scores365.partial_f5_combined_total, game.get("id"))
+
     early_win = False
     if not result and status == "inprogress" and total_direction == "over" and total_line is not None:
         # Same early-win idea as tracker.py/proptracker.py's Over tagging -
@@ -224,13 +243,7 @@ async def build_embed(
         # innings complete, so once the partial total already clears the
         # line, the pick can't become anything but a win even before all 5
         # innings are done.
-        if picked_team:
-            partial = await asyncio.to_thread(
-                scores365.partial_f5_team_total, game.get("id"), picked_team, home_name, away_name
-            )
-        else:
-            partial = await asyncio.to_thread(scores365.partial_f5_combined_total, game.get("id"))
-        if partial is not None and partial > total_line:
+        if current_total_value is not None and current_total_value > total_line:
             early_win = True
 
     if force_result:
@@ -254,12 +267,13 @@ async def build_embed(
     if author_bits:
         embed.set_author(name=" • ".join(author_bits))
 
+    total_suffix = f" ({current_total_value:g})" if current_total_value is not None else ""
     if picked_team and handicap_line is not None:
         description_lines = [f"{picked_team} F5 {handicap_line:+g}"]
     elif picked_team and total_direction and total_line is not None:
-        description_lines = [f"{picked_team} F5 {total_direction.title()} {total_line:g}"]
+        description_lines = [f"{picked_team} F5 {total_direction.title()} {total_line:g}{total_suffix}"]
     elif total_direction and total_line is not None:
-        description_lines = [f"F5 {total_direction.title()} {total_line:g}"]
+        description_lines = [f"F5 {total_direction.title()} {total_line:g}{total_suffix}"]
     else:
         description_lines = [f"{picked_team} F5 ML"]
     if status == "notstarted":

@@ -221,6 +221,12 @@ async def build_embed(
     result = None
     frozen_cols: Optional[tuple[str, str]] = None
     final_period_text = "Final"
+    # The live (or final) running value for whichever games-total market
+    # this is - shown alongside the line in the description below (e.g.
+    # "Over 17.5 Total Games (14)"). None (no suffix shown) for a market
+    # that isn't Over/Under-shaped (set1_moneyline, games/sets handicap,
+    # win_a_set) or before the match has actually started.
+    current_total_value = None
 
     # Games won only ever climb during a match (a completed game's score
     # can't retroactively shrink), so once an Over line is already cleared
@@ -249,20 +255,24 @@ async def build_embed(
             breakdown = scores365.tennis_first_set_result(game)
             decided = breakdown is not None
             if decided:
-                result = scores365.grade_over_under(breakdown[0] + breakdown[1], direction, line)
+                current_total_value = breakdown[0] + breakdown[1]
+                result = scores365.grade_over_under(current_total_value, direction, line)
                 frozen_cols = (scores365.fmt_score(breakdown[0]), scores365.fmt_score(breakdown[1]))
-            elif direction == "over" and line is not None:
+            elif status != "notstarted":
                 # Set 1 hasn't ended yet - tennis_match_games mid-Set-1 is
                 # effectively just Set 1's own live running total, since no
                 # later set has started contributing to it yet.
                 home_games, away_games = scores365.tennis_match_games(game)
-                if home_games + away_games > line:
+                current_total_value = home_games + away_games
+                if direction == "over" and line is not None and current_total_value > line:
                     early_win = True
         final_period_text = "1st Set Final"
 
     elif market == "match_total_games":
         decided = scores365.is_finished(game)
         home_games, away_games = scores365.tennis_match_games(game)
+        if status != "notstarted":
+            current_total_value = home_games + away_games
         if decided:
             # grade_over_under is generic (no `game` to check is_walkover
             # itself, unlike the games/sets handicap and win-a-set grading
@@ -281,6 +291,8 @@ async def build_embed(
         decided = scores365.is_finished(game)
         home_games, away_games = scores365.tennis_match_games(game)
         player_games = home_games if scores365.names_match(home_competitor.get("name", ""), team) else away_games
+        if status != "notstarted":
+            current_total_value = player_games
         if decided:
             result = "void" if scores365.is_walkover(game) else scores365.grade_over_under(player_games, direction, line)
         elif direction == "over" and line is not None and player_games > line:
@@ -338,7 +350,8 @@ async def build_embed(
     if author_bits:
         embed.set_author(name=" • ".join(author_bits))
 
-    description_lines = [pick_label(market, team, direction, line)]
+    total_suffix = f" ({current_total_value:g})" if current_total_value is not None else ""
+    description_lines = [pick_label(market, team, direction, line) + total_suffix]
     if status == "notstarted":
         kickoff = scores365.start_epoch(game)
         if kickoff:
