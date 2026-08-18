@@ -31,7 +31,16 @@ REQUIRED_BITS = {
 
 
 def _get(path):
-    req = urllib.request.Request(f"{API}{path}", headers={"Authorization": f"Bot {config.DISCORD_TOKEN}"})
+    # Cloudflare (in front of Discord's API) blocks urllib's default
+    # "Python-urllib/3.x" User-Agent outright (HTTP 403, Cloudflare error
+    # 1010) - a real header, not auth, fixes it.
+    req = urllib.request.Request(
+        f"{API}{path}",
+        headers={
+            "Authorization": f"Bot {config.DISCORD_TOKEN}",
+            "User-Agent": "DiscordBot (https://github.com/seanirrol/Scorebox, 1.0)",
+        },
+    )
     with urllib.request.urlopen(req) as resp:
         return json.loads(resp.read())
 
