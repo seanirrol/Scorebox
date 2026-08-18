@@ -256,6 +256,64 @@ class GradeTennisSet(unittest.TestCase):
         self.assertEqual(scores365.grade_tennis_set(game, 0, 0, "Xiyu Wang"), "void")
 
 
+class GradeHtFt(unittest.TestCase):
+    """grade_ht_ft backs htfttracker.py - monkeypatches quarters_breakdown
+    (a live 365scores fetch) so this exercises the real compound-bet logic
+    without a network request. Confirmed live against a real finished WNBA
+    game (Washington Mystics led at half and won outright) before these
+    were written."""
+
+    def setUp(self):
+        self._orig_quarters_breakdown = scores365.quarters_breakdown
+        self._halftime = None
+        scores365.quarters_breakdown = lambda game_id, through_quarter: self._halftime
+
+    def tearDown(self):
+        scores365.quarters_breakdown = self._orig_quarters_breakdown
+
+    def _game(self, home_score=0.0, away_score=0.0, home_winner=None, away_winner=None, status_group=4):
+        # Deliberately no shared words between the two names (unlike
+        # "Team A"/"Team B") - names_match is word-overlap based, and a
+        # shared word would fuzzy-match the two sides as equal, exactly
+        # the test-data mistake to avoid (see GradeMoneyline's own note).
+        return {
+            "id": 1, "statusGroup": status_group,
+            "homeCompetitor": {"name": "Washington Mystics", "score": home_score, "isWinner": home_winner},
+            "awayCompetitor": {"name": "Los Angeles Sparks", "score": away_score, "isWinner": away_winner},
+        }
+
+    def test_halftime_not_yet_decided_returns_none(self):
+        self._halftime = None
+        self.assertIsNone(scores365.grade_ht_ft(self._game(status_group=3), "Washington Mystics", "Washington Mystics"))
+
+    def test_wrong_team_leading_at_half_loses_immediately_even_before_game_ends(self):
+        self._halftime = (10, 20)  # Los Angeles Sparks (away) leads at half
+        self.assertEqual(scores365.grade_ht_ft(self._game(status_group=3), "Washington Mystics", "Washington Mystics"), "lost")
+
+    def test_tied_at_half_loses_regardless_of_named_team(self):
+        self._halftime = (10, 10)
+        self.assertEqual(scores365.grade_ht_ft(self._game(status_group=3), "Washington Mystics", "Washington Mystics"), "lost")
+
+    def test_correct_ht_leader_but_game_not_finished_returns_none(self):
+        self._halftime = (20, 10)  # Washington Mystics leads at half
+        self.assertIsNone(scores365.grade_ht_ft(self._game(status_group=3), "Washington Mystics", "Washington Mystics"))
+
+    def test_both_legs_correct_wins(self):
+        self._halftime = (20, 10)
+        game = self._game(home_score=80.0, away_score=70.0, home_winner=True, away_winner=False)
+        self.assertEqual(scores365.grade_ht_ft(game, "Washington Mystics", "Washington Mystics"), "won")
+
+    def test_ht_correct_but_ft_wrong_loses(self):
+        self._halftime = (20, 10)  # Washington Mystics leads at half
+        game = self._game(home_score=70.0, away_score=80.0, home_winner=False, away_winner=True)
+        self.assertEqual(scores365.grade_ht_ft(game, "Washington Mystics", "Washington Mystics"), "lost")
+
+    def test_different_ht_and_ft_teams_both_correct_wins(self):
+        self._halftime = (10, 20)  # Los Angeles Sparks leads at half
+        game = self._game(home_score=80.0, away_score=70.0, home_winner=True, away_winner=False)
+        self.assertEqual(scores365.grade_ht_ft(game, "Los Angeles Sparks", "Washington Mystics"), "won")
+
+
 class FindMatchForTeam(unittest.TestCase):
     """find_match_for_team backs every auto-tracked pick's match lookup -
     monkeypatches _fetch_games_for_sport so this exercises the real

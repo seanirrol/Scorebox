@@ -30,6 +30,7 @@ ESPORTS_FILE = os.path.join(_DIR, "esports_state.json")
 DAILY_LOG_FILE = os.path.join(_DIR, "daily_log_state.json")
 PENDING_SOCCER_PROPS_FILE = os.path.join(_DIR, "pending_soccer_props_state.json")
 HALF_FILE = os.path.join(_DIR, "half_state.json")
+HTFT_FILE = os.path.join(_DIR, "htft_state.json")
 PENDING_TRACK_FILE = os.path.join(_DIR, "pending_track_state.json")
 PENDING_AUTO_FILE = os.path.join(_DIR, "pending_auto_state.json")
 LAST_PERFORMANCE_POST_FILE = os.path.join(_DIR, "last_performance_post_state.json")
@@ -187,6 +188,14 @@ def load_half() -> dict[str, Any]:
 
 def save_half(data: dict[str, Any]):
     _save(HALF_FILE, data)
+
+
+def load_htft() -> dict[str, Any]:
+    return _load(HTFT_FILE)
+
+
+def save_htft(data: dict[str, Any]):
+    _save(HTFT_FILE, data)
 
 
 def load_pending_track() -> dict[str, Any]:

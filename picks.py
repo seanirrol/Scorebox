@@ -381,6 +381,22 @@ _1H_COMBINED_TOTAL_RE = re.compile(
     re.IGNORECASE,
 )
 
+# "Toronto Tempo vs Indiana Fever - Indiana Fever/Indiana Fever Halftime/
+# Fulltime" - a compound bet needing BOTH legs to hit (team ahead at the
+# half AND the eventual winner - see scores365.grade_ht_ft, htfttracker.py).
+# The matchup prefix is optional (not captured) - either team name alone is
+# enough to look the game up, same as most other markets in this file don't
+# require one either. Scoped to nfl/basketball only (see _parse_description)
+# - the only two sports scores365.quarters_breakdown is confirmed live to
+# work for; soccer has a real halftime concept too but uses a different
+# stage data shape that hasn't been checked, so it's deliberately left out
+# rather than guessed at.
+_HT_FT_RE = re.compile(
+    r"^(?:.+?\s*(?:@|\bvs\.?|\bv\.?)\s*.+?\s*-\s*)?"
+    r"(.+?)\s*/\s*(.+?)\s+(?:Halftime\s*/\s*Fulltime|HT\s*/\s*FT)\b",
+    re.IGNORECASE,
+)
+
 # "Denver Broncos -3.5" - a full-game point-spread pick, no opponent named
 # at all (this tipster's own wording always drops it - see
 # scores365.grade_spread). Distinguished from every other shape in this
@@ -1174,6 +1190,17 @@ def _parse_1h_combined_total_pick(description: str, sport: str) -> Optional[dict
     }
 
 
+def _parse_ht_ft_pick(description: str, sport: str) -> Optional[dict]:
+    text = _clean_line(description)
+    m = _HT_FT_RE.match(text)
+    if not m:
+        return None
+    ht_team, ft_team = m.group(1).strip(), m.group(2).strip()
+    if not ht_team or not ft_team:
+        return None
+    return {"kind": "ht_ft", "sport": sport, "ht_team": ht_team, "ft_team": ft_team}
+
+
 # "Dakota Ditcheva by KO/TKO KO/TKO Method of Victory" - method of victory
 # (KO/TKO, submission, decision) has no reliable field anywhere in ESPN's
 # public MMA data (see espn_ufc.py's module docstring), so it's deliberately
@@ -1552,6 +1579,10 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
             return f5_handicap
 
     if sport in ("nfl", "basketball"):
+        ht_ft = _parse_ht_ft_pick(description, sport)
+        if ht_ft:
+            return ht_ft
+
         spread = _parse_team_spread_nomatchup_pick(sport, description)
         if spread:
             return spread

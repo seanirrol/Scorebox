@@ -1006,13 +1006,15 @@ THROUGH_1H_QUARTER = 2
 
 
 def quarters_breakdown(game_id, through_quarter: int) -> Optional[tuple[int, int]]:
-    """Football equivalent of innings_breakdown - sums each side's points
-    through the given quarter (through_quarter=2 for a 1st Half pick), once
-    that quarter is fully complete. Confirmed live via the per-game detail
-    call's `stages` array - each quarter is its own entry ("Q1", "Q2", ...)
-    with the same homeCompetitorScore/awayCompetitorScore/isEnded shape as
-    baseball's innings. Returns None if the target quarter hasn't finished
-    yet, an earlier quarter is missing, or the detail call failed."""
+    """Football/basketball equivalent of innings_breakdown - sums each
+    side's points through the given quarter (through_quarter=2 for a 1st
+    Half pick), once that quarter is fully complete. Confirmed live via
+    the per-game detail call's `stages` array - each quarter is its own
+    entry ("Q1", "Q2", ...) with the same homeCompetitorScore/
+    awayCompetitorScore/isEnded shape as baseball's innings, for both
+    football (NFL/CFL) and basketball (WNBA/NBA) alike. Returns None if
+    the target quarter hasn't finished yet, an earlier quarter is missing,
+    or the detail call failed."""
     detail = _get_game_detail(game_id)
     if not detail:
         return None
@@ -1059,6 +1061,37 @@ def grade_1h_combined_total(home_points: int, away_points: int, direction: str, 
     if direction == "over":
         return "won" if total > line else "lost"
     return "won" if total < line else "lost"
+
+
+def grade_ht_ft(game: dict, ht_team: str, ft_team: str) -> Optional[str]:
+    """Grades a Halftime/Fulltime pick - a compound bet needing BOTH legs
+    to hit: ht_team must be strictly ahead (not tied) at the half, AND
+    ft_team must be the final winner. Decided early (lost) the moment
+    halftime ends with the wrong team leading (or tied), without waiting
+    for the whole game to finish - once that leg fails, the compound bet
+    is already lost regardless of how the rest of the game goes, same
+    "can't come back from a wrong leg" shape as a real sportsbook grades
+    this market. Doesn't support a "Draw" selection for either leg (not
+    asked for, and a genuine fulltime tie can't happen in basketball/
+    football/hockey anyway - only relevant for soccer, which isn't wired
+    up to this market yet)."""
+    home = (game.get("homeCompetitor") or {}).get("name", "")
+    away = (game.get("awayCompetitor") or {}).get("name", "")
+    halftime = quarters_breakdown(game["id"], THROUGH_1H_QUARTER)
+    if halftime is None:
+        return None
+    home_half, away_half = halftime
+    if home_half > away_half:
+        ht_leader = home
+    elif away_half > home_half:
+        ht_leader = away
+    else:
+        ht_leader = None  # tied at the half - no named team can match
+    if not (ht_leader and names_match(ht_leader, ht_team)):
+        return "lost"
+    if not is_finished(game):
+        return None
+    return grade_moneyline(game, ft_team)
 
 
 def partial_1h_team_total(game_id, team: str, home_name: str, away_name: str) -> Optional[int]:

@@ -32,6 +32,7 @@ import esports
 import esportstracker
 import f5tracker
 import halftracker
+import htfttracker
 import inning1tracker
 import inningtracker
 import kboproptracker
@@ -142,6 +143,7 @@ async def on_ready():
     await _safe_resume("inningtracker", inningtracker.resume_all(client))
     await _safe_resume("f5tracker", f5tracker.resume_all(client))
     await _safe_resume("halftracker", halftracker.resume_all(client))
+    await _safe_resume("htfttracker", htfttracker.resume_all(client))
     await _safe_resume("inning1tracker", inning1tracker.resume_all(client))
     await _safe_resume("settracker", settracker.resume_all(client))
     await _safe_resume("tennispropstracker", tennispropstracker.resume_all(client))
@@ -157,6 +159,7 @@ async def on_ready():
     await _safe_resume("pendingauto", pendingauto.resume_all({
         "f5": _resolve_pending_f5,
         "1h": _resolve_pending_1h,
+        "ht_ft": _resolve_pending_ht_ft,
         "tennis_market": _resolve_pending_tennis_market,
         "tennis_playerprops": _resolve_pending_tennis_playerprops,
         "inning_runs": _resolve_pending_inning_runs,
@@ -183,6 +186,7 @@ def _find_message_owner(card_message_id: int) -> Optional[tuple[str, tuple]]:
         ("kbo_prop", kboproptracker.get_message_owner),
         ("soccer_prop", soccerpropstracker.get_message_owner),
         ("esports", esportstracker.get_message_owner),
+        ("htft", htfttracker.get_message_owner),
     ):
         info = getter(card_message_id)
         if info:
@@ -232,6 +236,9 @@ def _stop_tracking_by_card_message(card_message_id: int) -> Optional[str]:
     elif kind == "esports":
         channel_id, sport, team_a, team_b, market, _ = info
         esportstracker.stop_tracking(channel_id, sport, team_a, team_b, market)
+    elif kind == "htft":
+        channel_id, game_id, ht_team, ft_team, _ = info
+        htfttracker.stop_tracking(channel_id, game_id, ht_team, ft_team)
     else:
         channel_id, game_id, member_id, stat_name, direction, line, _ = info
         soccerpropstracker.stop_tracking(channel_id, game_id, member_id, stat_name, direction, line)
@@ -515,6 +522,66 @@ async def _auto_1h_total(
     )
     log.info("Auto-tracked 1H pick '%s' -> game %s", team, game_id)
     botlog.event(f"✅ Tracked (1H): **{team}** ({sport_value}) — game `{game_id}` in <#{channel.id}>")
+    return message.id
+
+
+async def _resolve_pending_ht_ft(payload: dict) -> bool:
+    try:
+        channel = client.get_channel(payload["channel_id"]) or await client.fetch_channel(payload["channel_id"])
+    except discord.HTTPException as e:
+        log.warning("Pending HT/FT: couldn't resolve channel %s: %s", payload["channel_id"], e)
+        return False
+    result = await _auto_ht_ft(channel, **{k: v for k, v in payload.items() if k != "channel_id"}, queue_on_miss=False)
+    return result is not None
+
+
+async def _auto_ht_ft(
+    channel: discord.abc.Messageable, sport_value: str, ht_team: str, ft_team: str,
+    section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
+    manual: bool = False, queue_on_miss: bool = True,
+):
+    """Halftime/Fulltime picks - a compound bet needing both legs to hit,
+    settled across the whole game rather than just the half - see
+    htfttracker.py/scores365.grade_ht_ft. ft_team is used to find the
+    match (either name would work equally well - find_match_for_team just
+    needs one valid side of the matchup). manual/queue_on_miss - see
+    _auto_track's/_auto_f5's own docstrings."""
+    find_kwargs = {"days_ahead": 0, "days_back": 1, "allow_finished": True} if manual else {}
+    try:
+        result = await asyncio.to_thread(scores365.find_match_for_team, ft_team, sport_value, **find_kwargs)
+    except scores365.ScoresError as e:
+        log.info("Auto-HT/FT: couldn't reach 365scores for '%s': %s", ft_team, e)
+        botlog.event(f"❌ Not tracked (HT/FT): **{ht_team}/{ft_team}** — couldn't reach 365scores: {e}")
+        return
+    if not result:
+        payload = {
+            "channel_id": channel.id, "sport_value": sport_value, "ht_team": ht_team, "ft_team": ft_team,
+            "section": section, "label": label, "origin_channel_id": origin_channel_id,
+        }
+        if not manual and queue_on_miss and not pendingauto.is_queued("ht_ft", payload):
+            pendingauto.queue("ht_ft", payload, _resolve_pending_ht_ft)
+            log.info("Auto-HT/FT: no match found for '%s' (%s), queuing retry", ft_team, sport_value)
+            botlog.event(f"⏳ Queued (HT/FT): **{ht_team}/{ft_team}** — no match found yet, will retry automatically")
+            return "queued"
+        log.info("Auto-HT/FT: no match found for '%s' (%s)", ft_team, sport_value)
+        botlog.event(f"❌ Not tracked (HT/FT): **{ht_team}/{ft_team}** — no match found")
+        return
+    game, sport_id = result
+    game_id = game["id"]
+    if htfttracker.is_tracked(channel.id, game_id, ht_team, ft_team):
+        botlog.event(f"⏭️ Skipped (HT/FT): **{ht_team}/{ft_team}** — game `{game_id}` already being tracked in <#{channel.id}>")
+        return "skipped"
+
+    embed, file = await htfttracker.build_embed(game, sport_id, ht_team, ft_team)
+    message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
+    embed.set_footer(text=htfttracker._footer_text(message.id))
+    await throttle.run(channel.id, lambda: message.edit(embed=embed))
+    htfttracker.register_message(message.id, channel.id, game_id, ht_team, ft_team, None)
+    await _safe_add_trash_reaction(message)
+
+    htfttracker.start_tracking(message, sport_id, game, channel.id, None, ht_team, ft_team, section, label, origin_channel_id)
+    log.info("Auto-tracked HT/FT pick '%s/%s' -> game %s", ht_team, ft_team, game_id)
+    botlog.event(f"✅ Tracked (HT/FT): **{ht_team}/{ft_team}** ({sport_value}) — game `{game_id}` in <#{channel.id}>")
     return message.id
 
 
@@ -1452,6 +1519,11 @@ async def _dispatch_pick(
                 target_channel, pick["sport"], pick["team"], pick["direction"], pick["line"], combined=True,
                 section=section, label=label, origin_channel_id=origin_channel_id, manual=manual,
             )
+        elif pick["kind"] == "ht_ft":
+            return await _auto_ht_ft(
+                target_channel, pick["sport"], pick["ht_team"], pick["ft_team"],
+                section=section, label=label, origin_channel_id=origin_channel_id, manual=manual,
+            )
         elif pick["kind"] == "inning_runs":
             return await _auto_inning_runs(target_channel, pick["team"], pick["pick_type"], section=section, label=label, origin_channel_id=origin_channel_id, manual=manual)
         elif pick["kind"] == "inning1_result":
@@ -2110,6 +2182,14 @@ def _untrack_one(channel_id: int, game_id: str, player: Optional[str]) -> list[s
         if esportstracker.stop_tracking(channel_id, entry["sport"], entry["team_a"], entry["team_b"], entry["market"]):
             stopped.append(f"{entry['market']} pick")
 
+    for entry in htfttracker.list_tracked_details(channel_id):
+        if str(entry["game_id"]) != str(game_id):
+            continue
+        if player and player.lower() not in entry["ht_team"].lower() and player.lower() not in entry["ft_team"].lower():
+            continue
+        if htfttracker.stop_tracking(channel_id, entry["game_id"], entry["ht_team"], entry["ft_team"]):
+            stopped.append("HT/FT pick")
+
     return stopped
 
 
@@ -2297,6 +2377,15 @@ async def _gather_tracked_items(channel_id: int) -> list[dict]:
             "message_id": entry["message_id"],
             "stop": lambda cid=channel_id, sp=entry["sport"], ta=entry["team_a"], tb=entry["team_b"], m=entry["market"]:
                 esportstracker.stop_tracking(cid, sp, ta, tb, m),
+        })
+
+    for entry in htfttracker.list_tracked_details(channel_id):
+        ht_team, ft_team = entry["ht_team"], entry["ft_team"]
+        pick_label = f"{ht_team} Halftime/Fulltime" if ht_team == ft_team else f"{ht_team}/{ft_team} Halftime/Fulltime"
+        items.append({
+            "kind": "htft", "label": pick_label, "id_label": entry["game_id"],
+            "message_id": entry["message_id"],
+            "stop": lambda cid=channel_id, gid=entry["game_id"], ht=ht_team, ft=ft_team: htfttracker.stop_tracking(cid, gid, ht, ft),
         })
 
     return items

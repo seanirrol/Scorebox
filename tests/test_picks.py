@@ -302,6 +302,48 @@ class BasketballSpreadNoMatchup(unittest.TestCase):
         self.assertIsNone(picks._parse_team_spread_nomatchup_pick("basketball", "Chicago Sky +5 1st Half"))
 
 
+class HalftimeFulltime(unittest.TestCase):
+    """Halftime/Fulltime (HT/FT) - a compound bet needing both legs to
+    hit (see scores365.grade_ht_ft, htfttracker.py). Scoped to nfl/
+    basketball only - the two sports quarters_breakdown is confirmed live
+    to work for."""
+
+    def test_same_team_both_legs_with_matchup_prefix(self):
+        msg = "WNBA\nToronto Tempo vs Indiana Fever - Indiana Fever/Indiana Fever Halftime/Fulltime (Bet365 -110)"
+        picked = picks.parse_picks_message(msg)
+        self.assertEqual(len(picked), 1)
+        self.assertEqual(picked[0], {
+            "kind": "ht_ft", "sport": "basketball", "ht_team": "Indiana Fever", "ft_team": "Indiana Fever",
+            "section": "WNBA", "raw": "Toronto Tempo vs Indiana Fever - Indiana Fever/Indiana Fever Halftime/Fulltime (Bet365 -110)",
+        })
+
+    def test_no_matchup_prefix_needed(self):
+        msg = "WNBA\nIndiana Fever/Indiana Fever Halftime/Fulltime"
+        picked = picks.parse_picks_message(msg)
+        self.assertEqual(len(picked), 1)
+        self.assertEqual(picked[0]["kind"], "ht_ft")
+        self.assertEqual(picked[0]["ht_team"], "Indiana Fever")
+        self.assertEqual(picked[0]["ft_team"], "Indiana Fever")
+
+    def test_different_ht_and_ft_teams(self):
+        msg = "NFL\nBuffalo Bills vs Miami Dolphins - Buffalo Bills/Miami Dolphins Halftime/Fulltime"
+        picked = picks.parse_picks_message(msg)
+        self.assertEqual(len(picked), 1)
+        self.assertEqual(picked[0]["ht_team"], "Buffalo Bills")
+        self.assertEqual(picked[0]["ft_team"], "Miami Dolphins")
+
+    def test_ht_ft_abbreviation(self):
+        msg = "NFL\nKansas City Chiefs/Kansas City Chiefs HT/FT"
+        picked = picks.parse_picks_message(msg)
+        self.assertEqual(len(picked), 1)
+        self.assertEqual(picked[0]["kind"], "ht_ft")
+
+    def test_not_supported_outside_nfl_basketball(self):
+        msg = "Tennis\nCarlos Alcaraz/Carlos Alcaraz Halftime/Fulltime"
+        picked = picks.parse_picks_message(msg)
+        self.assertEqual(picked, [])
+
+
 class KboPlayerProps(unittest.TestCase):
     """A KBO player prop used to parse with sport "baseball" - identical to
     a real MLB prop - which let ESPN's player search (MLB-only, no KBO
