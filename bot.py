@@ -47,6 +47,7 @@ import proptracker
 import scores365
 import settracker
 import soccerpropstracker
+import state
 import tennispropstracker
 import throttle
 import tracker
@@ -2997,6 +2998,20 @@ def _build_performance_embed_and_file(image_bytes: bytes) -> tuple[discord.Embed
     return embed, file
 
 
+def _last_performance_post_key(channel_id: int, period: str) -> str:
+    return f"{channel_id}:{period}"
+
+
+def _get_last_performance_post(channel_id: int, period: str) -> Optional[int]:
+    return state.load_last_performance_post().get(_last_performance_post_key(channel_id, period))
+
+
+def _set_last_performance_post(channel_id: int, period: str, message_id: int):
+    data = state.load_last_performance_post()
+    data[_last_performance_post_key(channel_id, period)] = message_id
+    state.save_last_performance_post(data)
+
+
 class PerformancePostView(discord.ui.View):
     """Same preview-then-post pattern as WinLossGraphPostView - re-renders
     at click time (not the preview-time snapshot) since a pending pick can
@@ -3004,7 +3019,13 @@ class PerformancePostView(discord.ui.View):
     route's own post_channel_id, resolved once (via _performance_route) at
     the moment /performance was originally invoked - not re-resolved from
     wherever this button happens to be clicked, though in practice that's
-    always the same ephemeral message anyway."""
+    always the same ephemeral message anyway.
+
+    Tracks the message id of the most recent post per (post_channel_id,
+    period) in state.last_performance_post - "Replace last post" only ever
+    replaces a post for the SAME period (e.g. the same month, or all-time)
+    currently being previewed, never a different one that happens to be
+    more recent in that channel."""
 
     def __init__(self, period: str, route: _PerformanceRoute, requester_id: int):
         super().__init__(timeout=900)
@@ -3018,22 +3039,63 @@ class PerformancePostView(discord.ui.View):
             return False
         return True
 
-    @discord.ui.button(label="Post to channel", style=discord.ButtonStyle.success)
-    async def post(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def _render(self) -> Optional[tuple[discord.Embed, discord.File]]:
         year_month = None if self.period == _PERFORMANCE_ALL_TIME else self.period
         data = dailylog.sport_tournament_win_loss(year_month, self.route.score_channels)
         if not data:
+            return None
+        image_bytes = await asyncio.to_thread(performance.render_chart, _performance_title(self.period), data)
+        return _build_performance_embed_and_file(image_bytes)
+
+    @discord.ui.button(label="Post to channel", style=discord.ButtonStyle.success)
+    async def post(self, interaction: discord.Interaction, button: discord.ui.Button):
+        rendered = await self._render()
+        if not rendered:
             await interaction.response.edit_message(
                 content="Nothing to post — no decided picks logged for that period.", embed=None, attachments=[], view=None,
             )
             self.stop()
             return
-        image_bytes = await asyncio.to_thread(performance.render_chart, _performance_title(self.period), data)
-        embed, file = _build_performance_embed_and_file(image_bytes)
+        embed, file = rendered
         target = client.get_channel(self.route.post_channel_id) or await client.fetch_channel(self.route.post_channel_id)
-        await target.send(embed=embed, file=file)
+        message = await target.send(embed=embed, file=file)
+        _set_last_performance_post(self.route.post_channel_id, self.period, message.id)
         botlog.event(f"📊 Performance ({self.period}) posted to <#{self.route.post_channel_id}> by **{interaction.user}**")
         await interaction.response.edit_message(content="Posted.", embed=None, attachments=[], view=None)
+        self.stop()
+
+    @discord.ui.button(label="Replace last post", style=discord.ButtonStyle.primary)
+    async def replace(self, interaction: discord.Interaction, button: discord.ui.Button):
+        rendered = await self._render()
+        if not rendered:
+            await interaction.response.edit_message(
+                content="Nothing to post — no decided picks logged for that period.", embed=None, attachments=[], view=None,
+            )
+            self.stop()
+            return
+        embed, file = rendered
+        target = client.get_channel(self.route.post_channel_id) or await client.fetch_channel(self.route.post_channel_id)
+        old_message_id = _get_last_performance_post(self.route.post_channel_id, self.period)
+        deleted = False
+        if old_message_id:
+            try:
+                old_message = await target.fetch_message(old_message_id)
+                await old_message.delete()
+                deleted = True
+            except discord.NotFound:
+                pass  # already gone (manually deleted, or never actually posted) - nothing to clean up
+            except discord.HTTPException as e:
+                log.warning("Performance replace: couldn't delete previous post %s in %s: %s", old_message_id, self.route.post_channel_id, e)
+        message = await target.send(embed=embed, file=file)
+        _set_last_performance_post(self.route.post_channel_id, self.period, message.id)
+        botlog.event(
+            f"📊 Performance ({self.period}) posted to <#{self.route.post_channel_id}> by **{interaction.user}**"
+            + (" (replaced previous post)" if deleted else " (no previous post found to replace)")
+        )
+        await interaction.response.edit_message(
+            content="Posted (previous post replaced)." if deleted else "Posted (no previous post found to replace).",
+            embed=None, attachments=[], view=None,
+        )
         self.stop()
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
