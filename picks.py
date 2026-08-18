@@ -397,6 +397,19 @@ _HT_FT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# "Indiana Fever Halftime/Fulltime ML" - shorthand for the same-team case
+# above ("Indiana Fever/Indiana Fever Halftime/Fulltime") without repeating
+# the name - confirmed live, a real pick worded this way silently
+# misparsed as a plain moneyline with "Indiana Fever Halftime/Fulltime"
+# (the whole phrase) as the "team" name. The captured name explicitly
+# excludes "/" so this never double-matches the two-team form above (that
+# one's tried first anyway - see _parse_ht_ft_pick).
+_HT_FT_SAME_TEAM_RE = re.compile(
+    r"^(?:.+?\s*(?:@|\bvs\.?|\bv\.?)\s*.+?\s*-\s*)?"
+    r"([^/]+?)\s+(?:Halftime\s*/\s*Fulltime|HT\s*/\s*FT)(?:\s+ML)?\s*$",
+    re.IGNORECASE,
+)
+
 # "Denver Broncos -3.5" - a full-game point-spread pick, no opponent named
 # at all (this tipster's own wording always drops it - see
 # scores365.grade_spread). Distinguished from every other shape in this
@@ -1193,12 +1206,18 @@ def _parse_1h_combined_total_pick(description: str, sport: str) -> Optional[dict
 def _parse_ht_ft_pick(description: str, sport: str) -> Optional[dict]:
     text = _clean_line(description)
     m = _HT_FT_RE.match(text)
-    if not m:
-        return None
-    ht_team, ft_team = m.group(1).strip(), m.group(2).strip()
-    if not ht_team or not ft_team:
-        return None
-    return {"kind": "ht_ft", "sport": sport, "ht_team": ht_team, "ft_team": ft_team}
+    if m:
+        ht_team, ft_team = m.group(1).strip(), m.group(2).strip()
+        if not ht_team or not ft_team:
+            return None
+        return {"kind": "ht_ft", "sport": sport, "ht_team": ht_team, "ft_team": ft_team}
+    m = _HT_FT_SAME_TEAM_RE.match(text)
+    if m:
+        team = m.group(1).strip()
+        if not team:
+            return None
+        return {"kind": "ht_ft", "sport": sport, "ht_team": team, "ft_team": team}
+    return None
 
 
 # "Dakota Ditcheva by KO/TKO KO/TKO Method of Victory" - method of victory

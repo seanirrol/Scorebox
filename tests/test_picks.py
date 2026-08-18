@@ -338,6 +338,32 @@ class HalftimeFulltime(unittest.TestCase):
         self.assertEqual(len(picked), 1)
         self.assertEqual(picked[0]["kind"], "ht_ft")
 
+    def test_same_team_shorthand_with_ml_suffix(self):
+        # Confirmed live: this exact wording silently misparsed as a plain
+        # moneyline with "Indiana Fever Halftime/Fulltime" (the whole
+        # phrase) as the team name, before _HT_FT_SAME_TEAM_RE existed.
+        msg = "WNBA\nIndiana Fever Halftime/Fulltime ML"
+        picked = picks.parse_picks_message(msg)
+        self.assertEqual(len(picked), 1)
+        self.assertEqual(picked[0], {
+            "kind": "ht_ft", "sport": "basketball", "ht_team": "Indiana Fever", "ft_team": "Indiana Fever",
+            "section": "WNBA", "raw": "Indiana Fever Halftime/Fulltime ML",
+        })
+
+    def test_same_team_shorthand_without_ml_suffix(self):
+        msg = "WNBA\nIndiana Fever Halftime/Fulltime"
+        picked = picks.parse_picks_message(msg)
+        self.assertEqual(len(picked), 1)
+        self.assertEqual(picked[0]["ht_team"], "Indiana Fever")
+        self.assertEqual(picked[0]["ft_team"], "Indiana Fever")
+
+    def test_same_team_shorthand_with_matchup_prefix(self):
+        msg = "WNBA\nToronto Tempo vs Indiana Fever - Indiana Fever Halftime/Fulltime ML"
+        picked = picks.parse_picks_message(msg)
+        self.assertEqual(len(picked), 1)
+        self.assertEqual(picked[0]["ht_team"], "Indiana Fever")
+        self.assertEqual(picked[0]["ft_team"], "Indiana Fever")
+
     def test_not_supported_outside_nfl_basketball(self):
         msg = "Tennis\nCarlos Alcaraz/Carlos Alcaraz Halftime/Fulltime"
         picked = picks.parse_picks_message(msg)
