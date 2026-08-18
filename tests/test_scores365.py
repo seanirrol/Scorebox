@@ -179,6 +179,83 @@ class GradeMoneyline(unittest.TestCase):
         self.assertIsNone(scores365.grade_moneyline(game, "Los Angeles Dodgers"))
 
 
+class IsWalkover(unittest.TestCase):
+    def _game(self, home_score=0.0, away_score=0.0, home_winner=None, away_winner=None, status_group=4):
+        return {
+            "statusGroup": status_group,
+            "homeCompetitor": {"name": "Player A", "score": home_score, "isWinner": home_winner},
+            "awayCompetitor": {"name": "Player B", "score": away_score, "isWinner": away_winner},
+        }
+
+    def test_finished_0_0_with_exactly_one_side_flagged_is_a_walkover(self):
+        self.assertTrue(scores365.is_walkover(self._game(home_winner=False, away_winner=True)))
+
+    def test_not_finished_is_never_a_walkover(self):
+        self.assertFalse(scores365.is_walkover(self._game(home_winner=False, away_winner=True, status_group=3)))
+
+    def test_finished_with_a_real_score_is_not_a_walkover(self):
+        self.assertFalse(scores365.is_walkover(self._game(home_score=2.0, away_score=1.0, home_winner=True, away_winner=False)))
+
+    def test_finished_0_0_with_neither_side_flagged_is_not_a_walkover(self):
+        # Can't actually happen for tennis in practice (a real completed
+        # match always has exactly one winner) - guards the flag-mismatch
+        # logic itself rather than a real-world case.
+        self.assertFalse(scores365.is_walkover(self._game()))
+
+
+class GradeWinASet(unittest.TestCase):
+    def _game(self, home_score=0.0, away_score=0.0, home_winner=None, away_winner=None, status_group=4):
+        return {
+            "statusGroup": status_group,
+            "homeCompetitor": {"name": "Xiyu Wang", "score": home_score, "isWinner": home_winner},
+            "awayCompetitor": {"name": "Elina Svitolina", "score": away_score, "isWinner": away_winner},
+        }
+
+    def test_walkover_voids_instead_of_grading_off_the_0_0_score(self):
+        # Confirmed live: this exact real-world case (Xiyu Wang won via
+        # walkover) used to grade "Xiyu Wang to Win a Set" LOST, since
+        # main_scores sits at 0-0 for a walkover, indistinguishable from a
+        # genuine "lost every set" result before this fix.
+        game = self._game(home_winner=True, away_winner=False)
+        self.assertEqual(scores365.grade_win_a_set(game, "Xiyu Wang", "yes"), "void")
+        self.assertEqual(scores365.grade_win_a_set(game, "Elina Svitolina", "yes"), "void")
+
+    def test_normal_finished_match_still_grades_by_sets_won(self):
+        game = self._game(home_score=2.0, away_score=0.0, home_winner=True, away_winner=False)
+        self.assertEqual(scores365.grade_win_a_set(game, "Xiyu Wang", "yes"), "won")
+        self.assertEqual(scores365.grade_win_a_set(game, "Elina Svitolina", "yes"), "lost")
+
+
+class GradeGamesHandicap(unittest.TestCase):
+    def test_walkover_voids_instead_of_grading_off_zero_games(self):
+        game = {
+            "statusGroup": 4,
+            "homeCompetitor": {"name": "Xiyu Wang", "score": 0.0, "isWinner": True},
+            "awayCompetitor": {"name": "Elina Svitolina", "score": 0.0, "isWinner": False},
+        }
+        self.assertEqual(scores365.grade_games_handicap(game, "Xiyu Wang", -2.5), "void")
+
+
+class GradeSetsHandicap(unittest.TestCase):
+    def test_walkover_voids_instead_of_grading_off_zero_sets(self):
+        game = {
+            "statusGroup": 4,
+            "homeCompetitor": {"name": "Xiyu Wang", "score": 0.0, "isWinner": True},
+            "awayCompetitor": {"name": "Elina Svitolina", "score": 0.0, "isWinner": False},
+        }
+        self.assertEqual(scores365.grade_sets_handicap(game, "Xiyu Wang", -1.5), "void")
+
+
+class GradeTennisSet(unittest.TestCase):
+    def test_walkover_voids_instead_of_grading_off_zero_games(self):
+        game = {
+            "statusGroup": 4,
+            "homeCompetitor": {"name": "Xiyu Wang", "score": 0.0, "isWinner": True},
+            "awayCompetitor": {"name": "Elina Svitolina", "score": 0.0, "isWinner": False},
+        }
+        self.assertEqual(scores365.grade_tennis_set(game, 0, 0, "Xiyu Wang"), "void")
+
+
 class FindMatchForTeam(unittest.TestCase):
     """find_match_for_team backs every auto-tracked pick's match lookup -
     monkeypatches _fetch_games_for_sport so this exercises the real

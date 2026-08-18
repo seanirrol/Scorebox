@@ -241,25 +241,35 @@ async def build_embed(
         final_period_text = "1st Set Final"
 
     elif market == "set1_total_games":
-        breakdown = scores365.tennis_first_set_result(game)
-        decided = breakdown is not None
-        if decided:
-            result = scores365.grade_over_under(breakdown[0] + breakdown[1], direction, line)
-            frozen_cols = (scores365.fmt_score(breakdown[0]), scores365.fmt_score(breakdown[1]))
-        elif direction == "over" and line is not None:
-            # Set 1 hasn't ended yet - tennis_match_games mid-Set-1 is
-            # effectively just Set 1's own live running total, since no
-            # later set has started contributing to it yet.
-            home_games, away_games = scores365.tennis_match_games(game)
-            if home_games + away_games > line:
-                early_win = True
+        if scores365.is_walkover(game):
+            # See match_total_games' own comment below - no real games-
+            # played data exists on a walkover to grade a total against.
+            decided, result = True, "void"
+        else:
+            breakdown = scores365.tennis_first_set_result(game)
+            decided = breakdown is not None
+            if decided:
+                result = scores365.grade_over_under(breakdown[0] + breakdown[1], direction, line)
+                frozen_cols = (scores365.fmt_score(breakdown[0]), scores365.fmt_score(breakdown[1]))
+            elif direction == "over" and line is not None:
+                # Set 1 hasn't ended yet - tennis_match_games mid-Set-1 is
+                # effectively just Set 1's own live running total, since no
+                # later set has started contributing to it yet.
+                home_games, away_games = scores365.tennis_match_games(game)
+                if home_games + away_games > line:
+                    early_win = True
         final_period_text = "1st Set Final"
 
     elif market == "match_total_games":
         decided = scores365.is_finished(game)
         home_games, away_games = scores365.tennis_match_games(game)
         if decided:
-            result = scores365.grade_over_under(home_games + away_games, direction, line)
+            # grade_over_under is generic (no `game` to check is_walkover
+            # itself, unlike the games/sets handicap and win-a-set grading
+            # functions) - confirmed live, a walkover's 0 total games would
+            # otherwise silently grade a real Under line "won", when there's
+            # no actual match to grade a games total against at all.
+            result = "void" if scores365.is_walkover(game) else scores365.grade_over_under(home_games + away_games, direction, line)
         elif direction == "over" and line is not None and home_games + away_games > line:
             early_win = True
         frozen_cols = (scores365.fmt_score(home_games), scores365.fmt_score(away_games))  # live-running, shown whether decided or not
@@ -272,7 +282,7 @@ async def build_embed(
         home_games, away_games = scores365.tennis_match_games(game)
         player_games = home_games if scores365.names_match(home_competitor.get("name", ""), team) else away_games
         if decided:
-            result = scores365.grade_over_under(player_games, direction, line)
+            result = "void" if scores365.is_walkover(game) else scores365.grade_over_under(player_games, direction, line)
         elif direction == "over" and line is not None and player_games > line:
             early_win = True
         frozen_cols = (scores365.fmt_score(home_games), scores365.fmt_score(away_games))  # live-running, shown whether decided or not
@@ -387,6 +397,8 @@ def grade_now(game: dict, market: str, team: Optional[str], direction: Optional[
             return False, None
         return True, scores365.grade_tennis_set(game, breakdown[0], breakdown[1], team)
     if market == "set1_total_games":
+        if scores365.is_walkover(game):
+            return True, "void"
         breakdown = scores365.tennis_first_set_result(game)
         if breakdown is None:
             return False, None
@@ -394,11 +406,15 @@ def grade_now(game: dict, market: str, team: Optional[str], direction: Optional[
     if market == "match_total_games":
         if not scores365.is_finished(game):
             return False, None
+        if scores365.is_walkover(game):
+            return True, "void"
         home_games, away_games = scores365.tennis_match_games(game)
         return True, scores365.grade_over_under(home_games + away_games, direction, line)
     if market == "player_total_games":
         if not scores365.is_finished(game):
             return False, None
+        if scores365.is_walkover(game):
+            return True, "void"
         home_competitor = game.get("homeCompetitor") or {}
         home_games, away_games = scores365.tennis_match_games(game)
         player_games = home_games if scores365.names_match(home_competitor.get("name", ""), team) else away_games

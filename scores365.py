@@ -302,7 +302,14 @@ def grade_tennis_set(game: dict, home_games: int, away_games: int, picked_team: 
     """Grades a tennis set-winner pick (e.g. "1st Set Moneyline"). A
     completed tennis set is always decided one way or the other (by games or
     a tiebreak) - no tie/push case exists here, unlike full-match moneyline
-    grading elsewhere in this module."""
+    grading elsewhere in this module.
+
+    Voids on a walkover (see is_walkover) - the home_games/away_games
+    passed in reflect whatever partial set data existed before the
+    opponent withdrew, not a real completed set, so there's nothing
+    genuine to grade a set-winner pick against."""
+    if is_walkover(game):
+        return "void"
     home = (game.get("homeCompetitor") or {}).get("name", "")
     away = (game.get("awayCompetitor") or {}).get("name", "")
     if names_match(home, picked_team):
@@ -321,7 +328,12 @@ def grade_games_handicap(game: dict, team: str, line: float) -> Optional[str]:
     (player -2.5 needs to win the match by 3+ games; player +2.5 wins as
     long as they don't lose by 3+). Same adjust-then-compare shape as
     grade_f5_handicap - a whole-number line can land on an exact tie after
-    adjustment (push); a half-point line never can."""
+    adjustment (push); a half-point line never can.
+
+    Voids on a walkover (see is_walkover) - there's no real games-played
+    data to adjust/compare against."""
+    if is_walkover(game):
+        return "void"
     home_games, away_games = tennis_match_games(game)
     home = (game.get("homeCompetitor") or {}).get("name", "")
     away = (game.get("awayCompetitor") or {}).get("name", "")
@@ -343,7 +355,13 @@ def grade_sets_handicap(game: dict, team: str, line: float) -> Optional[str]:
     against sets won (main_scores, tennis's own win/loss score) rather than
     games won. Only call once the match has actually finished - main_scores
     mid-match reflects sets won so far, not the final tally, so grading
-    early would be premature."""
+    early would be premature.
+
+    Voids on a walkover (see is_walkover) - main_scores sits at 0-0 in
+    that case (no set was ever actually decided), not a real "0 sets won"
+    result to adjust/compare against."""
+    if is_walkover(game):
+        return "void"
     scores = main_scores(game)
     if not scores:
         return None
@@ -419,7 +437,15 @@ def grade_win_a_set(game: dict, picked_team: str, direction: str) -> Optional[st
     grade a "yes" pick a win as soon as it happens - a player can't un-win a
     set - but a "no" pick (or a "yes" pick that hasn't happened yet) can
     only be graded once the whole match is over with the picked player
-    still on zero sets won."""
+    still on zero sets won.
+
+    Voids on a walkover (see is_walkover) - confirmed live, a real "Player
+    to Win a Set" pick graded LOST for the player who actually won the
+    match outright via walkover, since main_scores sits at 0-0 (no set was
+    ever actually played) and used to be indistinguishable here from a
+    genuine "lost every set" result."""
+    if is_walkover(game):
+        return "void"
     home = (game.get("homeCompetitor") or {}).get("name", "")
     away = (game.get("awayCompetitor") or {}).get("name", "")
     scores = main_scores(game)
@@ -870,6 +896,32 @@ def main_scores(game: dict) -> Optional[tuple]:
     if status == "notstarted" or home_score is None or away_score is None or home_score < 0 or away_score < 0:
         return None
     return (home_score, away_score)
+
+
+def is_walkover(game: dict) -> bool:
+    """True for a tennis match that ended before any actual play happened -
+    an opponent withdrew before the first ball was struck (see
+    grade_moneyline's own comment for how this shows up in 365scores'
+    data: both sides sitting at a 0-0 main_scores with one side flagged
+    isWinner). A genuine completed tennis match can never end 0-0 - at
+    least one game in one set is always played - so `finished` + 0-0 is an
+    unambiguous walkover signature, not a coincidence.
+
+    grade_moneyline handles this fine on its own (the isWinner flag alone
+    settles who "won" regardless of score) but every other tennis grading
+    function needs this check explicitly - games handicap, sets handicap,
+    set-winner, win-a-set, and total-games markets all need real per-set/
+    per-game data that simply doesn't exist on a walkover, and would
+    otherwise silently compute a wrong result from the empty scoreline
+    (confirmed live: a real "Player to Win a Set" pick graded LOST for the
+    player who won the match outright via walkover)."""
+    if not is_finished(game):
+        return False
+    if main_scores(game) != (0, 0):
+        return False
+    home_is_winner = (game.get("homeCompetitor") or {}).get("isWinner")
+    away_is_winner = (game.get("awayCompetitor") or {}).get("isWinner")
+    return bool(home_is_winner) != bool(away_is_winner)
 
 
 def grade_moneyline(game: dict, picked_team: str) -> Optional[str]:
