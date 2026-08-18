@@ -277,6 +277,30 @@ class BasketballSpreadNoMatchup(unittest.TestCase):
         self.assertEqual(len(picked), 1)
         self.assertEqual(picked[0]["sport"], "basketball")
 
+    def test_trailing_points_word_doesnt_swallow_the_spread(self):
+        # Confirmed live: "Las Vegas Aces -1.5 Points" (no parenthetical,
+        # unlike the Alt-Spread-wording tests above) silently fell all the
+        # way through to the bare-team-name fallback, swallowing the whole
+        # line - including the spread number - as one literal team name,
+        # since the regex required the number to be the very last thing on
+        # the line with nothing trailing it at all.
+        msg = "WNBA\nLas Vegas Aces -1.5 Points\nChicago Sky +5 Points"
+        picked = picks.parse_picks_message(msg)
+        self.assertEqual(len(picked), 2)
+        self.assertEqual(picked[0], {
+            "kind": "team_total", "sport": "basketball", "team": "Las Vegas Aces",
+            "direction": "spread", "line": -1.5, "section": "WNBA", "raw": "Las Vegas Aces -1.5 Points",
+        })
+        self.assertEqual(picked[1]["team"], "Chicago Sky")
+        self.assertEqual(picked[1]["line"], 5.0)
+
+    def test_trailing_period_market_word_still_safely_unparsed(self):
+        # "1st Half"/"Q1"/etc is a genuinely different market (a period
+        # spread, not full-game) - must NOT be swallowed the same way
+        # "Points" is, or a half-spread would silently misgrade as a
+        # full-game one.
+        self.assertIsNone(picks._parse_team_spread_nomatchup_pick("basketball", "Chicago Sky +5 1st Half"))
+
 
 class KboPlayerProps(unittest.TestCase):
     """A KBO player prop used to parse with sport "baseball" - identical to

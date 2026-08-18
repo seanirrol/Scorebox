@@ -385,15 +385,23 @@ _1H_COMBINED_TOTAL_RE = re.compile(
 # at all (this tipster's own wording always drops it - see
 # scores365.grade_spread). Distinguished from every other shape in this
 # file by a signed number directly after the team name with nothing else
-# trailing it (unlike the tennis games/sets handicap variants above, which
-# require a trailing "Games"/"Sets" word). Only checked for sport in
-# ("nfl", "basketball") (see _parse_description) - confirmed live for NFL
-# first, then WNBA (e.g. "Phoenix Mercury -2.5", "Indiana Fever +5.5" -
-# both silently unparsed before this); basketball covers WNBA and NBA alike
-# since _SPORT_MAP maps both to the same "basketball" sport key. Still
-# scoped narrowly rather than opened to every sport - not yet confirmed
-# live anywhere else.
-_TEAM_SPREAD_NOMATCHUP_RE = re.compile(r"^(.+?)\s+([+-]\d+(?:\.\d+)?)\s*$")
+# meaningful trailing it (unlike the tennis games/sets handicap variants
+# above, which require a trailing "Games"/"Sets" word). Only checked for
+# sport in ("nfl", "basketball") (see _parse_description) - confirmed live
+# for NFL first, then WNBA (e.g. "Phoenix Mercury -2.5", "Indiana Fever
+# +5.5" - both silently unparsed before this); basketball covers WNBA and
+# NBA alike since _SPORT_MAP maps both to the same "basketball" sport key.
+# Still scoped narrowly rather than opened to every sport - not yet
+# confirmed live anywhere else.
+#
+# An optional trailing "Points"/"Pts"/"Runs"/"Goals" is allowed after the
+# number - confirmed live, "Las Vegas Aces -1.5 Points" silently swallowed
+# the whole line (including the spread number) as a literal team name,
+# since that's just this sport's own scoring unit decorating a plain
+# full-game spread, not a different market. Deliberately NOT a bare \w+
+# (which would also match "1st"/"Half"/"Q1"-style period-market suffixes
+# and misfile a half/quarter spread as a full-game one).
+_TEAM_SPREAD_NOMATCHUP_RE = re.compile(r"^(.+?)\s+([+-]\d+(?:\.\d+)?)(?:\s+(?:Points|Pts|Runs|Goals))?\s*$", re.IGNORECASE)
 
 
 def _parse_team_spread_nomatchup_pick(sport: str, description: str) -> Optional[dict]:
