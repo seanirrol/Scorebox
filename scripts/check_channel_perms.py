@@ -6,6 +6,17 @@ manual resolution Discord's client applies. Usage:
 
     python3 scripts/check_channel_perms.py <channel_id>
 
+If the channel has no overwrite of its own for a given role/member, its
+parent category's overwrite for that same role/member applies instead
+(Discord doesn't merge them bit-by-bit - the channel's own entry, if
+present, replaces the category's entirely for that entity) - a channel
+with zero overwrites of its own can still be effectively locked down by
+its category. Confirmed live: a channel reporting "ALL REQUIRED
+PERMISSIONS PRESENT" here (before this fix, channel-only) while Discord
+still 403'd a real send - turned out to be a red herring that time (the
+category had no overwrites either, the real cause was elsewhere), but the
+category-blind check was still a real gap worth closing.
+
 Reads DISCORD_TOKEN from .env - never printed."""
 
 import sys
@@ -53,7 +64,19 @@ def main():
 
     channel = _get(f"/channels/{channel_id}")
     guild_id = channel["guild_id"]
-    overwrites = {ow["id"]: ow for ow in channel.get("permission_overwrites", [])}
+    channel_overwrites = {ow["id"]: ow for ow in channel.get("permission_overwrites", [])}
+
+    category_overwrites = {}
+    parent_id = channel.get("parent_id")
+    if parent_id:
+        category = _get(f"/channels/{parent_id}")
+        category_overwrites = {ow["id"]: ow for ow in category.get("permission_overwrites", [])}
+
+    def overwrite_for(entity_id):
+        # Channel's own overwrite for this entity wins outright if present;
+        # otherwise fall back to the parent category's overwrite for the
+        # same entity (see module docstring).
+        return channel_overwrites.get(entity_id) or category_overwrites.get(entity_id)
 
     me = _get(f"/users/@me")
     bot_id = me["id"]
@@ -69,7 +92,7 @@ def main():
     perms = base_allow
 
     # @everyone overwrite first
-    everyone_ow = overwrites.get(guild_id)
+    everyone_ow = overwrite_for(guild_id)
     if everyone_ow:
         perms &= ~int(everyone_ow["deny"])
         perms |= int(everyone_ow["allow"])
@@ -79,7 +102,7 @@ def main():
     for rid in role_ids:
         if rid == guild_id:
             continue
-        ow = overwrites.get(rid)
+        ow = overwrite_for(rid)
         if ow:
             role_deny |= int(ow["deny"])
             role_allow |= int(ow["allow"])
@@ -87,7 +110,7 @@ def main():
     perms |= role_allow
 
     # member-specific overwrite last
-    member_ow = overwrites.get(bot_id)
+    member_ow = overwrite_for(bot_id)
     if member_ow:
         perms &= ~int(member_ow["deny"])
         perms |= int(member_ow["allow"])
