@@ -122,5 +122,35 @@ class GradeMapKillsHandicap(unittest.TestCase):
         self.assertEqual(esports.grade_map_kills_handicap(series, 1, "Team A", -4.5), "won")
 
 
+class GradeMapTotalKills(unittest.TestCase):
+    def test_over_clears_wins(self):
+        series = _hawk_series([_map(1, True, 32, 20)], series_id="over-win")
+        self.assertEqual(esports.grade_map_total_kills(series, 1, "over", 50.5), "won")
+
+    def test_over_short_loses(self):
+        series = _hawk_series([_map(1, True, 20, 20)], series_id="over-lose")
+        self.assertEqual(esports.grade_map_total_kills(series, 1, "over", 50.5), "lost")
+
+    def test_under_wins_when_total_stays_below_line(self):
+        series = _hawk_series([_map(1, True, 10, 10)], series_id="under-win")
+        self.assertEqual(esports.grade_map_total_kills(series, 1, "under", 50.5), "won")
+
+    def test_exact_push(self):
+        series = _hawk_series([_map(1, True, 25, 25)], series_id="push")
+        self.assertEqual(esports.grade_map_total_kills(series, 1, "over", 50), "push")
+
+    def test_map_never_played_but_series_decided_voids(self):
+        series = _hawk_series([_map(1, True, 0, 0, winner=None)], status="finished", series_id="void1")
+        self.assertEqual(esports.grade_map_total_kills(series, 1, "over", 50.5), "void")
+
+    def test_map_number_beyond_any_recorded_map_but_series_decided_voids(self):
+        series = _hawk_series([], status="finished", series_id="void2")
+        self.assertEqual(esports.grade_map_total_kills(series, 3, "over", 50.5), "void")
+
+    def test_map_not_yet_played_series_still_live_returns_none(self):
+        series = _hawk_series([_map(1, True, 0, 0, winner=None)], status="inprogress", series_id="pending")
+        self.assertIsNone(esports.grade_map_total_kills(series, 1, "over", 50.5))
+
+
 if __name__ == "__main__":
     unittest.main()

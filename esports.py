@@ -919,6 +919,28 @@ def grade_map_kills_handicap(series_data: dict, map_number: int, picked_team: st
     return "won" if adjusted > other_kills else "lost"
 
 
+def grade_map_total_kills(series_data: dict, map_number: int, direction: str, line: float) -> Optional[str]:
+    """Combined Over/Under on one specific map's own kill count (both teams
+    summed) - e.g. "Map 1 Total Kills Over 50.5". Dota 2 only, needs
+    hawk.live's own per-map state data (see map_kills). Settles the moment
+    that specific map itself finishes, not the whole series - same
+    reasoning as grade_map_kills_handicap (unlike grade_total_kills's
+    series-wide combined total, which has to wait for the series to end
+    since kills keep accumulating across maps). Voided if the series
+    finishes before that map was ever played, same convention as
+    grade_map_winner/grade_map_kills_handicap."""
+    winners = map_winners(series_data)
+    if map_number < 1 or map_number > len(winners) or winners[map_number - 1] is None:
+        return "void" if is_decided(series_data) else None
+    kills = map_kills(series_data, map_number)
+    if kills is None:
+        return None
+    total = kills[0] + kills[1]
+    if total == line:
+        return "push"
+    return "won" if (total > line) == (direction == "over") else "lost"
+
+
 def grade_win_at_least_one_map(series_data: dict, picked_team: str, direction: str = "yes") -> Optional[str]:
     """"Wins at Least One Map" (direction="yes") - the underdog isn't swept
     0-N. direction="no" is the inverse - "does NOT win at least one map",

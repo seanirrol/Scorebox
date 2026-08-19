@@ -1338,6 +1338,22 @@ _ESPORTS_MAP_KILLS_HANDICAP_RE = re.compile(
     re.IGNORECASE,
 )
 
+# "Team A vs Team B - Over 50.5 Map 1 Total Kills" (marker before) / "... -
+# Map 1 Total Kills Over 50.5" (marker after) - combined Over/Under on one
+# specific map's own kill count (both teams summed), distinct from
+# _ESPORTS_TOTAL_KILLS_RE (series-wide combined total, no "map N" at all)
+# and _ESPORTS_MAP_KILLS_HANDICAP_RE (a spread, not an Over/Under). No named
+# team either shape - same "no team name at all" convention as the
+# combined-total pair elsewhere in this file. Dota 2 only.
+_ESPORTS_MAP_TOTAL_KILLS_BEFORE_RE = re.compile(
+    r"^(.+?)\s*(?:@|\bvs\.?|\bv\.?)\s*(.+?)\s*-?\s*(Over|Under)\s+([\d.]+)\s*map\s*(\d+)\s*(?:total\s+)?kills\b",
+    re.IGNORECASE,
+)
+_ESPORTS_MAP_TOTAL_KILLS_AFTER_RE = re.compile(
+    r"^(.+?)\s*(?:@|\bvs\.?|\bv\.?)\s*(.+?)\s*-\s*map\s*(\d+)\s*(?:total\s+)?kills\s+(Over|Under)\s+([\d.]+)",
+    re.IGNORECASE,
+)
+
 
 def _parse_esports_map_handicap(text: str) -> Optional[dict]:
     m = _ESPORTS_MAP_HANDICAP_RE.match(text)
@@ -1460,6 +1476,25 @@ def _parse_esports_map_kills_handicap(text: str) -> Optional[dict]:
     }
 
 
+def _parse_esports_map_total_kills(text: str) -> Optional[dict]:
+    m = _ESPORTS_MAP_TOTAL_KILLS_BEFORE_RE.match(text)
+    if m:
+        team_a, team_b = m.group(1).strip(), m.group(2).strip()
+        direction, line, map_number = m.group(3).lower(), float(m.group(4)), int(m.group(5))
+    else:
+        m = _ESPORTS_MAP_TOTAL_KILLS_AFTER_RE.match(text)
+        if not m:
+            return None
+        team_a, team_b = m.group(1).strip(), m.group(2).strip()
+        map_number, direction, line = int(m.group(3)), m.group(4).lower(), float(m.group(5))
+    if not team_a or not team_b:
+        return None
+    return {
+        "kind": "esports_map_total_kills", "team_a": team_a, "team_b": team_b,
+        "direction": direction, "line": line, "map_number": map_number,
+    }
+
+
 def _parse_esports_total_kills(text: str) -> Optional[dict]:
     m = _ESPORTS_TOTAL_KILLS_BEFORE_RE.match(text) or _ESPORTS_TOTAL_KILLS_AFTER_RE.match(text)
     if not m:
@@ -1509,7 +1544,10 @@ def _parse_esports_pick(description: str, sport: str) -> Optional[dict]:
         # checked first, same "named team distinguishes from the combined
         # shape" ordering used for every other sport's own team-vs-combined
         # total pair in this module.
-        parsers = [_parse_esports_map_kills_handicap, _parse_esports_team_total_kills, _parse_esports_total_kills] + parsers
+        parsers = [
+            _parse_esports_map_kills_handicap, _parse_esports_map_total_kills,
+            _parse_esports_team_total_kills, _parse_esports_total_kills,
+        ] + parsers
     for parser in parsers:
         pick = parser(text)
         if pick:

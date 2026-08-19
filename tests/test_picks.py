@@ -217,6 +217,43 @@ class EsportsMapKillsHandicap(unittest.TestCase):
         self.assertIsNone(pick)
 
 
+class EsportsMapTotalKills(unittest.TestCase):
+    """"Over/Under N Map 1 Total Kills" - combined kill total within one
+    specific map (both teams summed), distinct from the series-wide Total
+    Kills market and the Map Kills Handicap spread above."""
+
+    def test_marker_before_the_number(self):
+        pick = picks.parse_pick_line("[Dota 2] Team Liquid vs Team Yandex - Over 50.5 Map 1 Total Kills")
+        self.assertEqual(pick, {
+            "kind": "esports_map_total_kills", "sport": "dota2",
+            "team_a": "Team Liquid", "team_b": "Team Yandex",
+            "direction": "over", "line": 50.5, "map_number": 1,
+        })
+
+    def test_marker_after_the_number(self):
+        pick = picks.parse_pick_line("[Dota 2] Team Liquid vs Team Yandex - Map 1 Total Kills Over 50.5")
+        self.assertEqual(pick["direction"], "over")
+        self.assertEqual(pick["line"], 50.5)
+        self.assertEqual(pick["map_number"], 1)
+
+    def test_under_direction_and_later_map_number(self):
+        pick = picks.parse_pick_line("[Dota 2] Team Liquid vs Team Yandex - Under 45 Map 2 Total Kills")
+        self.assertEqual(pick["direction"], "under")
+        self.assertEqual(pick["map_number"], 2)
+
+    def test_does_not_collide_with_series_total_kills(self):
+        pick = picks.parse_pick_line("[Dota 2] Team Liquid vs Team Yandex - Over 130.5 Total Kills")
+        self.assertEqual(pick["kind"], "esports_total_kills")
+
+    def test_does_not_collide_with_map_kills_handicap(self):
+        pick = picks.parse_pick_line("[Dota 2] Team Liquid vs Team Yandex - Team Liquid (-4.5) Map 1 Kills Handicap")
+        self.assertEqual(pick["kind"], "esports_map_kills_handicap")
+
+    def test_cs2_not_supported(self):
+        pick = picks.parse_pick_line("[CS2] Team Liquid vs Team Vitality - Over 50.5 Map 1 Total Kills")
+        self.assertIsNone(pick)
+
+
 class MisfiledPropUnderWrongSectionHeader(unittest.TestCase):
     """A player-prop-shaped line whose stat belongs to a DIFFERENT sport
     than its own section header (the tipster's own mistake, not a code

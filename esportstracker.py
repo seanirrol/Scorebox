@@ -22,6 +22,10 @@ esports.py's own docstring for where the underlying data comes from):
   "Team X (-4.5) Map 1 Kills Handicap") - same Dota 2-only restriction,
   settles once that specific map finishes rather than waiting on the whole
   series.
+- "map_total_kills": combined Over/Under on one specific map's own kill
+  count, both teams summed (e.g. "Map 1 Total Kills Over 50.5") - same
+  Dota 2-only restriction and same "settles once that map finishes" timing
+  as map_kills_handicap.
 
 Mirrors settracker.py's multi-mode design (one tracker module, several
 distinct grading shapes selected by `market`) rather than a file per market.
@@ -186,6 +190,8 @@ def pick_label(
         return f"{direction.title()} {line:g} Total Kills"
     if market == "map_kills_handicap":
         return f"{picked_team} {line:+g} Map {map_number} Kills Handicap"
+    if market == "map_total_kills":
+        return f"{direction.title()} {line:g} Map {map_number} Total Kills"
     return f"{picked_team} {direction.title()} {line:g} Total Kills"  # team_total_kills
 
 
@@ -214,6 +220,8 @@ def grade_now(
         result = esports.grade_total_kills(series_data, direction, line)
     elif market == "map_kills_handicap":
         result = esports.grade_map_kills_handicap(series_data, map_number, picked_team, line)
+    elif market == "map_total_kills":
+        result = esports.grade_map_total_kills(series_data, map_number, direction, line)
     else:  # team_total_kills
         result = esports.grade_team_total_kills(series_data, picked_team, direction, line)
     return result is not None, result
@@ -275,6 +283,18 @@ async def build_embed(
             elif esports.names_match(series_data["away_team"], picked_team):
                 current_map_kills = kills[1]
 
+    # Combined running kill count in the specific map this pick is about,
+    # for map_total_kills - unlike current_map_kills above (a handicap
+    # between two independently-accumulating counts), a combined total
+    # within one map only ever grows just like current_kills/current_maps
+    # below, so it's folded into the same early-win-eligible current_value
+    # chain rather than kept separate.
+    current_map_total_kills: Optional[int] = None
+    if market == "map_total_kills":
+        kills = esports.map_kills(series_data, map_number)
+        if kills is not None:
+            current_map_total_kills = kills[0] + kills[1]
+
     # Picked team's own map count so far, for win_at_least_one_map - same
     # early-lock reasoning as the kill/map totals below, since that market's
     # own grade_win_at_least_one_map now deliberately waits for the series
@@ -297,7 +317,7 @@ async def build_embed(
     # UNDER, not about Over. Purely cosmetic: the actual dailylog
     # settlement still only happens once `decided` for real, same as
     # every other early-win tag in this bot.
-    current_value = current_kills if current_kills is not None else current_maps
+    current_value = current_kills if current_kills is not None else current_maps if current_maps is not None else current_map_total_kills
     early_result: Optional[str] = None
     if not result and current_value is not None and direction == "over" and line is not None and current_value > line:
         early_result = "won"
@@ -337,6 +357,10 @@ async def build_embed(
         # e.g. "Team X -4.5 Map 1 Kills Handicap (32)" - picked team's own
         # running kill count in that specific map.
         label = f"{label} ({current_map_kills})"
+    elif current_map_total_kills is not None:
+        # e.g. "Over 50.5 Map 1 Total Kills (48)" - combined running kill
+        # count in that specific map.
+        label = f"{label} ({current_map_total_kills})"
     description_lines = [label]
     if status == "notstarted" and series_data.get("start_epoch"):
         description_lines.append(f"<t:{int(series_data['start_epoch'])}:f>")
