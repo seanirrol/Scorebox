@@ -210,8 +210,8 @@ def _stop_tracking_by_card_message(card_message_id: int) -> Optional[str]:
         channel_id, event_id, entity_id, stat_key, direction, line, _ = info
         proptracker.stop_tracking(channel_id, event_id, entity_id, stat_key, direction, line)
     elif kind == "inning":
-        channel_id, event_id, pick_type, _ = info
-        inningtracker.stop_tracking(channel_id, event_id, pick_type)
+        channel_id, event_id, pick_type, line, _ = info
+        inningtracker.stop_tracking(channel_id, event_id, pick_type, line)
     elif kind == "f5":
         channel_id, game_id, picked_team, total_direction, total_line, handicap_line, _ = info
         f5tracker.stop_tracking(channel_id, game_id, picked_team, total_direction, total_line, handicap_line)
@@ -986,15 +986,16 @@ async def _resolve_pending_inning_runs(payload: dict) -> bool:
 
 
 async def _auto_inning_runs(
-    channel: discord.abc.Messageable, team: str, pick_type: str,
+    channel: discord.abc.Messageable, team: str, pick_type: str, line: Optional[float] = None,
     section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
     manual: bool = False, queue_on_miss: bool = True,
 ):
-    """YRFI/NRFI picks settle after just the 1st inning, not the whole game
-    - see inningtracker.py. Always baseball, so no sport param needed.
-    manual/queue_on_miss - see _auto_track's/_auto_f5's own docstrings.
-    Only the event lookup (not the team lookup - a bad team name won't fix
-    itself on retry) gets queued on a miss."""
+    """YRFI/NRFI picks (and the general "1st Inning Total Runs Over/Under N"
+    market they're a special case of - see inningtracker.py) settle after
+    just the 1st inning, not the whole game. Always baseball, so no sport
+    param needed. manual/queue_on_miss - see _auto_track's/_auto_f5's own
+    docstrings. Only the event lookup (not the team lookup - a bad team
+    name won't fix itself on retry) gets queued on a miss."""
     try:
         entity = await asyncio.to_thread(espn.find_team, team, "baseball")
     except espn.EspnError as e:
@@ -1010,7 +1011,7 @@ async def _auto_inning_runs(
     event_id = await asyncio.to_thread(espn.find_current_event_id, "baseball", entity["id"], **find_kwargs)
     if not event_id:
         payload = {
-            "channel_id": channel.id, "team": team, "pick_type": pick_type,
+            "channel_id": channel.id, "team": team, "pick_type": pick_type, "line": line,
             "section": section, "label": label, "origin_channel_id": origin_channel_id,
         }
         if not manual and queue_on_miss and not pendingauto.is_queued("inning_runs", payload):
@@ -1024,19 +1025,20 @@ async def _auto_inning_runs(
     if not event:
         botlog.event(f"❌ Not tracked ({pick_type}): **{team}** — couldn't fetch match data from ESPN")
         return
-    if inningtracker.is_tracked(channel.id, event_id, pick_type):
+    if inningtracker.is_tracked(channel.id, event_id, pick_type, line):
         botlog.event(f"⏭️ Skipped ({pick_type}): **{team}** — already being tracked in <#{channel.id}>")
         return "skipped"
 
-    embed, file = await inningtracker.build_embed(event, pick_type)
+    embed, file = await inningtracker.build_embed(event, pick_type, line)
     message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
     embed.set_footer(text=inningtracker._footer_text(message.id))
     await throttle.run(channel.id, lambda: message.edit(embed=embed))
-    inningtracker.register_message(message.id, channel.id, event_id, pick_type, None)
+    inningtracker.register_message(message.id, channel.id, event_id, pick_type, line, None)
     await _safe_add_trash_reaction(message)
 
     inningtracker.start_tracking(
-        message, channel.id, event_id, pick_type, entity["id"], None, section, label, origin_channel_id,
+        message, channel.id, event_id, pick_type, entity["id"], None, line=line,
+        section=section, label=label, origin_channel_id=origin_channel_id,
         game_date=espn.eastern_date_str(event),
     )
     log.info("Auto-tracked inning-runs pick '%s' (%s) -> event %s", team, pick_type, event_id)
@@ -1525,7 +1527,10 @@ async def _dispatch_pick(
                 section=section, label=label, origin_channel_id=origin_channel_id, manual=manual,
             )
         elif pick["kind"] == "inning_runs":
-            return await _auto_inning_runs(target_channel, pick["team"], pick["pick_type"], section=section, label=label, origin_channel_id=origin_channel_id, manual=manual)
+            return await _auto_inning_runs(
+                target_channel, pick["team"], pick["pick_type"], line=pick.get("line"),
+                section=section, label=label, origin_channel_id=origin_channel_id, manual=manual,
+            )
         elif pick["kind"] == "inning1_result":
             return await _auto_inning1_result(target_channel, pick["team"], pick["pick"], section=section, label=label, origin_channel_id=origin_channel_id, manual=manual)
         elif pick["kind"] == "set1_moneyline":
@@ -2158,7 +2163,7 @@ def _untrack_one(channel_id: int, game_id: str, player: Optional[str]) -> list[s
     for entry in inningtracker.list_tracked_details(channel_id):
         if str(entry["event_id"]) != str(game_id):
             continue
-        if inningtracker.stop_tracking(channel_id, entry["event_id"], entry["pick_type"]):
+        if inningtracker.stop_tracking(channel_id, entry["event_id"], entry["pick_type"], entry.get("line")):
             stopped.append(entry["pick_type"])
 
     for entry in tennispropstracker.list_tracked_details(channel_id):
@@ -2293,10 +2298,10 @@ async def _gather_tracked_items(channel_id: int) -> list[dict]:
 
     for entry in inningtracker.list_tracked_details(channel_id):
         items.append({
-            "kind": "inning", "label": entry["pick_type"], "id_label": entry["event_id"],
+            "kind": "inning", "label": inningtracker._pick_label(entry["pick_type"], entry.get("line")), "id_label": entry["event_id"],
             "message_id": entry["message_id"],
-            "stop": lambda cid=channel_id, eid=entry["event_id"], pt=entry["pick_type"]:
-                inningtracker.stop_tracking(cid, eid, pt),
+            "stop": lambda cid=channel_id, eid=entry["event_id"], pt=entry["pick_type"], ln=entry.get("line"):
+                inningtracker.stop_tracking(cid, eid, pt, ln),
         })
 
     for entry in f5tracker.list_tracked_details(channel_id):

@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """
-Manages background tasks for YRFI/NRFI ("Yes/No Runs First Inning") picks -
-these settle as soon as the 1st inning is fully complete, not when the whole
-game finishes, so they don't share tracker.py/proptracker.py's wait-for-the-
-full-game design. Backed by ESPN's per-inning linescores (see
-espn.get_first_inning_breakdown) - MLB only, first-inning scoring isn't a
-bet type tracked here for other sports.
+Manages background tasks for YRFI/NRFI ("Yes/No Runs First Inning") picks,
+plus the general "1st Inning Total Runs Over/Under N" market (pick_type
+"INNING1_TOTAL_OVER"/"INNING1_TOTAL_UNDER", with a `line`) - YRFI/NRFI is
+just that same market's 0.5 line, worded differently (see picks.py's
+_parse_inning_run_total). Both settle as soon as the 1st inning is fully
+complete, not when the whole game finishes, so they don't share
+tracker.py/proptracker.py's wait-for-the-full-game design. Backed by ESPN's
+per-inning linescores (see espn.get_first_inning_breakdown) - MLB only,
+first-inning scoring isn't a bet type tracked here for other sports.
 
 Mirrors tracker.py/proptracker.py otherwise: hibernation before kickoff
 (a notstarted game's linescore can't change), 🗑️-reaction delete, and
@@ -63,16 +66,31 @@ _SERVICE_EMOJIS = {TRASH_EMOJI, *_RESULT_REACTIONS.values()}
 _PICK_LABELS = {"YRFI": "Yes Runs 1st Inning", "NRFI": "No Runs 1st Inning"}
 
 
+def _pick_label(pick_type: str, line: Optional[float] = None) -> str:
+    if pick_type in _PICK_LABELS:
+        return _PICK_LABELS[pick_type]
+    if pick_type == "INNING1_TOTAL_OVER":
+        return f"Over {line:g} 1st Inning Runs"
+    if pick_type == "INNING1_TOTAL_UNDER":
+        return f"Under {line:g} 1st Inning Runs"
+    return pick_type
+
+
 def _footer_text(message_id: Optional[int] = None) -> str:
     return f"Scorebox ({message_id}) • data via ESPN" if message_id else "Scorebox • data via ESPN"
 
 
-def track_key(channel_id: int, event_id, pick_type: str) -> str:
-    return f"{channel_id}:{event_id}:{pick_type}"
+def track_key(channel_id: int, event_id, pick_type: str, line: Optional[float] = None) -> str:
+    # Distinct lines on the same event/pick_type (e.g. Over 1.5 vs Over 2.5
+    # 1st Inning Runs) need their own key - YRFI/NRFI never pass a line at
+    # all (fixed at 0.5, see module docstring), so the suffix stays empty
+    # for those, unchanged from before this market existed.
+    suffix = f":{line:g}" if line is not None else ""
+    return f"{channel_id}:{event_id}:{pick_type}{suffix}"
 
 
-def is_tracked(channel_id: int, event_id, pick_type: str) -> bool:
-    return track_key(channel_id, event_id, pick_type) in _active
+def is_tracked(channel_id: int, event_id, pick_type: str, line: Optional[float] = None) -> bool:
+    return track_key(channel_id, event_id, pick_type, line) in _active
 
 
 def list_tracked_details(channel_id: int) -> list[dict]:
@@ -80,13 +98,13 @@ def list_tracked_details(channel_id: int) -> list[dict]:
     active_keys = {k for k in _active if k.startswith(prefix)}
     return [
         entry for entry in state.load_innings().values()
-        if track_key(entry["channel_id"], entry["event_id"], entry["pick_type"]) in active_keys
+        if track_key(entry["channel_id"], entry["event_id"], entry["pick_type"], entry.get("line")) in active_keys
     ]
 
 
-def register_message(message_id: int, channel_id: int, event_id, pick_type: str, owner_id: int):
+def register_message(message_id: int, channel_id: int, event_id, pick_type: str, line: Optional[float], owner_id: int):
     """Lets bot.py's 🗑️-reaction handler know who's allowed to delete this message."""
-    _message_owners[message_id] = (channel_id, event_id, pick_type, owner_id)
+    _message_owners[message_id] = (channel_id, event_id, pick_type, line, owner_id)
 
 
 def get_message_owner(message_id: int) -> Optional[tuple]:
@@ -97,18 +115,18 @@ def unregister_message(message_id: int):
     _message_owners.pop(message_id, None)
 
 
-def _persist(channel_id: int, event_id, pick_type: str, message_id: int, team_id: str, owner_id: int):
+def _persist(channel_id: int, event_id, pick_type: str, line: Optional[float], message_id: int, team_id: str, owner_id: int):
     data = state.load_innings()
-    data[track_key(channel_id, event_id, pick_type)] = {
-        "channel_id": channel_id, "event_id": event_id, "pick_type": pick_type,
+    data[track_key(channel_id, event_id, pick_type, line)] = {
+        "channel_id": channel_id, "event_id": event_id, "pick_type": pick_type, "line": line,
         "message_id": message_id, "team_id": team_id, "owner_id": owner_id,
     }
     state.save_innings(data)
 
 
-def _forget(channel_id: int, event_id, pick_type: str):
+def _forget(channel_id: int, event_id, pick_type: str, line: Optional[float] = None):
     data = state.load_innings()
-    data.pop(track_key(channel_id, event_id, pick_type), None)
+    data.pop(track_key(channel_id, event_id, pick_type, line), None)
     state.save_innings(data)
 
 
@@ -121,13 +139,13 @@ def _forget_key(key: str):
     state.save_innings(data)
 
 
-def stop_tracking(channel_id: int, event_id, pick_type: str) -> bool:
-    key = track_key(channel_id, event_id, pick_type)
+def stop_tracking(channel_id: int, event_id, pick_type: str, line: Optional[float] = None) -> bool:
+    key = track_key(channel_id, event_id, pick_type, line)
     task = _active.pop(key, None)
-    _forget(channel_id, event_id, pick_type)
+    _forget(channel_id, event_id, pick_type, line)
     dailylog.record_result(channel_id, "inningtracker", key, "void", "Manually untracked")
-    for message_id, (c_id, e_id, p_type, _owner) in list(_message_owners.items()):
-        if c_id == channel_id and e_id == event_id and p_type == pick_type:
+    for message_id, (c_id, e_id, p_type, ln, _owner) in list(_message_owners.items()):
+        if c_id == channel_id and e_id == event_id and p_type == pick_type and ln == line:
             _message_owners.pop(message_id, None)
     if task:
         task.cancel()
@@ -135,8 +153,17 @@ def stop_tracking(channel_id: int, event_id, pick_type: str) -> bool:
     return False
 
 
+def _grade(pick_type: str, line: Optional[float], total_runs: int) -> str:
+    if pick_type == "INNING1_TOTAL_OVER":
+        return espn.grade_over_under(total_runs, "over", line)
+    if pick_type == "INNING1_TOTAL_UNDER":
+        return espn.grade_over_under(total_runs, "under", line)
+    return espn.grade_yrfi(total_runs, pick_type)
+
+
 async def build_embed(
-    event: dict, pick_type: str, force_result: Optional[str] = None, message_id: Optional[int] = None,
+    event: dict, pick_type: str, line: Optional[float] = None,
+    force_result: Optional[str] = None, message_id: Optional[int] = None,
 ) -> tuple[discord.Embed, discord.File]:
     """force_result overrides the color/title as if this were already graded
     that way, regardless of the event's actual live status - used only by
@@ -154,7 +181,7 @@ async def build_embed(
 
     breakdown = espn.get_first_inning_breakdown(event)
     decided = breakdown is not None
-    result = espn.grade_yrfi(sum(breakdown), pick_type) if decided else None
+    result = _grade(pick_type, line, sum(breakdown)) if decided else None
     postponed = not decided and espn.is_postponed(event)
 
     if force_result:
@@ -182,7 +209,7 @@ async def build_embed(
         embed.title = _RESULT_TITLES[result]
     embed.set_author(name=f"MLB • {league_name}" if league_name != "MLB" else "MLB")
 
-    description_lines = [f"{away_name} v {home_name}", _PICK_LABELS.get(pick_type, pick_type)]
+    description_lines = [f"{away_name} v {home_name}", _pick_label(pick_type, line)]
     if state_name == "pre" and comp.get("date"):
         try:
             kickoff = int(datetime.datetime.fromisoformat(comp["date"].replace("Z", "+00:00")).timestamp())
@@ -214,8 +241,8 @@ async def build_embed(
     return embed, file
 
 
-async def _track_loop(message: discord.Message, channel_id: int, event_id, pick_type: str, team_id: str, owner_id: int):
-    key = track_key(channel_id, event_id, pick_type)
+async def _track_loop(message: discord.Message, channel_id: int, event_id, pick_type: str, line: Optional[float], team_id: str, owner_id: int):
+    key = track_key(channel_id, event_id, pick_type, line)
     deadline = time.monotonic() + config.MAX_TRACK_HOURS * 3600
 
     # When this event was first observed postponed (wall-clock epoch
@@ -266,7 +293,7 @@ async def _track_loop(message: discord.Message, channel_id: int, event_id, pick_
         old_message = message
         message = new_message
         _message_owners.pop(old_message.id, None)
-        register_message(message.id, channel_id, event_id, pick_type, owner_id)
+        register_message(message.id, channel_id, event_id, pick_type, line, owner_id)
         try:
             await old_message.delete()
         except discord.HTTPException as e:
@@ -293,7 +320,7 @@ async def _track_loop(message: discord.Message, channel_id: int, event_id, pick_
         else:
             matchup = f"Event `{event_id}`"
         await parlaytracker.handle_leg_result(
-            message.channel, channel_id, message, "inningtracker", key, f"{matchup} - {_PICK_LABELS.get(pick_type, pick_type)}", "void", group_ids,
+            message.channel, channel_id, message, "inningtracker", key, f"{matchup} - {_pick_label(pick_type, line)}", "void", group_ids,
         )
 
     await asyncio.sleep(random.uniform(0, config.UPDATE_INTERVAL_SECONDS))
@@ -341,7 +368,7 @@ async def _track_loop(message: discord.Message, channel_id: int, event_id, pick_
                     pre_away = next((c.get("team", {}).get("displayName", "?") for c in pre_competitors if c.get("homeAway") == "away"), "?")
                     await parlaytracker.report_leg_progress(
                         message.channel, channel_id, message, "inningtracker", key,
-                        f"{pre_away} v {pre_home} - {_PICK_LABELS.get(pick_type, pick_type)}",
+                        f"{pre_away} v {pre_home} - {_pick_label(pick_type, line)}",
                         f"NOT STARTED - <t:{int(kickoff)}:f>", group_ids,
                     )
 
@@ -362,11 +389,11 @@ async def _track_loop(message: discord.Message, channel_id: int, event_id, pick_
                 continue
             consecutive_misses = 0
 
-            embed, file = await build_embed(event, pick_type, message_id=message.id)
+            embed, file = await build_embed(event, pick_type, line, message_id=message.id)
             leg_competitors = (event.get("header", {}).get("competitions") or [{}])[0].get("competitors", [])
             leg_home = next((c.get("team", {}).get("displayName", "?") for c in leg_competitors if c.get("homeAway") == "home"), "?")
             leg_away = next((c.get("team", {}).get("displayName", "?") for c in leg_competitors if c.get("homeAway") == "away"), "?")
-            leg_label = f"{leg_away} v {leg_home} - {_PICK_LABELS.get(pick_type, pick_type)}"
+            leg_label = f"{leg_away} v {leg_home} - {_pick_label(pick_type, line)}"
 
             if hibernated:
                 # The final wake right before kickoff - bump the card to the
@@ -374,7 +401,7 @@ async def _track_loop(message: discord.Message, channel_id: int, event_id, pick_
                 # be buried under whatever chat happened during the (possibly
                 # long) hibernation. Same treatment as tracker.py/proptracker.py.
                 await _repost_final(embed, file)
-                _persist(channel_id, event_id, pick_type, message.id, team_id, owner_id)
+                _persist(channel_id, event_id, pick_type, line, message.id, team_id, owner_id)
                 continue
 
             breakdown = espn.get_first_inning_breakdown(event)
@@ -385,7 +412,7 @@ async def _track_loop(message: discord.Message, channel_id: int, event_id, pick_
                 # card is buried under chat by the time the 1st inning wraps.
                 await _repost_final(embed, file)
 
-                result = espn.grade_yrfi(sum(breakdown), pick_type)
+                result = _grade(pick_type, line, sum(breakdown))
                 reaction = _RESULT_REACTIONS.get(result)
                 if reaction:
                     try:
@@ -422,7 +449,7 @@ async def _track_loop(message: discord.Message, channel_id: int, event_id, pick_
                     )
                 grace_deadline = postponed_since + config.POSTPONED_VOID_HOURS * 3600
                 if now >= grace_deadline:
-                    void_embed, void_file = await build_embed(event, pick_type, force_result="void", message_id=message.id)
+                    void_embed, void_file = await build_embed(event, pick_type, line, force_result="void", message_id=message.id)
                     await _repost_final(void_embed, void_file)
                     try:
                         await message.add_reaction(_RESULT_REACTIONS["void"])
@@ -520,18 +547,19 @@ async def _track_loop(message: discord.Message, channel_id: int, event_id, pick_
 
 def start_tracking(
     message: discord.Message, channel_id: int, event_id, pick_type: str, team_id: str, owner_id: int,
+    line: Optional[float] = None,
     section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
     game_date: Optional[str] = None,
 ):
-    key = track_key(channel_id, event_id, pick_type)
+    key = track_key(channel_id, event_id, pick_type, line)
     if key in _active:
         return
-    task = asyncio.create_task(_track_loop(message, channel_id, event_id, pick_type, team_id, owner_id))
+    task = asyncio.create_task(_track_loop(message, channel_id, event_id, pick_type, line, team_id, owner_id))
     _active[key] = task
-    register_message(message.id, channel_id, event_id, pick_type, owner_id)
-    _persist(channel_id, event_id, pick_type, message.id, team_id, owner_id)
+    register_message(message.id, channel_id, event_id, pick_type, line, owner_id)
+    _persist(channel_id, event_id, pick_type, line, message.id, team_id, owner_id)
     dailylog.record_pick(
-        channel_id, "inningtracker", key, section, label or _PICK_LABELS.get(pick_type, pick_type), message.id, origin_channel_id,
+        channel_id, "inningtracker", key, section, label or _pick_label(pick_type, line), message.id, origin_channel_id,
         sport="MLB", tournament="MLB", game_date=game_date,
     )
 
@@ -548,6 +576,7 @@ async def resume_all(client: discord.Client):
         except KeyError:
             log.warning("Dropping inning entry from an incompatible state schema: %r", entry)
             continue
+        line = entry.get("line")
         message = None
         for attempt in range(MAX_CONSECUTIVE_MISSES):
             try:
@@ -586,5 +615,5 @@ async def resume_all(client: discord.Client):
             _forget_key(key)
             continue
 
-        start_tracking(message, channel_id, event_id, pick_type, entry["team_id"], entry.get("owner_id"))
+        start_tracking(message, channel_id, event_id, pick_type, entry["team_id"], entry.get("owner_id"), line)
         log.info("Resumed inning tracking for event %s in channel %s", event_id, channel_id)

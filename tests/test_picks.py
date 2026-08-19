@@ -565,6 +565,34 @@ class YrfiNrfiSeparators(unittest.TestCase):
         self.assertEqual(pick["kind"], "inning_runs")
 
 
+class InningOneTotalRuns(unittest.TestCase):
+    """"Over/Under N 1st Inning" at the 0.5 line is exactly YRFI/NRFI worded
+    differently; any other line is the general 1st Inning Total Runs
+    market (inningtracker.py's INNING1_TOTAL_OVER/UNDER)."""
+
+    def test_half_point_line_still_routes_to_yrfi(self):
+        pick = picks.parse_pick_line("[MLB] Philadelphia Phillies vs Miami Marlins - Over 0.5 1st Inning")
+        self.assertEqual(pick, {"kind": "inning_runs", "sport": "baseball", "team": "Philadelphia Phillies", "pick_type": "YRFI"})
+
+    def test_half_point_line_under_routes_to_nrfi(self):
+        pick = picks.parse_pick_line("[MLB] Milwaukee Brewers vs Seattle Mariners - Under 0.5 1st Inning")
+        self.assertEqual(pick, {"kind": "inning_runs", "sport": "baseball", "team": "Milwaukee Brewers", "pick_type": "NRFI"})
+
+    def test_arbitrary_under_line_is_a_new_market(self):
+        pick = picks.parse_pick_line("[MLB] Philadelphia Phillies vs Miami Marlins - Under 1.5 1st Inning")
+        self.assertEqual(pick, {
+            "kind": "inning_runs", "sport": "baseball", "team": "Philadelphia Phillies",
+            "pick_type": "INNING1_TOTAL_UNDER", "line": 1.5,
+        })
+
+    def test_arbitrary_over_line_is_a_new_market(self):
+        pick = picks.parse_pick_line("[MLB] Philadelphia Phillies vs Miami Marlins - Over 2.5 1st Inning")
+        self.assertEqual(pick, {
+            "kind": "inning_runs", "sport": "baseball", "team": "Philadelphia Phillies",
+            "pick_type": "INNING1_TOTAL_OVER", "line": 2.5,
+        })
+
+
 class NamedTeamTotalCanonicalName(unittest.TestCase):
     """The named-team-total regex's capture can pull in trailing wording
     along with the real team name - names_match still validated it

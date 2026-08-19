@@ -138,14 +138,15 @@ _YRFI_LINE_RE = re.compile(r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b)\s*.+?[-:]\s*(YRFI
 
 # "Team A vs Team B - Over 0.5 1st Inning (...)" means exactly the same bet
 # as YRFI ("at least 1 run scores in the 1st inning") worded differently -
-# 0.5 is the only line where "any run" vs "no runs" are the two possible
-# outcomes, so it's routed to the same inningtracker.py kind rather than
-# treated as a game/team total. Only the 0.5 line is recognized - "Over 1.5
-# 1st Inning" means something else (2+ runs) that inningtracker.py doesn't
-# grade, so that's deliberately left unmatched and falls through to being
-# skipped rather than guessed.
+# 0.5 is the line where "any run" vs "no runs" are the two possible
+# outcomes, so that specific line is routed to inningtracker.py's existing
+# YRFI/NRFI pick_type. Any other line ("Over 1.5 1st Inning", "Under 2.5
+# 1st Inning", ...) is a real, different bet (inningtracker.py's
+# INNING1_TOTAL_OVER/UNDER, see _parse_inning_run_total) rather than left
+# unmatched - it settles the same way (once the 1st inning itself ends),
+# just against an arbitrary combined-runs line instead of the fixed 0.5.
 _INNING_RUN_TOTAL_RE = re.compile(
-    r"^(.+?)\s*(?:@|\bvs\.?|\bv\.?)\s*(.+?)\s*-\s*(Over|Under)\s+0\.5\s+1st\s+Inning\b",
+    r"^(.+?)\s*(?:@|\bvs\.?|\bv\.?)\s*(.+?)\s*-\s*(Over|Under)\s+([\d.]+)\s+1st\s+Inning\b",
     re.IGNORECASE,
 )
 
@@ -956,8 +957,16 @@ def _parse_inning_run_total(description: str) -> Optional[dict]:
     team = m.group(1).strip()
     if not team:
         return None
-    pick_type = "YRFI" if m.group(3).lower() == "over" else "NRFI"
-    return {"kind": "inning_runs", "sport": "baseball", "team": team, "pick_type": pick_type}
+    direction = m.group(3).lower()
+    line = float(m.group(4))
+    if line == 0.5:
+        # Exactly the YRFI/NRFI bet, worded as an Over/Under line instead -
+        # route through the same pick_type so it dedupes against/matches an
+        # explicit "NRFI"/"YRFI" line for the same event (see _YRFI_LINE_RE).
+        pick_type = "YRFI" if direction == "over" else "NRFI"
+        return {"kind": "inning_runs", "sport": "baseball", "team": team, "pick_type": pick_type}
+    pick_type = "INNING1_TOTAL_OVER" if direction == "over" else "INNING1_TOTAL_UNDER"
+    return {"kind": "inning_runs", "sport": "baseball", "team": team, "pick_type": pick_type, "line": line}
 
 
 def _parse_inning1_team_pick(description: str) -> Optional[str]:

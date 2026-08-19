@@ -76,10 +76,21 @@ class ResolveLegMatchesEachModulesOwnerShape(unittest.TestCase):
         )
 
     def test_inningtracker_unaffected(self):
-        self._register(inningtracker, 4, 555, "401", "yrfi", 1)
+        self._register(inningtracker, 4, 555, "401", "yrfi", None, 1)
         self.assertEqual(
             parlaytracker.resolve_leg(4),
             ("inningtracker", inningtracker.track_key(555, "401", "yrfi"), 555),
+        )
+
+    def test_inningtracker_total_runs_line(self):
+        # The owner tuple grew a `line` field for the general "1st Inning
+        # Total Runs Over/Under N" market (YRFI/NRFI never pass one, hence
+        # the separate case above) - confirmed this stays in sync since
+        # track_key folds a non-None line into the key string.
+        self._register(inningtracker, 40, 555, "401", "INNING1_TOTAL_OVER", 1.5, 1)
+        self.assertEqual(
+            parlaytracker.resolve_leg(40),
+            ("inningtracker", inningtracker.track_key(555, "401", "INNING1_TOTAL_OVER", 1.5), 555),
         )
 
     def test_f5tracker_handicap(self):
