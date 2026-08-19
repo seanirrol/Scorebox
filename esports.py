@@ -268,6 +268,23 @@ def _hawk_map_winners(series_data: dict) -> list[Optional[str]]:
     return winners
 
 
+def _hawk_game_kills(game: dict) -> Optional[tuple[int, int]]:
+    """(team1, team2) kill count from one map's last recorded state, still
+    oriented to hawk.live's own team1/team2 (not yet home/away) - radiant/
+    dire flipped according to isTeam1Radiant. None if that map has no state
+    data recorded yet. Shared by _hawk_live_kill_count (whichever map is
+    live right now), _hawk_total_kills (summed across every map) and
+    _hawk_map_kills (one specific map by number)."""
+    states = game.get("states") or []
+    if not states:
+        return None
+    last_state = states[-1]
+    radiant_kills, dire_kills = last_state.get("radiantScore"), last_state.get("direScore")
+    if radiant_kills is None or dire_kills is None:
+        return None
+    return (radiant_kills, dire_kills) if game.get("isTeam1Radiant") else (dire_kills, radiant_kills)
+
+
 def _hawk_live_kill_count(series_data: dict) -> Optional[tuple[int, int]]:
     """(home, away) kill count for whichever map is currently being played
     - the one entry in the series' own game list with no winner recorded
@@ -278,16 +295,29 @@ def _hawk_live_kill_count(series_data: dict) -> Optional[tuple[int, int]]:
     current = next((g for g in games if g.get("isRadiantWinner") is None), None)
     if not current:
         return None
-    states = current.get("states") or []
-    if not states:
+    kills = _hawk_game_kills(current)
+    if kills is None:
         return None
-    last_state = states[-1]
-    radiant_kills, dire_kills = last_state.get("radiantScore"), last_state.get("direScore")
-    if radiant_kills is None or dire_kills is None:
-        return None
-    team1_kills, team2_kills = (radiant_kills, dire_kills) if current.get("isTeam1Radiant") else (dire_kills, radiant_kills)
     home_is_team1 = ref["home_is_team1"]
-    return (team1_kills, team2_kills) if home_is_team1 else (team2_kills, team1_kills)
+    return kills if home_is_team1 else (kills[1], kills[0])
+
+
+def _hawk_map_kills(series_data: dict, map_number: int) -> Optional[tuple[int, int]]:
+    """(home, away) kill count for one specific map (1-indexed) in the
+    series - backs grade_map_kills_handicap, a spread on a single map's
+    kill count rather than the series-combined total (_hawk_total_kills) or
+    whichever map happens to be live right now (_hawk_live_kill_count).
+    None if that map hasn't been played, or has no state data recorded yet."""
+    ref = series_data["_ref"]
+    games = _hawk_series_games(ref["series"])
+    game = next((g for g in games if g.get("number") == map_number), None)
+    if not game:
+        return None
+    kills = _hawk_game_kills(game)
+    if kills is None:
+        return None
+    home_is_team1 = ref["home_is_team1"]
+    return kills if home_is_team1 else (kills[1], kills[0])
 
 
 def _hawk_total_kills(series_data: dict) -> Optional[tuple[int, int]]:
@@ -305,20 +335,12 @@ def _hawk_total_kills(series_data: dict) -> Optional[tuple[int, int]]:
     team1_total = team2_total = 0
     found_any = False
     for g in games:
-        states = g.get("states") or []
-        if not states:
-            continue
-        last_state = states[-1]
-        radiant_kills, dire_kills = last_state.get("radiantScore"), last_state.get("direScore")
-        if radiant_kills is None or dire_kills is None:
+        kills = _hawk_game_kills(g)
+        if kills is None:
             continue
         found_any = True
-        if g.get("isTeam1Radiant"):
-            team1_total += radiant_kills
-            team2_total += dire_kills
-        else:
-            team1_total += dire_kills
-            team2_total += radiant_kills
+        team1_total += kills[0]
+        team2_total += kills[1]
     if not found_any:
         return None
     return (team1_total, team2_total) if home_is_team1 else (team2_total, team1_total)
@@ -762,6 +784,17 @@ def total_kills(series_data: dict) -> Optional[tuple[int, int]]:
     return _hawk_total_kills(series_data)
 
 
+def map_kills(series_data: dict, map_number: int) -> Optional[tuple[int, int]]:
+    """(home, away) kill count for one specific map (1-indexed) in the
+    series - Dota 2 only (hawk.live; same restriction as total_kills, see
+    its own docstring). None if that map hasn't been played, has no kill
+    state data yet, or the series was only ever resolved via the
+    GosuGamers fallback (no per-map state data to read at all)."""
+    if series_data["sport"] != "dota2" or series_data["_ref"]["provider"] != "hawklive":
+        return None
+    return _hawk_map_kills(series_data, map_number)
+
+
 # --- grading -----------------------------------------------------------
 
 def _oriented_scores(series_data: dict, picked_team: str) -> Optional[tuple[int, int]]:
@@ -854,6 +887,36 @@ def grade_team_total_kills(series_data: dict, picked_team: str, direction: str, 
     if picked_kills == line:
         return "push"
     return "won" if (picked_kills > line) == (direction == "over") else "lost"
+
+
+def grade_map_kills_handicap(series_data: dict, map_number: int, picked_team: str, line: float) -> Optional[str]:
+    """Kills-handicap spread on one specific map's kill count (e.g. "Team X
+    (-4.5) Map 1 Kills Handicap") - Dota 2 only, needs hawk.live's own
+    per-map state data (see map_kills). Settles the moment that specific
+    map itself finishes, not the whole series - unlike grade_total_kills/
+    grade_team_total_kills (series-wide combined totals, which have to wait
+    for the series to end since kills keep accumulating across maps), a
+    single map's final kill count is fully known as soon as that map ends.
+    Voided if the series finishes before that map was ever played, same
+    convention as grade_map_winner."""
+    winners = map_winners(series_data)
+    if map_number < 1 or map_number > len(winners) or winners[map_number - 1] is None:
+        return "void" if is_decided(series_data) else None
+    home, away = series_data["home_team"], series_data["away_team"]
+    if names_match(home, picked_team):
+        picked_is_home = True
+    elif names_match(away, picked_team):
+        picked_is_home = False
+    else:
+        return None
+    kills = map_kills(series_data, map_number)
+    if kills is None:
+        return None
+    picked_kills, other_kills = kills if picked_is_home else (kills[1], kills[0])
+    adjusted = picked_kills + line
+    if adjusted == other_kills:
+        return "push"
+    return "won" if adjusted > other_kills else "lost"
 
 
 def grade_win_at_least_one_map(series_data: dict, picked_team: str, direction: str = "yes") -> Optional[str]:

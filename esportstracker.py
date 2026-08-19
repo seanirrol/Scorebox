@@ -18,6 +18,10 @@ esports.py's own docstring for where the underlying data comes from):
   esports.live_kill_count's own docstring).
 - "team_total_kills": one named team's own kill total across every map
   played - same Dota 2-only restriction.
+- "map_kills_handicap": a spread on one specific map's own kill count (e.g.
+  "Team X (-4.5) Map 1 Kills Handicap") - same Dota 2-only restriction,
+  settles once that specific map finishes rather than waiting on the whole
+  series.
 
 Mirrors settracker.py's multi-mode design (one tracker module, several
 distinct grading shapes selected by `market`) rather than a file per market.
@@ -180,6 +184,8 @@ def pick_label(
         return f"{picked_team} to Win {picked_maps}-{other_maps}"
     if market == "total_kills":
         return f"{direction.title()} {line:g} Total Kills"
+    if market == "map_kills_handicap":
+        return f"{picked_team} {line:+g} Map {map_number} Kills Handicap"
     return f"{picked_team} {direction.title()} {line:g} Total Kills"  # team_total_kills
 
 
@@ -206,6 +212,8 @@ def grade_now(
         result = esports.grade_correct_score(series_data, picked_team, picked_maps, other_maps)
     elif market == "total_kills":
         result = esports.grade_total_kills(series_data, direction, line)
+    elif market == "map_kills_handicap":
+        result = esports.grade_map_kills_handicap(series_data, map_number, picked_team, line)
     else:  # team_total_kills
         result = esports.grade_team_total_kills(series_data, picked_team, direction, line)
     return result is not None, result
@@ -252,6 +260,20 @@ async def build_embed(
     current_maps: Optional[int] = None
     if market == "total_maps":
         current_maps = series_data["home_score"] + series_data["away_score"]
+
+    # Picked team's own running kill count in the specific map this pick is
+    # about, for map_kills_handicap - unlike current_kills/current_maps
+    # below this can't be used for an early-win tag (a spread between two
+    # independently-accumulating counts can still flip either way before
+    # the map ends), so it's display-only.
+    current_map_kills: Optional[int] = None
+    if market == "map_kills_handicap":
+        kills = esports.map_kills(series_data, map_number)
+        if kills is not None:
+            if esports.names_match(series_data["home_team"], picked_team):
+                current_map_kills = kills[0]
+            elif esports.names_match(series_data["away_team"], picked_team):
+                current_map_kills = kills[1]
 
     # Picked team's own map count so far, for win_at_least_one_map - same
     # early-lock reasoning as the kill/map totals below, since that market's
@@ -311,6 +333,10 @@ async def build_embed(
         # e.g. "Over 3.5 Total Maps (2)" - same idea, total_maps just
         # didn't get this when total_kills/team_total_kills did.
         label = f"{label} ({current_maps})"
+    elif current_map_kills is not None:
+        # e.g. "Team X -4.5 Map 1 Kills Handicap (32)" - picked team's own
+        # running kill count in that specific map.
+        label = f"{label} ({current_map_kills})"
     description_lines = [label]
     if status == "notstarted" and series_data.get("start_epoch"):
         description_lines.append(f"<t:{int(series_data['start_epoch'])}:f>")

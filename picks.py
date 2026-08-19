@@ -1326,6 +1326,18 @@ _ESPORTS_TEAM_TOTAL_KILLS_AFTER_RE = re.compile(
     r"^(.+?)\s*(?:@|\bvs\.?|\bv\.?)\s*(.+?)\s*-\s*(.+?)\s+(Over|Under)\s+([\d.]+)\s*(?:total\s+)?kills\b", re.IGNORECASE,
 )
 
+# "Team A vs Team B - Team X (-4.5) Map 1 Kills Handicap" / "... - Team X
+# -4.5 Map 1 Kills Handicap" (parens optional) - a spread on one specific
+# map's own kill count, distinct from _ESPORTS_MAP_HANDICAP_RE (maps-won
+# handicap) and _ESPORTS_TEAM_TOTAL_KILLS_RE (series-combined kill total) -
+# neither of those can match this wording (one requires "map handicap" with
+# nothing between "map" and "handicap", the other has no "map N" at all).
+# Dota 2 only, same restriction as every other kills market here.
+_ESPORTS_MAP_KILLS_HANDICAP_RE = re.compile(
+    r"^(.+?)\s*(?:@|\bvs\.?|\bv\.?)\s*(.+?)\s*-\s*(.+?)\s*\(?([+-]\d+(?:\.\d+)?)\)?\s*map\s*(\d+)\s*kills\s*handicap\b",
+    re.IGNORECASE,
+)
+
 
 def _parse_esports_map_handicap(text: str) -> Optional[dict]:
     m = _ESPORTS_MAP_HANDICAP_RE.match(text)
@@ -1433,6 +1445,21 @@ def _parse_esports_team_total_kills(text: str) -> Optional[dict]:
     }
 
 
+def _parse_esports_map_kills_handicap(text: str) -> Optional[dict]:
+    m = _ESPORTS_MAP_KILLS_HANDICAP_RE.match(text)
+    if not m:
+        return None
+    team_a, team_b, named = m.group(1).strip(), m.group(2).strip(), m.group(3).strip()
+    if not team_a or not team_b or not named:
+        return None
+    if not (scores365.names_match(named, team_a) or scores365.names_match(named, team_b)):
+        return None
+    return {
+        "kind": "esports_map_kills_handicap", "team_a": team_a, "team_b": team_b, "team": named,
+        "line": float(m.group(4)), "map_number": int(m.group(5)),
+    }
+
+
 def _parse_esports_total_kills(text: str) -> Optional[dict]:
     m = _ESPORTS_TOTAL_KILLS_BEFORE_RE.match(text) or _ESPORTS_TOTAL_KILLS_AFTER_RE.match(text)
     if not m:
@@ -1482,7 +1509,7 @@ def _parse_esports_pick(description: str, sport: str) -> Optional[dict]:
         # checked first, same "named team distinguishes from the combined
         # shape" ordering used for every other sport's own team-vs-combined
         # total pair in this module.
-        parsers = [_parse_esports_team_total_kills, _parse_esports_total_kills] + parsers
+        parsers = [_parse_esports_map_kills_handicap, _parse_esports_team_total_kills, _parse_esports_total_kills] + parsers
     for parser in parsers:
         pick = parser(text)
         if pick:

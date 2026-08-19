@@ -1627,6 +1627,12 @@ async def _dispatch_pick(
                 picked_team=pick["team"], direction=pick["direction"], line=pick["line"],
                 section=section, label=label, origin_channel_id=origin_channel_id,
             )
+        elif pick["kind"] == "esports_map_kills_handicap":
+            return await _auto_esports(
+                target_channel, pick["sport"], pick["team_a"], pick["team_b"], "map_kills_handicap",
+                picked_team=pick["team"], line=pick["line"], map_number=pick["map_number"],
+                section=section, label=label, origin_channel_id=origin_channel_id,
+            )
         else:
             return await _auto_playerprops(
                 target_channel, pick["sport"], pick["player"], pick["stat"],

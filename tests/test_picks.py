@@ -171,6 +171,52 @@ class EsportsBareHeaderNoMatchupFallback(unittest.TestCase):
         self.assertEqual(picked, [{"kind": "track", "sport": "basketball", "team": "Indiana Fever", "section": "WNBA", "raw": "Indiana Fever"}])
 
 
+class EsportsMapKillsHandicap(unittest.TestCase):
+    """"Team X (-4.5) Map 1 Kills Handicap" - a spread on one specific map's
+    own kill count, distinct from the maps-won Map Handicap and the
+    series-combined Total Kills markets already covered above."""
+
+    def test_parens_line_form(self):
+        pick = picks.parse_pick_line(
+            "[Dota 2] Nigma Galaxy vs Team Falcons - Team Falcons (-4.5) Map 1 Kills Handicap (DraftKings -110)"
+        )
+        self.assertEqual(pick, {
+            "kind": "esports_map_kills_handicap", "sport": "dota2",
+            "team_a": "Nigma Galaxy", "team_b": "Team Falcons", "team": "Team Falcons",
+            "line": -4.5, "map_number": 1,
+        })
+
+    def test_no_parens_line_form(self):
+        pick = picks.parse_pick_line("[Dota 2] Nigma Galaxy vs Team Falcons - Team Falcons -4.5 Map 1 Kills Handicap")
+        self.assertEqual(pick["line"], -4.5)
+        self.assertEqual(pick["map_number"], 1)
+
+    def test_positive_line_and_later_map_number(self):
+        pick = picks.parse_pick_line("[Dota 2] Nigma Galaxy vs Team Falcons - Nigma Galaxy (+4.5) Map 2 Kills Handicap")
+        self.assertEqual(pick["team"], "Nigma Galaxy")
+        self.assertEqual(pick["line"], 4.5)
+        self.assertEqual(pick["map_number"], 2)
+
+    def test_unrelated_named_team_returns_none(self):
+        pick = picks.parse_pick_line("[Dota 2] Nigma Galaxy vs Team Falcons - Team Spirit (-4.5) Map 1 Kills Handicap")
+        self.assertIsNone(pick)
+
+    def test_does_not_collide_with_plain_map_handicap(self):
+        # Same "Team X (-N) Map ... Handicap" shape minus "Kills" - must
+        # still resolve as the maps-won handicap, not this market.
+        pick = picks.parse_pick_line("[Dota 2] Nigma Galaxy vs Team Falcons - Team Falcons (-1.5) Map Handicap")
+        self.assertEqual(pick["kind"], "esports_map_handicap")
+
+    def test_does_not_collide_with_total_kills(self):
+        pick = picks.parse_pick_line("[Dota 2] Nigma Galaxy vs Team Falcons - Over 130.5 Total Kills")
+        self.assertEqual(pick["kind"], "esports_total_kills")
+
+    def test_cs2_not_supported(self):
+        # Kills are Dota 2-only - CS2 has no kill data anywhere.
+        pick = picks.parse_pick_line("[CS2] Team Liquid vs Team Vitality - Team Liquid (-4.5) Map 1 Kills Handicap")
+        self.assertIsNone(pick)
+
+
 class MisfiledPropUnderWrongSectionHeader(unittest.TestCase):
     """A player-prop-shaped line whose stat belongs to a DIFFERENT sport
     than its own section header (the tipster's own mistake, not a code
