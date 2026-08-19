@@ -369,10 +369,29 @@ async def build_embed(
         home_cols, away_cols = [frozen_cols[0]], [frozen_cols[1]]
     else:
         # Not decided yet doesn't mean nothing to show - the live sets-won
-        # score is already sitting there mid-match.
+        # score is already sitting there mid-match. main_scores alone is
+        # sets won though, which legitimately reads 0-0 for the entire
+        # first set of a match - without the current-set games score (and
+        # in-game points) alongside it, a live 3-3-in-Set-1 match looks
+        # frozen at 0-0 the whole time. Same sub-row treatment tracker.py's
+        # own build_embed already gives every tennis pick it tracks -
+        # confirmed live: a win_a_set/set1_total_games card sat showing
+        # "0 - 0" for several minutes into a live, actively-progressing
+        # Set 1 because this block never had it.
         live_scores = scores365.main_scores(game)
         home_cols = [scores365.fmt_score(live_scores[0])] if live_scores else ["-"]
         away_cols = [scores365.fmt_score(live_scores[1])] if live_scores else ["-"]
+
+        set_score = scores365.current_set_score(game, sport_id)
+        if set_score:
+            home_cols.append(scores365.fmt_score(set_score[0]))
+            away_cols.append(scores365.fmt_score(set_score[1]))
+
+        if status == "inprogress":
+            points = scores365.tennis_current_game_points(game)
+            if points:
+                home_cols.append(scores365.tennis_point_label(points[0]))
+                away_cols.append(scores365.tennis_point_label(points[1]))
 
     home_name = home_competitor.get("name", "?")
     away_name = away_competitor.get("name", "?")
