@@ -121,6 +121,26 @@ class ResolveLeg(unittest.TestCase):
         self.assertEqual(result["status"], "won")
         self.assertEqual(result["label"], "Tampa Bay Rays ML")
 
+    def test_dirty_dailylog_label_still_gets_cleaned_for_display(self):
+        # Confirmed live: a pick tracked before picks.clean_label existed
+        # still has the raw "(Bookmaker odds)" annotation baked into its
+        # stored dailylog label - the report must not surface that as-is.
+        key = tracker.track_key(masterparlay.PREMIUM_SCORES_CHANNEL_ID, 4614731, picked_team="Tampa Bay Rays")
+        self._seed("tracker", key, "won", "Tampa Bay Rays ML (Bet365 -148)", "WON")
+        with patch("scores365.find_match_for_team", return_value=({"id": 4614731}, 100)):
+            result = _run(masterparlay.resolve_leg("Tampa Bay Rays ML"))
+        self.assertEqual(result["label"], "Tampa Bay Rays ML")
+
+    def test_unresolved_legs_own_text_is_also_cleaned(self):
+        # _PARLAY_LEG_RE only strips the trailing "(odds | NN% Conf)" at
+        # parse time - a leftover "(Alt Line)" on an otherwise-unresolved
+        # leg still needs cleaning before it's shown as a label. Uses a
+        # shape none of the three resolvers even attempt (no ML/spread/F5/
+        # Over-Under wording) so this never touches the network.
+        result = _run(masterparlay.resolve_leg("Some Unsupported Bet Type (Alt Line)"))
+        self.assertEqual(result["status"], "unresolved")
+        self.assertEqual(result["label"], "Some Unsupported Bet Type")
+
     def test_f5_moneyline_leg_matches_a_seeded_loss(self):
         key = f5tracker.track_key(masterparlay.PREMIUM_SCORES_CHANNEL_ID, 4614787, picked_team="Houston Astros")
         self._seed("f5tracker", key, "lost", "Houston Astros F5 ML", "LOST")

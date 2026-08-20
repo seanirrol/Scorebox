@@ -190,12 +190,17 @@ async def resolve_leg(leg_text: str) -> dict:
     real dailylog status) when the leg's wording isn't one of the shapes
     this module knows, or it genuinely isn't currently tracked - kept
     distinct from won/lost/push/void/pending so a report can call it out
-    clearly instead of guessing."""
+    clearly instead of guessing. label is always run through
+    picks.clean_label - dailylog's own stored label can still carry
+    "(Bookmaker odds)"/"(Alt Line)" annotations for anything tracked
+    before that cleanup existed, and an unresolved leg's own text can
+    still carry "(Alt Line)" too (only the "(odds | NN% Conf)" suffix is
+    stripped by _PARLAY_LEG_RE at parse time, not every trailing paren)."""
     for resolver in (_resolve_f5_ml, _resolve_ml_or_spread, _resolve_player_prop):
         entry = await resolver(leg_text)
         if entry:
-            return {"raw": leg_text, "status": entry["status"], "label": entry["label"], "detail": entry["detail"]}
-    return {"raw": leg_text, "status": "unresolved", "label": leg_text, "detail": "Not currently tracked"}
+            return {"raw": leg_text, "status": entry["status"], "label": picks.clean_label(entry["label"]), "detail": entry["detail"]}
+    return {"raw": leg_text, "status": "unresolved", "label": picks.clean_label(leg_text), "detail": "Not currently tracked"}
 
 
 def grade_parlay(resolved_legs: list[dict]) -> str:
