@@ -118,6 +118,25 @@ async def _safe_add_trash_reaction(message: discord.Message):
 # this bot (_message_owners, _active_tracks, etc).
 _tracked_lines: dict[int, dict[str, int]] = {}
 
+# Picks-channel message ids on_message has already started processing -
+# guards against the exact same Discord message being handed to on_message
+# more than once (discord.py/the gateway can redeliver a MESSAGE_CREATE,
+# e.g. around a session resume) triggering two full concurrent passes over
+# the same picks. Each individual pick's own is_tracked()/is_queued() check
+# only guards against a SECOND identical pick line within a single pass or
+# a genuinely later repost - it does nothing against two passes racing each
+# other, since neither has registered the pick as tracked yet when the
+# other's check runs. Confirmed live: a 26-pick message whose later picks
+# each take real seconds (sequential ESPN/365scores network lookups) got
+# several of its slower picks (player props, the last game before them)
+# posted 2-3x each, a few seconds apart - consistent with on_message
+# running that many times concurrently for the same message, not a bug in
+# any individual _auto_* function. Checked and inserted before any `await`
+# in on_message so two "concurrent" deliveries can't both pass the check -
+# asyncio only interleaves tasks at an await point. Same in-memory,
+# never-pruned, restart-clears-it convention as _tracked_lines above.
+_processed_message_ids: set[int] = set()
+
 
 async def _safe_resume(name: str, coro):
     """Isolates one module's resume_all() from every other - previously a
@@ -1369,6 +1388,10 @@ async def on_message(message: discord.Message):
     target_channel_id = config.PICKS_CHANNEL_MAP.get(message.channel.id)
     if target_channel_id is None or message.author.id == client.user.id:
         return
+    if message.id in _processed_message_ids:
+        log.warning("Ignoring duplicate on_message delivery for message %s in channel %s", message.id, message.channel.id)
+        return
+    _processed_message_ids.add(message.id)
 
     log.info("Picks channel message received: %r", message.content)
     parsed = picks.parse_picks_message(message.content)
