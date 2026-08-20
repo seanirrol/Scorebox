@@ -57,6 +57,22 @@ class MatchupPrefixedProps(unittest.TestCase):
         pick = picks.parse_pick_line("[MLB Props] Angels vs Giants - Over 8.5 Total Runs (FanDuel -110)")
         self.assertIsNone(pick)
 
+    def test_single_team_name_prefix_recovers_the_real_prop(self):
+        # Same idea as the full "Team A vs Team B - " matchup prefix above,
+        # but only one team named - no "vs"/"@" separator at all, so
+        # has_matchup never triggers. Confirmed live in a real parlay slip's
+        # own leg wording ("Las Vegas Aces - A'ja Wilson Over 21.5 Points")
+        # - player used to capture the team name too and fail to resolve.
+        pick = picks.parse_pick_line("[WNBA Props] Las Vegas Aces - A'ja Wilson Over 21.5 Points (DraftKings -225)")
+        self.assertEqual(pick["kind"], "playerprops")
+        self.assertEqual(pick["player"], "A'ja Wilson")
+        self.assertEqual(pick["stat"], "Points")
+
+    def test_single_team_name_prefix_combo_stat_prop(self):
+        pick = picks.parse_pick_line("[WNBA Props] Chicago Sky - Angel Reese P+R+A Over 24.5 (PrizePicks -139)")
+        self.assertEqual(pick["kind"], "playerprops")
+        self.assertEqual(pick["player"], "Angel Reese")
+
 
 class StatAliases(unittest.TestCase):
     """Wording variants that don't substring-match the catalog label at

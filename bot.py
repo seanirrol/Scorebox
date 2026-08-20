@@ -37,6 +37,7 @@ import inning1tracker
 import inningtracker
 import kboproptracker
 import koreabaseball
+import masterparlay
 import parlaytracker
 import pendingdelete
 import pendingauto
@@ -2954,6 +2955,81 @@ async def summary(interaction: discord.Interaction):
         return
     view = SummaryDatePickView(route.origins, route.post_channel_id, dates, interaction.user.id)
     await interaction.followup.send("Pick a date to preview:", view=view, ephemeral=True)
+
+
+class MasterParlayPublishView(discord.ui.View):
+    """Lets /premiumparlay's ephemeral preview actually get published, or
+    dropped. Re-fetches the source slip and re-resolves every leg fresh at
+    click time (not the preview-time snapshot) - same reasoning as
+    SummaryPostView/WinLossGraphPostView: a leg can resolve in the time
+    between preview and click, and stale data here could publish a result
+    that's since gone final wrong."""
+
+    def __init__(self, source_message_id: int, requester_id: int):
+        super().__init__(timeout=900)
+        self.source_message_id = source_message_id
+        self.requester_id = requester_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.requester_id:
+            await interaction.response.send_message("Only the person who ran /premiumparlay can use this.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="Publish", style=discord.ButtonStyle.success)
+    async def publish(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            source = await interaction.channel.fetch_message(self.source_message_id)
+        except discord.HTTPException:
+            await interaction.edit_original_response(content="Couldn't re-fetch the original slip - it may have been deleted.", embeds=[], view=None)
+            self.stop()
+            return
+        embeds = await masterparlay.build_report(source.content)
+        if not embeds:
+            await interaction.edit_original_response(content="Nothing to publish - no parlays found in the slip anymore.", embeds=[], view=None)
+            self.stop()
+            return
+        target = client.get_channel(masterparlay.PUBLISH_CHANNEL_ID) or await client.fetch_channel(masterparlay.PUBLISH_CHANNEL_ID)
+        for i in range(0, len(embeds), 10):
+            await target.send(embeds=embeds[i : i + 10])
+        botlog.event(
+            f"🎟️ Master parlay report published to <#{masterparlay.PUBLISH_CHANNEL_ID}> "
+            f"(previewed in <#{interaction.channel_id}>) by **{interaction.user}**"
+        )
+        await interaction.edit_original_response(content="Published.", embeds=[], view=None)
+        self.stop()
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content="Cancelled - nothing published.", embeds=[], view=None)
+        self.stop()
+
+
+@tree.command(name="premiumparlay", description="Preview GreenFox's latest MASTER PARLAYS slip graded against already-tracked legs, then optionally publish it")
+async def premiumparlay(interaction: discord.Interaction):
+    if interaction.channel_id != masterparlay.PARLAY_SLIP_CHANNEL_ID:
+        await interaction.response.send_message("This command only works in the parlay slip channel.", ephemeral=True)
+        return
+    _log_command(interaction)
+    await interaction.response.defer(ephemeral=True)
+
+    message = await masterparlay.find_latest_slip(interaction.channel)
+    if not message:
+        await interaction.followup.send("No MASTER PARLAYS slip found in recent channel history.", ephemeral=True)
+        return
+    embeds = await masterparlay.build_report(message.content)
+    if not embeds:
+        await interaction.followup.send("Found a slip but couldn't parse any parlays from it.", ephemeral=True)
+        return
+    truncated = ""
+    if len(embeds) > 10:
+        truncated = f" (preview truncated to 10 of {len(embeds)} - publishing still sends all of them)"
+    view = MasterParlayPublishView(message.id, interaction.user.id)
+    await interaction.followup.send(
+        content=f"Preview only - not posted yet. Click below to publish it to <#{masterparlay.PUBLISH_CHANNEL_ID}>.{truncated}",
+        embeds=embeds[:10], view=view, ephemeral=True,
+    )
 
 
 def _build_winlossgraph_embed_and_file(image_bytes: bytes) -> tuple[discord.Embed, discord.File]:

@@ -886,16 +886,31 @@ def _looks_like_misfiled_prop(sport: str, description: str) -> bool:
     return any(other != sport and _match_stat_label(other, raw_stat) for other in _INFER_SPORT_CANDIDATES)
 
 
+def _clean_player_name(raw: str) -> str:
+    """Strips a trailing "-" separator sometimes used before "Over/Under"
+    (e.g. "Elly De La Cruz - Over 1.5 Total Bases"), then a leading
+    "TeamName - " prefix if one's still left over (e.g. "Las Vegas Aces -
+    A'ja Wilson Over 21.5 Points") - same idea as the full "Team A vs Team
+    B - " matchup prefix stripped elsewhere in this module (see
+    _strip_matchup_prefix), just for a single named team rather than a
+    whole matchup. Confirmed live in a real parlay slip's own leg wording -
+    without this, "player" captured the team name too and the whole prop
+    failed to resolve against ESPN. A real player's name never legitimately
+    contains " - " itself, so taking just the text after the last dash is
+    safe either way."""
+    cleaned = re.sub(r"[\s-]+$", "", raw).strip()
+    if " - " in cleaned:
+        cleaned = cleaned.rsplit(" - ", 1)[-1].strip()
+    return cleaned
+
+
 def _parse_player_prop(sport_key: str, sport: str, description: str) -> Optional[dict]:
     if sport not in espn.SPORT_PATHS:
         return None
     pm = _PLAYER_STAT_RE.match(description)
     if not pm:
         return None
-    # Trailing " -" separator sometimes used before "Over/Under" (e.g. "Elly
-    # De La Cruz - Over 1.5 Total Bases") stays attached to group(1) since the
-    # regex only anchors on whitespace before Over/Under, not the dash itself.
-    player = re.sub(r"[\s-]+$", "", pm.group(1)).strip()
+    player = _clean_player_name(pm.group(1))
     direction = pm.group(2).lower()
     line = float(pm.group(3))
     raw_stat = pm.group(4).strip()
@@ -921,7 +936,7 @@ def _parse_combo_stat_prop(sport_key: str, sport: str, description: str) -> Opti
     m = _COMBO_STAT_BEFORE_RE.match(description)
     if not m:
         return None
-    player = re.sub(r"[\s-]+$", "", m.group(1)).strip()
+    player = _clean_player_name(m.group(1))
     direction = m.group(3).lower()
     line = float(m.group(4))
     prop_sport = _PROP_SPORT_OVERRIDE.get(sport_key, sport)
