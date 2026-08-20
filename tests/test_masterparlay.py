@@ -227,15 +227,21 @@ class _FakeChannel:
 
 
 class FindLatestSlip(unittest.TestCase):
-    """GreenFox's real slips split across multiple messages a few seconds
-    apart (Discord's own per-message length cap) - confirmed live, a real
-    4-parlay slip landed as two messages 20 seconds apart, and grabbing
-    only the single most recent one silently dropped the first two
-    parlays entirely."""
+    """GreenFox's real slips split across multiple messages, sometimes a
+    few seconds apart (Discord's own per-message length cap - confirmed
+    live, a real 4-parlay slip landed as two messages 20 seconds apart),
+    sometimes tens of minutes apart (a follow-up slip posted later the
+    same day) - grouping is per Eastern calendar date (matching
+    dailylog's own date convention), not proximity, so everything posted
+    on the same day combines into one slip regardless of the gap between
+    messages, and a new day's slip never merges with the previous one's."""
 
     def _t(self, seconds_ago):
         import datetime
-        return datetime.datetime(2026, 8, 20, 2, 39, 19) - datetime.timedelta(seconds=seconds_ago)
+        # 2026-08-20 20:39:19 UTC = 2026-08-20 16:39:19 EDT - comfortably
+        # mid-day Eastern, nowhere near a midnight boundary.
+        base = datetime.datetime(2026, 8, 20, 20, 39, 19, tzinfo=datetime.timezone.utc)
+        return base - datetime.timedelta(seconds=seconds_ago)
 
     def test_two_messages_close_together_same_author_combine(self):
         older = _FakeMessage(1, "🎟️ MASTER PARLAYS 🎟️\n🎟️ The Daily Double (+115)\n• Leg 1: Tampa Bay Rays ML (-150 | 88% Conf)", 42, self._t(20))
@@ -251,6 +257,17 @@ class FindLatestSlip(unittest.TestCase):
         parlays = masterparlay.parse_master_parlays(combined)
         self.assertEqual([p["name"] for p in parlays], ["The Daily Double", "The Four-Fold Fortress"])
 
+    def test_same_day_despite_a_big_gap_still_combines(self):
+        # A follow-up slip posted 30 minutes after the first two, same
+        # Eastern day - per explicit request, this now combines instead
+        # of being treated as a separate, unreachable-once-superseded slip.
+        first = _FakeMessage(1, "🎟️ The Daily Double (+115)\n• Leg 1: Tampa Bay Rays ML (-150 | 88% Conf)", 42, self._t(35 * 60))
+        second = _FakeMessage(2, "🎟️ The Triple Threat (+170)\n• Leg 1: Houston Astros F5 ML (-135 | 87% Conf)", 42, self._t(34 * 60))
+        third = _FakeMessage(3, "🎟️ The Four-Fold Fortress (+345)\n• Leg 1: Atlanta Dream ML (-350 | 87% Conf)", 42, self._t(0))
+        channel = _FakeChannel([first, second, third])
+        run = _run(masterparlay.find_latest_slip(channel))
+        self.assertEqual([m.id for m in run], [1, 2, 3])
+
     def test_different_author_breaks_the_run(self):
         slip = _FakeMessage(1, "🎟️ The Daily Double (+115)\n• Leg 1: Tampa Bay Rays ML (-150 | 88% Conf)", 42, self._t(20))
         other = _FakeMessage(2, "unrelated chat", 99, self._t(10))
@@ -259,7 +276,7 @@ class FindLatestSlip(unittest.TestCase):
         run = _run(masterparlay.find_latest_slip(channel))
         self.assertEqual([m.id for m in run], [3])
 
-    def test_large_gap_breaks_the_run(self):
+    def test_different_calendar_day_breaks_the_run(self):
         old_slip = _FakeMessage(1, "🎟️ The Daily Double (+115)\n• Leg 1: Tampa Bay Rays ML (-150 | 88% Conf)", 42, self._t(24 * 3600))
         new_slip = _FakeMessage(2, "🎟️ The Four-Fold Fortress (+345)\n• Leg 1: Houston Astros F5 ML (-135 | 87% Conf)", 42, self._t(0))
         channel = _FakeChannel([old_slip, new_slip])

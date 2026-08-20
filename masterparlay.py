@@ -264,24 +264,18 @@ async def build_report(source_text: str) -> list[discord.Embed]:
     return embeds
 
 
-# How close together (and same author) two messages need to be to treat
-# them as one continuous slip - confirmed live: a real slip split across
-# two messages 20 seconds apart (Discord's own per-message length cap),
-# the second continuing the parlay list without repeating the "MASTER
-# PARLAYS" banner at all. Generous enough to cover that kind of split-
-# while-typing gap without accidentally stitching together two genuinely
-# separate slips posted a long time apart.
-_SAME_SLIP_GAP_SECONDS = 10 * 60
-
-
 async def find_latest_slip(channel: discord.abc.Messageable, limit: int = 50) -> Optional[list[discord.Message]]:
-    """The most recent run of consecutive same-author messages that
-    together contain at least one recognizable parlay, oldest first -
-    GreenFox's own slips routinely split across multiple messages, each
-    continuing the previous one's parlay list rather than repeating the
-    banner, so grabbing only the single most recent message silently
-    dropped whatever parlays landed in an earlier piece of the same slip.
-    Doesn't check the author specifically (so this isn't tied to
+    """Every message from the most recent Eastern calendar date (matching
+    dailylog's own date convention) that has at least one same-author
+    message containing a recognizable parlay, oldest first - combined
+    into one slip regardless of how far apart they land within that day.
+    GreenFox's own slips routinely split across multiple messages (a
+    real one landed 20 seconds apart, Discord's own per-message length
+    cap), each continuing the previous one's parlay list rather than
+    repeating the banner - and per explicit request, messages posted
+    later the same day (e.g. a follow-up slip 30 minutes after the
+    first) are meant to combine too, not just messages close together in
+    time. Doesn't check the author specifically (so this isn't tied to
     GreenFox's own account id) beyond requiring every message in the run
     to share one. None if nothing qualifies within `limit` messages."""
     history = [message async for message in channel.history(limit=limit)]  # newest first
@@ -289,10 +283,10 @@ async def find_latest_slip(channel: discord.abc.Messageable, limit: int = 50) ->
     if start_idx is None:
         return None
     run = [history[start_idx]]
+    target_date = scores365.eastern_date(history[start_idx].created_at.timestamp())
     for message in history[start_idx + 1 :]:
         prev = run[-1]
-        gap = (prev.created_at - message.created_at).total_seconds()
-        if message.author.id != prev.author.id or gap > _SAME_SLIP_GAP_SECONDS:
+        if message.author.id != prev.author.id or scores365.eastern_date(message.created_at.timestamp()) != target_date:
             break
         run.append(message)
     run.reverse()
