@@ -121,6 +121,19 @@ class ResolveLeg(unittest.TestCase):
         self.assertEqual(result["status"], "won")
         self.assertEqual(result["label"], "Tampa Bay Rays ML")
 
+    def test_already_finished_game_still_resolves(self):
+        # Confirmed live: a leg whose underlying game had already finished
+        # (a real graded "lost" sitting in dailylog for it) reported "not
+        # currently tracked" - the default fresh-pick lookup bounds
+        # (allow_finished=False) can't find an already-decided game at
+        # all, even though the pick was tracked and graded hours ago.
+        key = tracker.track_key(masterparlay.PREMIUM_SCORES_CHANNEL_ID, 4614731, picked_team="Tampa Bay Rays")
+        self._seed("tracker", key, "lost", "Tampa Bay Rays ML", "LOST")
+        with patch("scores365.find_match_for_team", return_value=({"id": 4614731}, 100)) as mock_find:
+            result = _run(masterparlay.resolve_leg("Tampa Bay Rays ML"))
+        mock_find.assert_called_once_with("Tampa Bay Rays", None, 0, 1, True)
+        self.assertEqual(result["status"], "lost")
+
     def test_dirty_dailylog_label_still_gets_cleaned_for_display(self):
         # Confirmed live: a pick tracked before picks.clean_label existed
         # still has the raw "(Bookmaker odds)" annotation baked into its
@@ -166,9 +179,12 @@ class ResolveLeg(unittest.TestCase):
         with patch("espn.STAT_CATALOG", {"wnba": {"Points": stat_key}}), \
              patch("masterparlay.picks._match_stat_label", side_effect=lambda sport, raw: "Points" if sport == "wnba" and raw == "Points" else None), \
              patch("espn.find_player", return_value=fake_entity), \
-             patch("espn.find_current_event_id", return_value="401857159"):
+             patch("espn.find_current_event_id", return_value="401857159") as mock_event:
             result = _run(masterparlay.resolve_leg("Las Vegas Aces - A'ja Wilson Over 21.5 Points"))
         self.assertEqual(result["status"], "won")
+        # Same allow_finished=True reasoning as the team-based resolvers -
+        # an already-finished game's prop must still be findable.
+        mock_event.assert_called_once_with("wnba", "16", 0, 1, True)
 
     def test_unmatched_team_is_unresolved_not_a_guess(self):
         with patch("scores365.find_match_for_team", return_value=None):

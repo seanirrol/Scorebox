@@ -108,8 +108,16 @@ def _dailylog_lookup(module: str, track_key_str: str) -> Optional[dict]:
 
 
 async def _resolve_team(team: str, sport: Optional[str]) -> Optional[tuple[dict, int]]:
+    # allow_finished=True (with a day of lookback) - unlike a fresh
+    # auto-track attempt, this is re-resolving a leg that was already
+    # tracked hours ago and may well have finished by now (a graded
+    # "won"/"lost" dailylog entry sitting right there for it - confirmed
+    # live: the default fresh-pick bounds silently failed to find an
+    # already-finished game's leg at all, reporting "not currently
+    # tracked" for a pick that plainly was). Same days_ahead=0/days_back=1
+    # bounds bot.py's own /tracktoday already uses for this exact reason.
     try:
-        return await asyncio.to_thread(scores365.find_match_for_team, team, sport)
+        return await asyncio.to_thread(scores365.find_match_for_team, team, sport, 0, 1, True)
     except scores365.ScoresError:
         return None
 
@@ -174,7 +182,8 @@ async def _resolve_player_prop(text: str) -> Optional[dict]:
             continue
         if not entity:
             continue
-        event_id = await asyncio.to_thread(espn.find_current_event_id, sport, entity["team_id"])
+        # Same allow_finished=True reasoning as _resolve_team above.
+        event_id = await asyncio.to_thread(espn.find_current_event_id, sport, entity["team_id"], 0, 1, True)
         if not event_id:
             continue
         key = proptracker.prop_key(PREMIUM_SCORES_CHANNEL_ID, event_id, entity["id"], stat_key, direction, line)
