@@ -19,6 +19,42 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import picks
 
 
+class CleanLabel(unittest.TestCase):
+    """clean_label (used for /summary and dailylog display, not parsing)
+    strips every trailing "(Bookmaker odds)"/"(Alt Line)" annotation off a
+    pick line - confirmed live, a real label showed
+    "Paul Skenes Over 5.5 Strikeouts (Alt Line) (FanDuel O 6.5 (+122))" in
+    /summary instead of just the clean pick text."""
+
+    def test_single_trailing_paren_stripped(self):
+        self.assertEqual(picks.clean_label("Tampa Bay Rays ML (Bet365 -148)"), "Tampa Bay Rays ML")
+
+    def test_two_flat_trailing_parens_both_stripped(self):
+        self.assertEqual(
+            picks.clean_label("Jorge Polanco Over 0.5 Total Bases (Alt Line) (DraftKings O 0.5)"),
+            "Jorge Polanco Over 0.5 Total Bases",
+        )
+
+    def test_nested_parens_in_the_trailing_group_fully_stripped(self):
+        # The odds themselves are wrapped in their own parens inside the
+        # bookmaker one ("(FanDuel O 6.5 (+122))") - a flat non-nested
+        # regex only ever matched the innermost "(+122)", leaving
+        # "(FanDuel O 6.5 " dangling unstripped before this fix.
+        self.assertEqual(
+            picks.clean_label("Paul Skenes Over 5.5 Strikeouts (Alt Line) (FanDuel O 6.5 (+122))"),
+            "Paul Skenes Over 5.5 Strikeouts",
+        )
+
+    def test_unbalanced_trailing_paren_left_alone(self):
+        # No matching "(" for the trailing ")" - stripping would eat real
+        # pick text, so this is deliberately left untouched rather than
+        # guessed at.
+        self.assertEqual(picks.clean_label("Weird pick text)"), "Weird pick text)")
+
+    def test_line_with_no_trailing_parens_unaffected(self):
+        self.assertEqual(picks.clean_label("Las Vegas Aces ML"), "Las Vegas Aces ML")
+
+
 class MatchupPrefixedProps(unittest.TestCase):
     """A "Team A vs Team B - Player Over N Stat" line under a Props tag
     used to get swallowed by the generic team-total parser (which doesn't

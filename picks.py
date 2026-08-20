@@ -619,7 +619,25 @@ _PROP_SPORT_OVERRIDE = {
 
 
 def _strip_trailing_parens(text: str) -> str:
-    return re.sub(r"\s*\([^)]*\)\s*$", "", text).strip()
+    """Strips one balanced trailing "(...)" group - scans backward from
+    the end tracking paren depth to find the "(" matching the final ")",
+    rather than a flat regex assuming no nesting. Confirmed live: a real
+    "(FanDuel O 6.5 (+122))" trailing annotation (a nested odds paren
+    inside the bookmaker one) left the whole thing attached before this -
+    a flat "\\([^)]*\\)\\s*$" can only ever match the innermost group, not
+    the outer wrapper around it."""
+    stripped = text.rstrip()
+    if not stripped.endswith(")"):
+        return text
+    depth = 0
+    for i in range(len(stripped) - 1, -1, -1):
+        if stripped[i] == ")":
+            depth += 1
+        elif stripped[i] == "(":
+            depth -= 1
+            if depth == 0:
+                return stripped[:i].rstrip()
+    return text  # unbalanced parens - leave alone rather than guess
 
 
 def _clean_line(line: str) -> str:
@@ -638,6 +656,20 @@ def _clean_line(line: str) -> str:
             break
         text = stripped
     return text
+
+
+def clean_label(text: str) -> str:
+    """Public entry point for stripping a pick line down to a clean
+    display label (every trailing "(Bookmaker odds)"/"(Alt Line)"
+    annotation gone, one or several deep) - same transformation
+    _clean_line already applies before parsing, exposed here for callers
+    that want the same cleanup purely for display (e.g. what /summary and
+    dailylog actually show), not for parsing. Deliberately NOT applied to
+    the raw source text used for on_message_edit's own line-diffing (see
+    its docstring) - a price-only edit is still meant to look like a
+    different line there, re-tracking rather than being silently treated
+    as unchanged."""
+    return _clean_line(text)
 
 
 def _match_stat_label(sport: str, raw_stat: str) -> Optional[str]:

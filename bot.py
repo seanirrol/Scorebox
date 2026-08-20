@@ -1434,7 +1434,14 @@ async def on_message(message: discord.Message):
         # lets /summary group/route reports by config.SUMMARY_ROUTES
         # regardless of which target channel a pick ends up tracked into.
         raw_line = pick.get("raw")
-        card_id = await _dispatch_pick(target_channel, pick, pick.get("section"), raw_line, message.channel.id)
+        # label (what /summary and dailylog actually display) is the raw
+        # line with every trailing "(Bookmaker odds)"/"(Alt Line)"
+        # annotation stripped - raw_line itself stays untouched for
+        # _tracked_lines below, which needs the full text (odds included)
+        # so on_message_edit still treats a price-only change as a
+        # different line (see its own docstring).
+        label = picks.clean_label(raw_line) if raw_line else raw_line
+        card_id = await _dispatch_pick(target_channel, pick, pick.get("section"), label, message.channel.id)
         # Counted by card_id's type alone, independent of raw_line - keeps
         # tracked_count + queued_count + skipped_count + not_tracked_count
         # always equal to len(parsed) exactly (raw_line is only needed for
@@ -1751,7 +1758,7 @@ async def on_message_edit(before: discord.Message, after: discord.Message):
 
     for line in added_lines:
         pick = new_raw_to_pick[line]
-        card_id = await _dispatch_pick(target_channel, pick, pick.get("section"), line, before.channel.id)
+        card_id = await _dispatch_pick(target_channel, pick, pick.get("section"), picks.clean_label(line), before.channel.id)
         if isinstance(card_id, int):
             old_lines[line] = card_id
 
@@ -1927,7 +1934,7 @@ async def tracktoday(interaction: discord.Interaction, sport: app_commands.Choic
 
     await interaction.response.defer(ephemeral=True)
     result = await _dispatch_pick(
-        interaction.channel, parsed, section=None, label=pick.strip(), origin_channel_id=interaction.channel_id, manual=True,
+        interaction.channel, parsed, section=None, label=picks.clean_label(pick.strip()), origin_channel_id=interaction.channel_id, manual=True,
     )
     if result is None:
         await interaction.followup.send(
