@@ -214,24 +214,24 @@ class SportTournamentWinLoss(DailyLogTestCase):
         self._log(self.IN_CHANNEL, "tracker", "k1", "Denver Broncos ML", "NFL", "NFL", "won")
         self._log(self.OTHER_CHANNEL, "tracker", "k2", "New York Jets ML", "NFL", "NFL", "lost")
         # Checks the NFL key specifically, not the whole dict - the default
-        # scope also always carries the standing UFC/2026-08 override (see
-        # _SPORT_MONTH_OVERRIDE) regardless of what's logged in a test.
+        # scope also always carries the standing MMA/2026-08 override (see
+        # _SPORT_BASELINE_OVERRIDE) regardless of what's logged in a test.
         self.assertEqual(dailylog.sport_tournament_win_loss()["NFL"], {"NFL": (1, 0)})
 
     def test_every_bet_type_within_a_tournament_combines_into_one_count(self):
-        # Soccer, not Tennis - Tennis is in _SINGLE_BUCKET_SPORTS and always
-        # collapses to one bucket regardless of tournament (see the tests
-        # below), so it can't exercise "different tournaments stay separate"
-        # anymore.
-        self._log(self.IN_CHANNEL, "tracker", "k1", "Arsenal ML", "Soccer", "Premier League", "won")
-        self._log(self.IN_CHANNEL, "soccerpropstracker", "k2", "Bukayo Saka Over 0.5 Goals", "Soccer", "Premier League", "won")
-        self._log(self.IN_CHANNEL, "soccerpropstracker", "k3", "Bukayo Saka Over 2.5 Shots", "Soccer", "Premier League", "lost")
-        self.assertEqual(dailylog.sport_tournament_win_loss()["Soccer"], {"Premier League": (2, 1)})
+        # Hockey, not Tennis/Soccer - both of those are in
+        # _SINGLE_BUCKET_SPORTS and always collapse to one bucket regardless
+        # of tournament (see the tests below), so neither can exercise
+        # "different tournaments stay separate" anymore.
+        self._log(self.IN_CHANNEL, "tracker", "k1", "Boston Bruins ML", "Hockey", "NHL", "won")
+        self._log(self.IN_CHANNEL, "proptracker", "k2", "David Pastrnak Over 0.5 Goals", "Hockey", "NHL", "won")
+        self._log(self.IN_CHANNEL, "proptracker", "k3", "David Pastrnak Over 2.5 Shots", "Hockey", "NHL", "lost")
+        self.assertEqual(dailylog.sport_tournament_win_loss()["Hockey"], {"NHL": (2, 1)})
 
     def test_different_tournaments_under_the_same_sport_stay_separate(self):
-        self._log(self.IN_CHANNEL, "tracker", "k1", "pick", "Soccer", "Premier League", "won")
-        self._log(self.IN_CHANNEL, "tracker", "k2", "pick", "Soccer", "Champions League", "lost")
-        self.assertEqual(dailylog.sport_tournament_win_loss()["Soccer"], {"Premier League": (1, 0), "Champions League": (0, 1)})
+        self._log(self.IN_CHANNEL, "tracker", "k1", "pick", "Hockey", "NHL", "won")
+        self._log(self.IN_CHANNEL, "tracker", "k2", "pick", "Hockey", "IIHF World Championship", "lost")
+        self.assertEqual(dailylog.sport_tournament_win_loss()["Hockey"], {"NHL": (1, 0), "IIHF World Championship": (0, 1)})
 
     def test_tennis_always_collapses_every_tournament_into_one_bucket(self):
         # Explicit request: unlike every other multi-tournament sport,
@@ -249,6 +249,23 @@ class SportTournamentWinLoss(DailyLogTestCase):
         self._log(other_server_channel, "settracker", "k2", "pick", "Tennis", "Wimbledon", "lost")
         result = dailylog.sport_tournament_win_loss(score_channel_ids=(other_server_channel,))
         self.assertEqual(result["Tennis"], {"Cincinnati": (1, 0), "Wimbledon": (0, 1)})
+
+    def test_soccer_always_collapses_every_tournament_into_one_bucket(self):
+        # Same explicit request as Tennis (see above) - Soccer's real
+        # tournaments (Premier League, Champions League, ...) previously
+        # each got their own row, crowding out the performance chart.
+        self._log(self.IN_CHANNEL, "tracker", "k1", "Arsenal ML", "Soccer", "Premier League", "won")
+        self._log(self.IN_CHANNEL, "tracker", "k2", "pick", "Soccer", "Premier League", "won")
+        self._log(self.IN_CHANNEL, "soccerpropstracker", "k3", "Bukayo Saka Over 0.5 Goals", "Soccer", "Champions League", "won")
+        self._log(self.IN_CHANNEL, "soccerpropstracker", "k4", "Bukayo Saka Over 2.5 Shots", "Soccer", "Champions League", "lost")
+        self.assertEqual(dailylog.sport_tournament_win_loss()["Soccer"], {"Soccer": (3, 1)})
+
+    def test_soccer_single_bucket_doesnt_apply_outside_the_default_channel_scope(self):
+        other_server_channel = 555555
+        self._log(other_server_channel, "tracker", "k1", "pick", "Soccer", "Premier League", "won")
+        self._log(other_server_channel, "tracker", "k2", "pick", "Soccer", "Champions League", "lost")
+        result = dailylog.sport_tournament_win_loss(score_channel_ids=(other_server_channel,))
+        self.assertEqual(result["Soccer"], {"Premier League": (1, 0), "Champions League": (0, 1)})
 
     def test_push_void_pending_excluded(self):
         self._log(self.IN_CHANNEL, "tracker", "k1", "Denver Broncos ML", "NFL", "NFL", "won")
@@ -362,23 +379,40 @@ class SportTournamentWinLoss(DailyLogTestCase):
         self._log(self.IN_CHANNEL, "proptracker", "k1", "LeBron James Points", "NBA", None, "won", date_str="2026-08-16")
         self.assertEqual(dailylog.sport_tournament_win_loss()["NBA"], {"NBA": (1, 0)})
 
+    def test_ufc_labeled_picks_merge_into_the_combined_mma_bucket(self):
+        # ufctracker.py now logs sport="MMA" directly going forward (covers
+        # UFC/PFL/Bellator alike, per explicit request), but historical
+        # entries still literally say "UFC" - _SPORT_DISPLAY_MERGE folds
+        # those into the same "MMA" bucket rather than splitting the chart.
+        # Dated on/after the MMA baseline's as_of_date (2026-08-16) so
+        # these show their own itemized tournament rows rather than being
+        # absorbed into the baseline (see the baseline-specific tests
+        # below) - the baseline row itself is expected here too, same as
+        # test_sport_baseline_new_picks_on_or_after_as_of_date_add_on_top.
+        self._log(self.IN_CHANNEL, "ufctracker", "k1", "Jon Jones ML", "UFC", "UFC 330", "won", date_str="2026-08-20")
+        self._log(self.IN_CHANNEL, "ufctracker", "k2", "Kayla Harrison ML", "MMA", "PFL Tampa", "won", date_str="2026-08-20")
+        self.assertEqual(
+            dailylog.sport_tournament_win_loss("2026-08")["MMA"],
+            {"MMA": (34, 13), "UFC 330": (1, 0), "PFL Tampa": (1, 0)},
+        )
+
     def test_sport_baseline_absorbs_picks_before_its_as_of_date(self):
-        # Real UFC picks logged before the baseline's as_of_date (2026-08-16)
+        # Real MMA picks logged before the baseline's as_of_date (2026-08-16)
         # would otherwise show their own per-event breakdown - excluded
         # entirely, replaced by the single hand-counted baseline instead.
         self._log(self.IN_CHANNEL, "ufctracker", "k1", "Jon Jones ML", "UFC", "UFC 330", "won", date_str="2026-08-01")
         self._log(self.IN_CHANNEL, "ufctracker", "k2", "Israel Adesanya ML", "UFC", "UFC 331", "lost", date_str="2026-08-08")
-        self.assertEqual(dailylog.sport_tournament_win_loss("2026-08")["UFC"], {"UFC": (34, 13)})
+        self.assertEqual(dailylog.sport_tournament_win_loss("2026-08")["MMA"], {"MMA": (34, 13)})
 
     def test_sport_baseline_applies_to_all_time_view_too(self):
         self._log(self.IN_CHANNEL, "ufctracker", "k1", "Jon Jones ML", "UFC", "UFC 330", "won", date_str="2026-08-01")
-        self.assertEqual(dailylog.sport_tournament_win_loss()["UFC"], {"UFC": (34, 13)})
+        self.assertEqual(dailylog.sport_tournament_win_loss()["MMA"], {"MMA": (34, 13)})
 
     def test_sport_baseline_never_shows_for_an_earlier_month(self):
         # A pre-baseline pick is absorbed regardless of which month it's
-        # in - July's own view has nothing left to show for UFC at all.
+        # in - July's own view has nothing left to show for MMA at all.
         self._log(self.IN_CHANNEL, "ufctracker", "k1", "Jon Jones ML", "UFC", "UFC 300", "won", date_str="2026-07-01")
-        self.assertNotIn("UFC", dailylog.sport_tournament_win_loss("2026-07"))
+        self.assertNotIn("MMA", dailylog.sport_tournament_win_loss("2026-07"))
 
     def test_sport_baseline_new_picks_on_or_after_as_of_date_add_on_top(self):
         # A new pick tracked after the baseline's as_of_date combines with
@@ -386,8 +420,8 @@ class SportTournamentWinLoss(DailyLogTestCase):
         # sport-level total (a sum across tournaments - see performance.py)
         # keeps moving as new picks resolve rather than staying frozen.
         self._log(self.IN_CHANNEL, "ufctracker", "k1", "Alex Pereira ML", "UFC", "UFC 332", "won", date_str="2026-08-20")
-        result = dailylog.sport_tournament_win_loss("2026-08")["UFC"]
-        self.assertEqual(result, {"UFC": (34, 13), "UFC 332": (1, 0)})
+        result = dailylog.sport_tournament_win_loss("2026-08")["MMA"]
+        self.assertEqual(result, {"MMA": (34, 13), "UFC 332": (1, 0)})
         self.assertEqual(
             (sum(w for w, _l in result.values()), sum(l for _w, l in result.values())), (35, 13),
         )
@@ -397,7 +431,7 @@ class SportTournamentWinLoss(DailyLogTestCase):
         # the standing August baseline mixed in - only the all-time view
         # and the exact month the baseline was set for get it.
         self._log(self.IN_CHANNEL, "ufctracker", "k1", "Alex Pereira ML", "UFC", "UFC 335", "won", date_str="2026-09-05")
-        self.assertEqual(dailylog.sport_tournament_win_loss("2026-09")["UFC"], {"UFC 335": (1, 0)})
+        self.assertEqual(dailylog.sport_tournament_win_loss("2026-09")["MMA"], {"UFC 335": (1, 0)})
 
     def test_sport_baseline_doesnt_apply_outside_the_default_channel_scope(self):
         other_server_channel = 555555

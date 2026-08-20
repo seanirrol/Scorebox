@@ -595,7 +595,7 @@ def start_tracking(
         event_name, fighter_id, fighter_name, total_direction, total_line, section, label, origin_channel_id,
     )
     dailylog.record_pick(
-        channel_id, "ufctracker", key, section, label, message.id, origin_channel_id, sport="UFC", tournament=event_name,
+        channel_id, "ufctracker", key, section, label, message.id, origin_channel_id, sport="MMA", tournament=event_name,
         game_date=scores365.eastern_date_str_from_iso(competition_date),
     )
 

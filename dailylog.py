@@ -338,14 +338,15 @@ def _fallback_sport(entry: dict) -> str:
 # - real production data confirmed every one of those older entries was
 # actually WNBA/MLB, so they're folded straight in rather than sitting as
 # their own confusingly-tiny buckets.
-_SPORT_DISPLAY_MERGE = {"Basketball": "WNBA", "Baseball": "MLB"}
+_SPORT_DISPLAY_MERGE = {"Basketball": "WNBA", "Baseball": "MLB", "UFC": "MMA"}
 
-# Tennis picks span many real tournaments (Cincinnati, US Open, ...), each
-# normally getting its own tournament sub-row - explicitly NOT wanted for
-# Tennis specifically (per request): every tennis pick combines into one
-# single "Tennis" bar regardless of which tournament it was actually from,
-# unlike UFC/esports where the per-event breakdown is the point.
-_SINGLE_BUCKET_SPORTS = {"Tennis"}
+# Tennis and Soccer each span many real tournaments (Cincinnati/US Open;
+# various leagues/cups), each normally getting its own tournament sub-row -
+# explicitly NOT wanted for these two specifically (per request): every
+# pick combines into one single sport-named bar regardless of which
+# tournament it was actually from, unlike MMA/esports where the per-event
+# breakdown is the point.
+_SINGLE_BUCKET_SPORTS = {"Tennis", "Soccer"}
 
 # A deliberate clean-slate reset for NBA specifically - existing NBA
 # entries (logged before scores365.sport_label could even tell NBA and
@@ -355,19 +356,22 @@ _SINGLE_BUCKET_SPORTS = {"Tennis"}
 _NBA_CLEAN_SLATE_FROM = "2026-08-16"
 
 # Manual reconciliation baseline for one sport (per explicit request) -
-# Scorebox's own UFC tally only ever sees picks that actually got posted
-# and parsed through it; a real share of this account's UFC plays are
-# placed directly and never go through the bot at all, so the automated
-# won/lost count understates the true record. Every real UFC pick logged
-# BEFORE as_of_date is excluded (absorbed into the hand-counted baseline
-# below rather than double-counted alongside it); every real UFC pick
-# logged ON or AFTER as_of_date is counted completely normally, as its own
-# tournament bucket, and ADDS to this baseline going forward - so /
-# performance keeps moving as new picks resolve rather than staying frozen
-# at the baseline number forever. Scoped to PERFORMANCE_CHANNEL_IDS only,
-# same as _SPORT_DISPLAY_MERGE.
+# Scorebox's own UFC/MMA tally only ever sees picks that actually got
+# posted and parsed through it; a real share of this account's UFC plays
+# are placed directly and never go through the bot at all, so the
+# automated won/lost count understates the true record. Every real MMA
+# pick logged BEFORE as_of_date is excluded (absorbed into the hand-
+# counted baseline below rather than double-counted alongside it); every
+# real MMA pick logged ON or AFTER as_of_date is counted completely
+# normally, as its own tournament bucket, and ADDS to this baseline going
+# forward - so /performance keeps moving as new picks resolve rather than
+# staying frozen at the baseline number forever. Keyed to "MMA" (the
+# post-_SPORT_DISPLAY_MERGE name, checked after that merge is applied
+# below) so it still applies once UFC picks were renamed to the combined
+# MMA bucket. Scoped to PERFORMANCE_CHANNEL_IDS only, same as
+# _SPORT_DISPLAY_MERGE.
 _SPORT_BASELINE_OVERRIDE = {
-    "UFC": ("2026-08-16", 34, 13),
+    "MMA": ("2026-08-16", 34, 13),
 }
 
 
