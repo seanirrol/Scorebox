@@ -230,6 +230,13 @@ def build_parlay_embed(name: str, odds: str, resolved_legs: list[dict]) -> disco
     return embed
 
 
+def combine_slip_text(messages: list[discord.Message]) -> str:
+    """Joins a find_latest_slip run's content back into one blob, oldest
+    first (as returned), so a slip split across multiple messages parses
+    as if it were always one."""
+    return "\n\n".join(m.content for m in messages)
+
+
 async def build_report(source_text: str) -> list[discord.Embed]:
     """Parses source_text (a "MASTER PARLAYS" message's raw content) and
     resolves every leg of every parlay found - one embed per parlay, same
@@ -243,12 +250,36 @@ async def build_report(source_text: str) -> list[discord.Embed]:
     return embeds
 
 
-async def find_latest_slip(channel: discord.abc.Messageable, limit: int = 50) -> Optional[discord.Message]:
-    """Most recent message in the parlay-slip channel that actually
-    contains at least one recognizable parlay - skips anything else (the
-    bot's own replies, unrelated chat) without needing to check the
-    author specifically, so this isn't tied to GreenFox's own account id."""
-    async for message in channel.history(limit=limit):
-        if parse_master_parlays(message.content):
-            return message
-    return None
+# How close together (and same author) two messages need to be to treat
+# them as one continuous slip - confirmed live: a real slip split across
+# two messages 20 seconds apart (Discord's own per-message length cap),
+# the second continuing the parlay list without repeating the "MASTER
+# PARLAYS" banner at all. Generous enough to cover that kind of split-
+# while-typing gap without accidentally stitching together two genuinely
+# separate slips posted a long time apart.
+_SAME_SLIP_GAP_SECONDS = 10 * 60
+
+
+async def find_latest_slip(channel: discord.abc.Messageable, limit: int = 50) -> Optional[list[discord.Message]]:
+    """The most recent run of consecutive same-author messages that
+    together contain at least one recognizable parlay, oldest first -
+    GreenFox's own slips routinely split across multiple messages, each
+    continuing the previous one's parlay list rather than repeating the
+    banner, so grabbing only the single most recent message silently
+    dropped whatever parlays landed in an earlier piece of the same slip.
+    Doesn't check the author specifically (so this isn't tied to
+    GreenFox's own account id) beyond requiring every message in the run
+    to share one. None if nothing qualifies within `limit` messages."""
+    history = [message async for message in channel.history(limit=limit)]  # newest first
+    start_idx = next((i for i, m in enumerate(history) if parse_master_parlays(m.content)), None)
+    if start_idx is None:
+        return None
+    run = [history[start_idx]]
+    for message in history[start_idx + 1 :]:
+        prev = run[-1]
+        gap = (prev.created_at - message.created_at).total_seconds()
+        if message.author.id != prev.author.id or gap > _SAME_SLIP_GAP_SECONDS:
+            break
+        run.append(message)
+    run.reverse()
+    return run

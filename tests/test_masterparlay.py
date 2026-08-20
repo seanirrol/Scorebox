@@ -165,6 +165,76 @@ class ResolveLeg(unittest.TestCase):
         self.assertEqual(result["status"], "unresolved")
 
 
+class _FakeAuthor:
+    def __init__(self, author_id):
+        self.id = author_id
+
+
+class _FakeMessage:
+    def __init__(self, id_, content, author_id, created_at):
+        self.id = id_
+        self.content = content
+        self.author = _FakeAuthor(author_id)
+        self.created_at = created_at
+
+
+class _FakeChannel:
+    """Newest-first history, matching discord.py's own ordering - the
+    thing find_latest_slip actually depends on."""
+
+    def __init__(self, messages_oldest_first):
+        self._messages = list(reversed(messages_oldest_first))
+
+    async def history(self, limit=50):
+        for message in self._messages[:limit]:
+            yield message
+
+
+class FindLatestSlip(unittest.TestCase):
+    """GreenFox's real slips split across multiple messages a few seconds
+    apart (Discord's own per-message length cap) - confirmed live, a real
+    4-parlay slip landed as two messages 20 seconds apart, and grabbing
+    only the single most recent one silently dropped the first two
+    parlays entirely."""
+
+    def _t(self, seconds_ago):
+        import datetime
+        return datetime.datetime(2026, 8, 20, 2, 39, 19) - datetime.timedelta(seconds=seconds_ago)
+
+    def test_two_messages_close_together_same_author_combine(self):
+        older = _FakeMessage(1, "🎟️ MASTER PARLAYS 🎟️\n🎟️ The Daily Double (+115)\n• Leg 1: Tampa Bay Rays ML (-150 | 88% Conf)", 42, self._t(20))
+        newer = _FakeMessage(2, "🎟️ The Four-Fold Fortress (+345)\n• Leg 1: Houston Astros F5 ML (-135 | 87% Conf)", 42, self._t(0))
+        channel = _FakeChannel([older, newer])
+        run = _run(masterparlay.find_latest_slip(channel))
+        self.assertEqual([m.id for m in run], [1, 2])  # oldest first
+
+    def test_combined_text_carries_both_messages_parlays(self):
+        older = _FakeMessage(1, "🎟️ The Daily Double (+115)\n• Leg 1: Tampa Bay Rays ML (-150 | 88% Conf)", 42, self._t(20))
+        newer = _FakeMessage(2, "🎟️ The Four-Fold Fortress (+345)\n• Leg 1: Houston Astros F5 ML (-135 | 87% Conf)", 42, self._t(0))
+        combined = masterparlay.combine_slip_text([older, newer])
+        parlays = masterparlay.parse_master_parlays(combined)
+        self.assertEqual([p["name"] for p in parlays], ["The Daily Double", "The Four-Fold Fortress"])
+
+    def test_different_author_breaks_the_run(self):
+        slip = _FakeMessage(1, "🎟️ The Daily Double (+115)\n• Leg 1: Tampa Bay Rays ML (-150 | 88% Conf)", 42, self._t(20))
+        other = _FakeMessage(2, "unrelated chat", 99, self._t(10))
+        newer_slip = _FakeMessage(3, "🎟️ The Four-Fold Fortress (+345)\n• Leg 1: Houston Astros F5 ML (-135 | 87% Conf)", 42, self._t(0))
+        channel = _FakeChannel([slip, other, newer_slip])
+        run = _run(masterparlay.find_latest_slip(channel))
+        self.assertEqual([m.id for m in run], [3])
+
+    def test_large_gap_breaks_the_run(self):
+        old_slip = _FakeMessage(1, "🎟️ The Daily Double (+115)\n• Leg 1: Tampa Bay Rays ML (-150 | 88% Conf)", 42, self._t(24 * 3600))
+        new_slip = _FakeMessage(2, "🎟️ The Four-Fold Fortress (+345)\n• Leg 1: Houston Astros F5 ML (-135 | 87% Conf)", 42, self._t(0))
+        channel = _FakeChannel([old_slip, new_slip])
+        run = _run(masterparlay.find_latest_slip(channel))
+        self.assertEqual([m.id for m in run], [2])
+
+    def test_no_slip_in_history_returns_none(self):
+        channel = _FakeChannel([_FakeMessage(1, "just chatting", 42, self._t(0))])
+        self.assertIsNone(_run(masterparlay.find_latest_slip(channel)))
+
+
 def _run(coro):
     import asyncio
     return asyncio.new_event_loop().run_until_complete(coro)

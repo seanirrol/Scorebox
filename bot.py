@@ -2976,9 +2976,9 @@ class MasterParlayPublishView(discord.ui.View):
     between preview and click, and stale data here could publish a result
     that's since gone final wrong."""
 
-    def __init__(self, source_message_id: int, requester_id: int):
+    def __init__(self, source_message_ids: list[int], requester_id: int):
         super().__init__(timeout=900)
-        self.source_message_id = source_message_id
+        self.source_message_ids = source_message_ids
         self.requester_id = requester_id
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -2991,12 +2991,15 @@ class MasterParlayPublishView(discord.ui.View):
     async def publish(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         try:
-            source = await interaction.channel.fetch_message(self.source_message_id)
+            # A slip can span multiple messages (see find_latest_slip) -
+            # re-fetch every piece fresh, same reasoning as the single-
+            # message case, just for each one.
+            sources = [await interaction.channel.fetch_message(mid) for mid in self.source_message_ids]
         except discord.HTTPException:
-            await interaction.edit_original_response(content="Couldn't re-fetch the original slip - it may have been deleted.", embeds=[], view=None)
+            await interaction.edit_original_response(content="Couldn't re-fetch the original slip - part of it may have been deleted.", embeds=[], view=None)
             self.stop()
             return
-        embeds = await masterparlay.build_report(source.content)
+        embeds = await masterparlay.build_report(masterparlay.combine_slip_text(sources))
         if not embeds:
             await interaction.edit_original_response(content="Nothing to publish - no parlays found in the slip anymore.", embeds=[], view=None)
             self.stop()
@@ -3025,18 +3028,18 @@ async def premiumparlay(interaction: discord.Interaction):
     _log_command(interaction)
     await interaction.response.defer(ephemeral=True)
 
-    message = await masterparlay.find_latest_slip(interaction.channel)
-    if not message:
+    messages = await masterparlay.find_latest_slip(interaction.channel)
+    if not messages:
         await interaction.followup.send("No MASTER PARLAYS slip found in recent channel history.", ephemeral=True)
         return
-    embeds = await masterparlay.build_report(message.content)
+    embeds = await masterparlay.build_report(masterparlay.combine_slip_text(messages))
     if not embeds:
         await interaction.followup.send("Found a slip but couldn't parse any parlays from it.", ephemeral=True)
         return
     truncated = ""
     if len(embeds) > 10:
         truncated = f" (preview truncated to 10 of {len(embeds)} - publishing still sends all of them)"
-    view = MasterParlayPublishView(message.id, interaction.user.id)
+    view = MasterParlayPublishView([m.id for m in messages], interaction.user.id)
     await interaction.followup.send(
         content=f"Preview only - not posted yet. Click below to publish it to <#{masterparlay.PUBLISH_CHANNEL_ID}>.{truncated}",
         embeds=embeds[:10], view=view, ephemeral=True,
