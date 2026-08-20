@@ -156,7 +156,18 @@ async def _safe_resume(name: str, coro):
 
 @client.event
 async def on_ready():
-    await tree.sync()
+    # Isolated the same way every _safe_resume call below is - confirmed
+    # live: a command definition error (e.g. a description over Discord's
+    # 100-char limit) raised here, uncaught, and since this ran before
+    # every resume_all call, on_ready's own top-level exception handler
+    # swallowed it and returned immediately - not one tracker resumed on
+    # that restart, silently, with nothing in the logs pointing at the
+    # real cause beyond "Ignoring exception in on_ready".
+    try:
+        await tree.sync()
+    except Exception:
+        log.exception("tree.sync() failed on startup - slash commands may be stale, but tracking still resumes normally")
+        botlog.event("⚠️ Slash command sync failed on startup (see server logs) - commands may be stale until the next successful sync")
     log.info("Logged in as %s", client.user)
     await _safe_resume("tracker", tracker.resume_all(client))
     await _safe_resume("proptracker", proptracker.resume_all(client))
@@ -3006,7 +3017,7 @@ class MasterParlayPublishView(discord.ui.View):
         self.stop()
 
 
-@tree.command(name="premiumparlay", description="Preview GreenFox's latest MASTER PARLAYS slip graded against already-tracked legs, then optionally publish it")
+@tree.command(name="premiumparlay", description="Preview the latest MASTER PARLAYS slip graded against tracked legs, then optionally publish it")
 async def premiumparlay(interaction: discord.Interaction):
     if interaction.channel_id != masterparlay.PARLAY_SLIP_CHANNEL_ID:
         await interaction.response.send_message("This command only works in the parlay slip channel.", ephemeral=True)
