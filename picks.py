@@ -272,12 +272,20 @@ _SETS_HANDICAP_NOMATCHUP_RE = re.compile(
     r"^(.+?)\s+([+-]\d+(?:\.\d+)?)\s*sets\b", re.IGNORECASE,
 )
 
+# Every wording variant confirmed live for "wins at least one set" -
+# "a set", "at least 1 set(s)", and "1+ set(s)" (the last one fell through
+# to the simple-name fallback with no botlog trace at all, same failure
+# mode as "at least 1" below, in a real message where it was 2 of 14
+# picks). Shared between the matchup and no-matchup shapes just below so
+# a new wording only needs adding in one place.
+_WIN_A_SET_WORDING = r"a\s+set|at\s+least\s+1\s+sets?|1\+\s*sets?"
+
 # "Team A vs Team B - Venus Williams to Win a Set" (Yes) / "... - Venus
 # Williams No to Win a Set" / "... - Not Venus Williams to Win a Set" (No,
 # either word order) - whether the named player wins at least one set
 # during the match, not who wins the match outright.
 _WIN_A_SET_RE = re.compile(
-    r"^(.+?)\s*(?:@|\bvs\.?|\bv\.?)\s*(.+?)\s*-\s*(.+?)\s+to\s+win\s+a\s+set\b",
+    rf"^(.+?)\s*(?:@|\bvs\.?|\bv\.?)\s*(.+?)\s*-\s*(.+?)\s+to\s+win\s+(?:{_WIN_A_SET_WORDING})\b",
     re.IGNORECASE,
 )
 
@@ -289,7 +297,7 @@ _WIN_A_SET_RE = re.compile(
 # name fallback, which rejects anything with a digit in it, and vanished
 # with no botlog trace at all - 7 of 8 picks in one real message.
 _WIN_A_SET_NOMATCHUP_RE = re.compile(
-    r"^(.+?)\s+to\s+win\s+(?:a\s+set|at\s+least\s+1\s+sets?)\b", re.IGNORECASE,
+    rf"^(.+?)\s+to\s+win\s+(?:{_WIN_A_SET_WORDING})\b", re.IGNORECASE,
 )
 
 # "Team A vs Team B - 1st Inning Draw" (or "Tie") - the Draw side of the same

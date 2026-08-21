@@ -563,6 +563,18 @@ class WinASetNoMatchup(unittest.TestCase):
         results = picks.parse_picks_message(msg)
         self.assertEqual(results[0]["team"], "Venus Williams")
 
+    def test_1_plus_set_wording_with_no_matchup(self):
+        # Confirmed live: "Frances Tiafoe to Win 1+ Set" - a third real
+        # wording variant beyond "a set"/"at least 1 set(s)" - vanished
+        # with no botlog trace for the same "contains a digit" fallback-
+        # rejection reason as the "at least 1" case above.
+        msg = "Tennis\nFrances Tiafoe to Win 1+ Set (-1.5 Sets) (FanDuel -105)"
+        results = picks.parse_picks_message(msg)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["kind"], "tennis_win_a_set")
+        self.assertEqual(results[0]["team"], "Frances Tiafoe")
+        self.assertEqual(results[0]["direction"], "yes")
+
     def test_no_prefix_flips_direction(self):
         msg = "Tennis\nNo Venus Williams to Win a Set (DraftKings +150)"
         results = picks.parse_picks_message(msg)
