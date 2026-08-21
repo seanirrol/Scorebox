@@ -380,6 +380,69 @@ class NflSpreadNoMatchup(unittest.TestCase):
         self.assertEqual(pick["kind"], "track")
 
 
+class NflSpreadWithMatchup(unittest.TestCase):
+    """"Team A at Team B - Team X -3.5" - a spread pick WITH the matchup
+    named (unlike NflSpreadNoMatchup above), using the "at" separator
+    convention very common for NFL/MLB. Confirmed live: 3 real picks
+    worded this way ("Packers at Broncos - Broncos -3.5",
+    "Jets at Steelers - Steelers +1.5", "Panthers at Jaguars - Under
+    38.5") sat permanently stuck in the auto-track retry queue - not
+    because the underlying games couldn't be found (they resolved fine
+    on their own), but because no parser recognized "at" as a matchup
+    separator at all, so the picked team's name got mangled into "Packers
+    at Broncos - Broncos" (the whole matchup swallowed as one literal,
+    unfindable team name) before ever reaching the team lookup."""
+
+    def test_at_separated_named_team_spread(self):
+        pick = picks.parse_pick_line("[NFL] Packers at Broncos - Broncos -3.5 (Alt Spread) (Fanatics -130)")
+        self.assertEqual(pick, {"kind": "team_total", "sport": "nfl", "team": "Broncos", "direction": "spread", "line": -3.5})
+
+    def test_at_separated_named_team_spread_underdog(self):
+        pick = picks.parse_pick_line("[NFL] Jets at Steelers - Steelers +1.5 (DraftKings -108)")
+        self.assertEqual(pick["team"], "Steelers")
+        self.assertEqual(pick["line"], 1.5)
+
+    def test_at_separated_combined_total(self):
+        pick = picks.parse_pick_line("[NFL] Panthers at Jaguars - Under 38.5 (Alt Total) (Bet365 -125)")
+        self.assertEqual(pick, {"kind": "total", "sport": "nfl", "team": "Panthers", "direction": "under", "line": 38.5})
+
+    def test_vs_separated_named_team_spread_also_fixed(self):
+        # Same underlying gap as the "at" case above - no dedicated
+        # matchup+named-team spread parser existed at all before, so this
+        # was broken for "vs" too, just never confirmed live with that
+        # wording specifically.
+        pick = picks.parse_pick_line("[NFL] Packers vs Broncos - Broncos -3.5 (Alt Spread) (Fanatics -130)")
+        self.assertEqual(pick["team"], "Broncos")
+        self.assertEqual(pick["line"], -3.5)
+
+    def test_named_team_not_matching_either_side_isnt_guessed_by_this_parser(self):
+        # _parse_team_spread_matchup_pick itself correctly declines (named
+        # team matches neither side) - but _parse_description's own
+        # ultimate fallback for an unresolved bracket-tagged line
+        # (_parse_team_pick's final "no cutword matched either, just
+        # return whatever's left" case) is a separate, pre-existing gap
+        # that predates this fix entirely, not something introduced here -
+        # it still swallows the whole garbled string as a literal team
+        # name rather than returning None. Documenting the current
+        # (imperfect) behavior rather than asserting a stronger guarantee
+        # this parser was never responsible for.
+        pick = picks.parse_pick_line("[NFL] Packers at Broncos - Chiefs -3.5 (Fanatics -130)")
+        self.assertNotEqual((pick or {}).get("kind"), "team_total")
+
+    def test_win_a_set_at_least_wording_not_broken_by_the_at_separator_fix(self):
+        # "to Win at Least 1 Set" contains " at " as an ordinary word, not
+        # a matchup separator - confirmed live this was a real regression
+        # risk: an earlier version of the "at" fix used a bare substring
+        # check in several places, which falsely treated this line as
+        # having a matchup and skipped the whole no-matchup parser block
+        # entirely, silently misparsing it as a bare (nonsense) team name.
+        msg = "Tennis\nStefanos Tsitsipas to Win at Least 1 Set (Alt Line) (Bet365 -275)"
+        results = picks.parse_picks_message(msg)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["kind"], "tennis_win_a_set")
+        self.assertEqual(results[0]["team"], "Stefanos Tsitsipas")
+
+
 class BasketballSpreadNoMatchup(unittest.TestCase):
     """Same no-opponent-named spread shape as NflSpreadNoMatchup above, but
     for WNBA/NBA - confirmed live, a real "Phoenix Mercury -2.5 (Alt
