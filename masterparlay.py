@@ -36,6 +36,7 @@ import picks
 import proptracker
 import scoreimage
 import scores365
+import settracker
 import state
 import tracker
 
@@ -63,14 +64,26 @@ _PARLAY_HEADER_RE = re.compile(r"^🎟️\s*(.+?)\s*\(([+-]\d+)\)\s*$")
 _PARLAY_LEG_RE = re.compile(r"^[•\-]\s*Leg\s*\d+\s*:\s*(.+?)\s*\([+-]?\d+\s*\|\s*\d+%\s*Conf\.?\)\s*$", re.IGNORECASE)
 
 # Leg wording shapes, tried in this order - F5 ML before plain ML (a bare
-# "(.+?)\s+ML$" would otherwise swallow "Houston Astros F5" whole, "F5"
-# included, since there's only one literal "ML" to anchor on at the end).
-_F5_ML_RE = re.compile(r"^(.+?)\s+F5\s+ML$", re.IGNORECASE)
+# "(.+?)\s+(?:ML|Moneyline)$" would otherwise swallow "Houston Astros F5"
+# whole, "F5" included, since there's only one ML/Moneyline trailer to
+# anchor on at the end). Both accept "ML" and the full "Moneyline" word -
+# same two spellings picks.py's own _parse_team_pick recognizes -
+# confirmed live, a real slip's "New York Yankees Moneyline"/"Taylor
+# Fritz Moneyline"/etc. legs all failed to resolve, reporting "Not
+# currently tracked" for picks that were genuinely already tracked,
+# because only the abbreviated "ML" was recognized here.
+_F5_ML_RE = re.compile(r"^(.+?)\s+F5\s+(?:ML|Moneyline)$", re.IGNORECASE)
 _SPREAD_RE = re.compile(r"^(.+?)\s+([+-]\d+(?:\.\d+)?)\s*(?:\(Alt Spread\))?$", re.IGNORECASE)
-_ML_RE = re.compile(r"^(.+?)\s+ML$", re.IGNORECASE)
+_ML_RE = re.compile(r"^(.+?)\s+(?:ML|Moneyline)$", re.IGNORECASE)
 _PLAYER_PROP_RE = re.compile(
     r"^(?:(.+?)\s*-\s*)?(.+?)\s+(Over|Under)\s+([\d.]+)\s+(.+?)(?:\s*\(Alt Line\))?$", re.IGNORECASE,
 )
+
+# Tennis-only markets, settracker.py-backed - "Player +5.5 Games" (a games
+# handicap) and "Player to Win a Set"/"to Win at Least 1 Set"/"to Win 1+
+# Set" (same wording variants picks.py's own _WIN_A_SET_WORDING accepts).
+_GAMES_HANDICAP_RE = re.compile(r"^(.+?)\s+([+-]\d+(?:\.\d+)?)\s*Games\b", re.IGNORECASE)
+_WIN_A_SET_RE = re.compile(r"^(.+?)\s+to\s+win\s+(?:a\s+set|at\s+least\s+1\s+sets?|1\+\s*sets?)\b", re.IGNORECASE)
 
 # Every ESPN-backed sport this bot's player props support (see
 # espn.SPORT_PATHS) - tried in turn since a bare leg line has no sport tag
@@ -158,6 +171,32 @@ async def _resolve_f5_ml(text: str) -> Optional[dict]:
     return _dailylog_lookup("f5tracker", key)
 
 
+async def _resolve_games_handicap(text: str) -> Optional[dict]:
+    m = _GAMES_HANDICAP_RE.match(text)
+    if not m:
+        return None
+    player, line = m.group(1).strip(), float(m.group(2))
+    result = await _resolve_team(player, "tennis")
+    if not result:
+        return None
+    game, _sport_id = result
+    key = settracker.track_key(PREMIUM_SCORES_CHANNEL_ID, game["id"], "games_handicap", player)
+    return _dailylog_lookup("settracker", key)
+
+
+async def _resolve_win_a_set(text: str) -> Optional[dict]:
+    m = _WIN_A_SET_RE.match(text)
+    if not m:
+        return None
+    player = m.group(1).strip()
+    result = await _resolve_team(player, "tennis")
+    if not result:
+        return None
+    game, _sport_id = result
+    key = settracker.track_key(PREMIUM_SCORES_CHANNEL_ID, game["id"], "win_a_set", player)
+    return _dailylog_lookup("settracker", key)
+
+
 async def _resolve_player_prop(text: str) -> Optional[dict]:
     m = _PLAYER_PROP_RE.match(text)
     if not m:
@@ -205,7 +244,7 @@ async def resolve_leg(leg_text: str) -> dict:
     before that cleanup existed, and an unresolved leg's own text can
     still carry "(Alt Line)" too (only the "(odds | NN% Conf)" suffix is
     stripped by _PARLAY_LEG_RE at parse time, not every trailing paren)."""
-    for resolver in (_resolve_f5_ml, _resolve_ml_or_spread, _resolve_player_prop):
+    for resolver in (_resolve_f5_ml, _resolve_games_handicap, _resolve_win_a_set, _resolve_ml_or_spread, _resolve_player_prop):
         entry = await resolver(leg_text)
         if entry:
             return {"raw": leg_text, "status": entry["status"], "label": picks.clean_label(entry["label"]), "detail": entry["detail"]}

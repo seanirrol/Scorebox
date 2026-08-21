@@ -22,6 +22,7 @@ import dailylog
 import f5tracker
 import masterparlay
 import proptracker
+import settracker
 import state
 import tracker
 
@@ -121,6 +122,18 @@ class ResolveLeg(unittest.TestCase):
         self.assertEqual(result["status"], "won")
         self.assertEqual(result["label"], "Tampa Bay Rays ML")
 
+    def test_full_word_moneyline_leg_also_matches(self):
+        # Confirmed live: a real slip's "New York Yankees Moneyline"/
+        # "Taylor Fritz Moneyline"/etc. legs all reported "Not currently
+        # tracked" for picks that were genuinely already tracked, because
+        # only the abbreviated "ML" trailer was recognized here (unlike
+        # picks.py's own _parse_team_pick, which always accepted both).
+        key = tracker.track_key(masterparlay.PREMIUM_SCORES_CHANNEL_ID, 4614781, picked_team="New York Yankees")
+        self._seed("tracker", key, "pending", "New York Yankees ML", "NOT STARTED")
+        with patch("scores365.find_match_for_team", return_value=({"id": 4614781}, 100)):
+            result = _run(masterparlay.resolve_leg("New York Yankees Moneyline"))
+        self.assertEqual(result["status"], "pending")
+
     def test_already_finished_game_still_resolves(self):
         # Confirmed live: a leg whose underlying game had already finished
         # (a real graded "lost" sitting in dailylog for it) reported "not
@@ -170,6 +183,22 @@ class ResolveLeg(unittest.TestCase):
             result = _run(masterparlay.resolve_leg("Indiana Fever +3.5 (Alt Spread)"))
         self.assertEqual(result["status"], "pending")
         self.assertEqual(result["detail"], "LIVE, Q3")
+
+    def test_games_handicap_leg_matches_a_seeded_win(self):
+        key = settracker.track_key(masterparlay.PREMIUM_SCORES_CHANNEL_ID, 4819545, "games_handicap", "Sara Bejlek")
+        self._seed("settracker", key, "won", "Sara Bejlek +5.5 Games", "WON")
+        with patch("scores365.find_match_for_team", return_value=({"id": 4819545}, 103)) as mock_find:
+            result = _run(masterparlay.resolve_leg("Sara Bejlek +5.5 Games"))
+        mock_find.assert_called_once_with("Sara Bejlek", "tennis", 0, 1, True)
+        self.assertEqual(result["status"], "won")
+
+    def test_win_a_set_leg_matches_a_seeded_pending(self):
+        key = settracker.track_key(masterparlay.PREMIUM_SCORES_CHANNEL_ID, 4819538, "win_a_set", "Frances Tiafoe")
+        self._seed("settracker", key, "pending", "Frances Tiafoe to Win 1+ Set", "LIVE, Set 1")
+        with patch("scores365.find_match_for_team", return_value=({"id": 4819538}, 103)):
+            result = _run(masterparlay.resolve_leg("Frances Tiafoe to Win 1+ Set"))
+        self.assertEqual(result["status"], "pending")
+        self.assertEqual(result["detail"], "LIVE, Set 1")
 
     def test_player_prop_leg_with_single_team_prefix_matches(self):
         stat_key = ("PTS", None)
