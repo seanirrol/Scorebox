@@ -2975,6 +2975,35 @@ async def summary(interaction: discord.Interaction):
     await interaction.followup.send("Pick a date to preview:", view=view, ephemeral=True)
 
 
+_MASTERPARLAY_STATUS_LABEL = {"won": f"{dailylog.WINMARK} Won", "lost": f"{dailylog.LOSSMARK} Lost", "pending": "⏳ Pending"}
+
+
+class _MasterParlaySelect(discord.ui.Select):
+    """Which of the slip's parlays actually get published - GreenFox
+    routinely posts several parlays in one slip, and not every one of
+    them is meant to go in the archive. Every option starts checked
+    (default=True) so the existing "publish everything" behavior is just
+    "leave it as-is and click Publish"; deselecting narrows it down.
+    Labeled with each parlay's current outcome so that's visible without
+    having to scroll back up through the preview embeds."""
+
+    def __init__(self, parlays: list[dict]):
+        options = [
+            discord.SelectOption(
+                label=p["name"][:100],
+                description=f"{_MASTERPARLAY_STATUS_LABEL.get(p['status'], p['status'])} • {p['odds']}"[:100],
+                value=str(i),
+                default=True,
+            )
+            for i, p in enumerate(parlays)
+        ]
+        super().__init__(placeholder="Select which parlays to publish...", min_values=0, max_values=len(parlays), options=options, row=0)
+
+    async def callback(self, interaction: discord.Interaction):
+        self.view.selected_indices = {int(v) for v in self.values}
+        await interaction.response.defer()
+
+
 class MasterParlayPublishView(discord.ui.View):
     """Lets /premiumparlay's ephemeral preview actually get published, or
     dropped. Re-fetches the source slip and re-resolves every leg fresh at
@@ -2983,10 +3012,14 @@ class MasterParlayPublishView(discord.ui.View):
     between preview and click, and stale data here could publish a result
     that's since gone final wrong."""
 
-    def __init__(self, source_message_ids: list[int], requester_id: int):
+    def __init__(self, source_message_ids: list[int], parlays: list[dict], requester_id: int):
         super().__init__(timeout=900)
         self.source_message_ids = source_message_ids
         self.requester_id = requester_id
+        self.parlay_names = [p["name"] for p in parlays]
+        self.selected_indices = set(range(len(parlays)))
+        if parlays:
+            self.add_item(_MasterParlaySelect(parlays))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.requester_id:
@@ -2994,9 +3027,13 @@ class MasterParlayPublishView(discord.ui.View):
             return False
         return True
 
-    @discord.ui.button(label="Publish", style=discord.ButtonStyle.success)
+    @discord.ui.button(label="Publish", style=discord.ButtonStyle.success, row=1)
     async def publish(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
+        if not self.selected_indices:
+            await interaction.edit_original_response(content="No parlays selected - nothing to publish.", embeds=[], view=None)
+            self.stop()
+            return
         try:
             # A slip can span multiple messages (see find_latest_slip) -
             # re-fetch every piece fresh, same reasoning as the single-
@@ -3006,28 +3043,31 @@ class MasterParlayPublishView(discord.ui.View):
             await interaction.edit_original_response(content="Couldn't re-fetch the original slip - part of it may have been deleted.", embeds=[], view=None)
             self.stop()
             return
+        # Matched by name rather than index, so a selection still lands on
+        # the right parlay even if re-resolving nets a different ordering.
+        selected_names = {self.parlay_names[i] for i in self.selected_indices if i < len(self.parlay_names)}
         date_str = masterparlay.slip_date_str(sources)
-        embeds = await masterparlay.build_report(masterparlay.combine_slip_text(sources), date_str)
+        embeds = await masterparlay.build_report(masterparlay.combine_slip_text(sources), date_str, only_names=selected_names)
         if not embeds:
-            await interaction.edit_original_response(content="Nothing to publish - no parlays found in the slip anymore.", embeds=[], view=None)
+            await interaction.edit_original_response(content="Nothing to publish - the selected parlays are no longer in the slip.", embeds=[], view=None)
             self.stop()
             return
         target = client.get_channel(masterparlay.PUBLISH_CHANNEL_ID) or await client.fetch_channel(masterparlay.PUBLISH_CHANNEL_ID)
         for i in range(0, len(embeds), 10):
             await target.send(embeds=embeds[i : i + 10])
         botlog.event(
-            f"🎟️ Master parlay report ({date_str}) published to <#{masterparlay.PUBLISH_CHANNEL_ID}> "
+            f"🎟️ Master parlay report ({date_str}, {len(embeds)} parlay(s)) published to <#{masterparlay.PUBLISH_CHANNEL_ID}> "
             f"(previewed in <#{interaction.channel_id}>) by **{interaction.user}**"
         )
-        await interaction.edit_original_response(content=f"Published to the {date_str} archive.", embeds=[], view=None)
+        await interaction.edit_original_response(content=f"Published {len(embeds)} parlay(s) to the {date_str} archive.", embeds=[], view=None)
         self.stop()
 
-    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, row=1)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.edit_message(content="Cancelled - nothing published.", embeds=[], view=None)
         self.stop()
 
-    @discord.ui.button(label="View Past Dates", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="View Past Dates", style=discord.ButtonStyle.secondary, row=1)
     async def view_past_dates(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         archive = client.get_channel(masterparlay.PUBLISH_CHANNEL_ID) or await client.fetch_channel(masterparlay.PUBLISH_CHANNEL_ID)
@@ -3088,16 +3128,17 @@ async def premiumparlay(interaction: discord.Interaction):
     if not messages:
         await interaction.followup.send("No MASTER PARLAYS slip found in recent channel history.", ephemeral=True)
         return
-    embeds = await masterparlay.build_report(masterparlay.combine_slip_text(messages))
-    if not embeds:
+    parlays = await masterparlay.resolve_parlays(masterparlay.combine_slip_text(messages))
+    if not parlays:
         await interaction.followup.send("Found a slip but couldn't parse any parlays from it.", ephemeral=True)
         return
+    embeds = [masterparlay.build_parlay_embed(p["name"], p["odds"], p["legs"]) for p in parlays]
     truncated = ""
     if len(embeds) > 10:
-        truncated = f" (preview truncated to 10 of {len(embeds)} - publishing still sends all of them)"
-    view = MasterParlayPublishView([m.id for m in messages], interaction.user.id)
+        truncated = f" (preview truncated to 10 of {len(embeds)} - the selection below still covers all of them)"
+    view = MasterParlayPublishView([m.id for m in messages], parlays, interaction.user.id)
     await interaction.followup.send(
-        content=f"Preview only - not posted yet. Click below to publish it to <#{masterparlay.PUBLISH_CHANNEL_ID}>.{truncated}",
+        content=f"Preview only - not posted yet. Pick which parlays to publish to <#{masterparlay.PUBLISH_CHANNEL_ID}>, then click Publish.{truncated}",
         embeds=embeds[:10], view=view, ephemeral=True,
     )
 

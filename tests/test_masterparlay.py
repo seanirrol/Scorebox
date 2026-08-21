@@ -231,6 +231,67 @@ class ResolveLeg(unittest.TestCase):
         self.assertEqual(result["status"], "unresolved")
 
 
+class ResolveParlaysAndBuildReport(unittest.TestCase):
+    """resolve_parlays backs /premiumparlay's per-parlay publish checklist
+    (name/odds/outcome per parlay, before anything is published);
+    build_report's only_names lets a user publish just the parlays they
+    picked from a multi-parlay slip instead of the whole thing."""
+
+    def setUp(self):
+        self._real_path = state.DAILY_LOG_FILE
+        fd, self._tmp_path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        os.remove(self._tmp_path)
+        state.DAILY_LOG_FILE = self._tmp_path
+
+    def tearDown(self):
+        state.DAILY_LOG_FILE = self._real_path
+        if os.path.exists(self._tmp_path):
+            os.remove(self._tmp_path)
+
+    def _seed(self, module, key, status, label, detail):
+        data = state.load_daily_log()
+        data[dailylog._key(masterparlay.PREMIUM_SCORES_CHANNEL_ID, module, key)] = {
+            "channel_id": masterparlay.PREMIUM_SCORES_CHANNEL_ID, "module": module,
+            "status": status, "label": label, "detail": detail,
+        }
+        state.save_daily_log(data)
+
+    _TWO_PARLAY_TEXT = (
+        "🎟️ The Daily Double (+115)\n"
+        "• Leg 1: Tampa Bay Rays ML (-150 | 88% Conf)\n"
+        "\n"
+        "🎟️ The Triple Threat (+170)\n"
+        "• Leg 1: Houston Astros F5 ML (-135 | 87% Conf)"
+    )
+
+    def test_resolve_parlays_returns_name_odds_status_per_parlay(self):
+        rays_key = tracker.track_key(masterparlay.PREMIUM_SCORES_CHANNEL_ID, 4614731, picked_team="Tampa Bay Rays")
+        self._seed("tracker", rays_key, "won", "Tampa Bay Rays ML", "WON")
+        astros_key = f5tracker.track_key(masterparlay.PREMIUM_SCORES_CHANNEL_ID, 4614787, picked_team="Houston Astros")
+        self._seed("f5tracker", astros_key, "lost", "Houston Astros F5 ML", "LOST")
+        with patch("scores365.find_match_for_team", side_effect=[({"id": 4614731}, 100), ({"id": 4614787}, 100)]):
+            parlays = _run(masterparlay.resolve_parlays(self._TWO_PARLAY_TEXT))
+        self.assertEqual([p["name"] for p in parlays], ["The Daily Double", "The Triple Threat"])
+        self.assertEqual([p["odds"] for p in parlays], ["+115", "+170"])
+        self.assertEqual([p["status"] for p in parlays], ["won", "lost"])
+
+    def test_build_report_only_names_publishes_just_the_selected_parlay(self):
+        rays_key = tracker.track_key(masterparlay.PREMIUM_SCORES_CHANNEL_ID, 4614731, picked_team="Tampa Bay Rays")
+        self._seed("tracker", rays_key, "won", "Tampa Bay Rays ML", "WON")
+        astros_key = f5tracker.track_key(masterparlay.PREMIUM_SCORES_CHANNEL_ID, 4614787, picked_team="Houston Astros")
+        self._seed("f5tracker", astros_key, "lost", "Houston Astros F5 ML", "LOST")
+        with patch("scores365.find_match_for_team", side_effect=[({"id": 4614731}, 100), ({"id": 4614787}, 100)]):
+            embeds = _run(masterparlay.build_report(self._TWO_PARLAY_TEXT, only_names={"The Triple Threat"}))
+        self.assertEqual(len(embeds), 1)
+        self.assertIn("The Triple Threat", embeds[0].title)
+
+    def test_build_report_omitting_only_names_publishes_everything(self):
+        with patch("scores365.find_match_for_team", return_value=None):
+            embeds = _run(masterparlay.build_report(self._TWO_PARLAY_TEXT))
+        self.assertEqual(len(embeds), 2)
+
+
 class _FakeAuthor:
     def __init__(self, author_id):
         self.id = author_id

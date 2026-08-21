@@ -327,20 +327,40 @@ def combine_slip_text(messages: list[discord.Message]) -> str:
     return "\n\n".join(m.content for m in messages)
 
 
-async def build_report(source_text: str, date_str: Optional[str] = None) -> list[discord.Embed]:
-    """Parses source_text (a "MASTER PARLAYS" message's raw content) and
-    resolves every leg of every parlay found - one embed per parlay, same
-    order as the source message. Empty list if the message has no
-    recognizable parlays at all (caller decides how to report that).
-    date_str, when given, gets tagged into each embed's footer for later
-    archive lookup by date (see slip_date_str/find_archived_report) -
-    omitted for a plain preview that's never meant to be archived."""
+async def resolve_parlays(source_text: str) -> list[dict]:
+    """Parses source_text and resolves every leg of every parlay found -
+    one dict per parlay: {"name", "odds", "legs" (resolved legs), "status"
+    (grade_parlay's overall won/lost/pending)}, same order as the source
+    message. Shared by build_report (turns these into embeds) and
+    /premiumparlay's own preview, which needs each parlay's outcome up
+    front to label its publish checklist before anything is published."""
     parlays = parse_master_parlays(source_text)
-    embeds = []
+    resolved = []
     for parlay in parlays:
         resolved_legs = [await resolve_leg(leg) for leg in parlay["legs"]]
-        embeds.append(build_parlay_embed(parlay["name"], parlay["odds"], resolved_legs, date_str))
-    return embeds
+        resolved.append({
+            "name": parlay["name"],
+            "odds": parlay["odds"],
+            "legs": resolved_legs,
+            "status": grade_parlay(resolved_legs),
+        })
+    return resolved
+
+
+async def build_report(source_text: str, date_str: Optional[str] = None, only_names: Optional[set[str]] = None) -> list[discord.Embed]:
+    """Resolves every parlay in source_text into an embed, same order as
+    the source message. Empty list if the message has no recognizable
+    parlays at all (caller decides how to report that). date_str, when
+    given, gets tagged into each embed's footer for later archive lookup
+    by date (see slip_date_str/find_archived_report) - omitted for a
+    plain preview that's never meant to be archived. only_names, when
+    given, limits the report to parlays whose name is in the set - lets
+    /premiumparlay publish only the parlays a user actually picked from
+    a multi-parlay slip instead of all-or-nothing."""
+    parlays = await resolve_parlays(source_text)
+    if only_names is not None:
+        parlays = [p for p in parlays if p["name"] in only_names]
+    return [build_parlay_embed(p["name"], p["odds"], p["legs"], date_str) for p in parlays]
 
 
 async def find_archived_dates(channel: discord.abc.Messageable, limit: int = 200) -> list[str]:
