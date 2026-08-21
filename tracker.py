@@ -618,7 +618,17 @@ async def _track_loop(
                 consecutive_edit_failures = 0
                 consecutive_rate_limit_failures = 0
             except discord.HTTPException as e:
-                if e.status == 429:
+                # error code 400009 ("message edit attachment upload
+                # limit") is Discord's own server-wide congestion signal
+                # this generous budget exists for (see
+                # MAX_CONSECUTIVE_RATE_LIMIT_FAILURES above) - but it's
+                # never actually a literal HTTP 429, always a 400 with
+                # this code embedded instead. Confirmed live: without
+                # this, it fell into the much stricter
+                # MAX_CONSECUTIVE_MISSES budget and voided a pick after
+                # just 3 failures, leaving its card frozen on a stale
+                # score with no further updates.
+                if e.status == 429 or e.code == 400009:
                     consecutive_rate_limit_failures += 1
                     log.warning(
                         "Failed to edit tracking message, rate limited (failure %d/%d): %s",
