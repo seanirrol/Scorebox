@@ -10,6 +10,7 @@ with the exact keys resolve_leg should compute.
 Run with: python -m unittest discover -s tests -t .
 """
 
+import datetime
 import os
 import sys
 import tempfile
@@ -236,11 +237,12 @@ class _FakeAuthor:
 
 
 class _FakeMessage:
-    def __init__(self, id_, content, author_id, created_at):
+    def __init__(self, id_, content, author_id, created_at, embeds=None):
         self.id = id_
         self.content = content
         self.author = _FakeAuthor(author_id)
         self.created_at = created_at
+        self.embeds = embeds or []
 
 
 class _FakeChannel:
@@ -315,6 +317,79 @@ class FindLatestSlip(unittest.TestCase):
     def test_no_slip_in_history_returns_none(self):
         channel = _FakeChannel([_FakeMessage(1, "just chatting", 42, self._t(0))])
         self.assertIsNone(_run(masterparlay.find_latest_slip(channel)))
+
+
+class SlipDateStr(unittest.TestCase):
+    """The archived date always comes from when the slip was actually
+    posted, not whenever /premiumparlay happens to get run or published -
+    confirmed as the whole point of the archive redesign, so a slip
+    posted late at night still files under the day it was posted even if
+    the last leg (or the Publish click) lands after midnight."""
+
+    def test_uses_earliest_message_regardless_of_list_order(self):
+        import datetime
+        early = _FakeMessage(1, "a", 42, datetime.datetime(2026, 8, 20, 16, 0, 0, tzinfo=datetime.timezone.utc))
+        late = _FakeMessage(2, "b", 42, datetime.datetime(2026, 8, 21, 2, 0, 0, tzinfo=datetime.timezone.utc))
+        self.assertEqual(masterparlay.slip_date_str([late, early]), "2026-08-20")
+
+    def test_late_night_post_that_crosses_midnight_utc_stays_eastern_day(self):
+        import datetime
+        # 2026-08-21 02:00 UTC = 2026-08-20 22:00 EDT - still the 20th
+        # locally even though it's already the 21st in UTC.
+        posted = _FakeMessage(1, "a", 42, datetime.datetime(2026, 8, 21, 2, 0, 0, tzinfo=datetime.timezone.utc))
+        self.assertEqual(masterparlay.slip_date_str([posted]), "2026-08-20")
+
+
+class ArchiveFooterTagging(unittest.TestCase):
+    def test_build_parlay_embed_tags_footer_with_date(self):
+        legs = [{"raw": "x", "status": "won", "label": "x", "detail": "Won"}]
+        embed = masterparlay.build_parlay_embed("The Daily Double", "+115", legs, date_str="2026-08-20")
+        self.assertEqual(masterparlay.archived_date_from_embed(embed), "2026-08-20")
+
+    def test_no_date_str_leaves_footer_untagged(self):
+        legs = [{"raw": "x", "status": "won", "label": "x", "detail": "Won"}]
+        embed = masterparlay.build_parlay_embed("The Daily Double", "+115", legs)
+        self.assertIsNone(masterparlay.archived_date_from_embed(embed))
+
+    def test_unrelated_footer_text_is_not_mistaken_for_a_date_tag(self):
+        import discord
+        embed = discord.Embed(title="unrelated")
+        embed.set_footer(text="Some other footer")
+        self.assertIsNone(masterparlay.archived_date_from_embed(embed))
+
+
+class FindArchivedDatesAndReport(unittest.TestCase):
+    def _tagged_message(self, id_, date_str, count=1):
+        legs = [{"raw": "x", "status": "won", "label": f"leg{id_}", "detail": "Won"}]
+        embeds = [masterparlay.build_parlay_embed(f"Parlay {id_}-{i}", "+115", legs, date_str=date_str) for i in range(count)]
+        return _FakeMessage(id_, "archived report", 42, datetime.datetime(2026, 8, 20, tzinfo=datetime.timezone.utc), embeds=embeds)
+
+    def test_find_archived_dates_returns_distinct_dates_most_recent_first(self):
+        oldest = self._tagged_message(1, "2026-08-18")
+        middle = self._tagged_message(2, "2026-08-19")
+        newest = self._tagged_message(3, "2026-08-20")
+        channel = _FakeChannel([oldest, middle, newest])
+        dates = _run(masterparlay.find_archived_dates(channel))
+        self.assertEqual(dates, ["2026-08-20", "2026-08-19", "2026-08-18"])
+
+    def test_find_archived_report_returns_only_matching_date_oldest_first(self):
+        first = self._tagged_message(1, "2026-08-20")
+        other_day = self._tagged_message(2, "2026-08-19")
+        second = self._tagged_message(3, "2026-08-20")
+        channel = _FakeChannel([first, other_day, second])
+        embeds = _run(masterparlay.find_archived_report(channel, "2026-08-20"))
+        self.assertEqual([e.title.split(" (")[0] for e in embeds], ["Parlay 1-0", "Parlay 3-0"])
+
+    def test_find_archived_report_handles_multiple_embeds_per_message(self):
+        message = self._tagged_message(1, "2026-08-20", count=3)
+        channel = _FakeChannel([message])
+        embeds = _run(masterparlay.find_archived_report(channel, "2026-08-20"))
+        self.assertEqual(len(embeds), 3)
+
+    def test_find_archived_report_no_match_returns_empty_list(self):
+        channel = _FakeChannel([self._tagged_message(1, "2026-08-20")])
+        embeds = _run(masterparlay.find_archived_report(channel, "2099-01-01"))
+        self.assertEqual(embeds, [])
 
 
 def _run(coro):

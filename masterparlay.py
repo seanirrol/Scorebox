@@ -46,9 +46,13 @@ import tracker
 PREMIUM_SCORES_CHANNEL_ID = 1536429372217761833
 
 # Where GreenFox posts the "MASTER PARLAYS" slip itself (/premiumparlay is
-# only usable here) and where a graded report can be published to.
+# only usable here) and where a graded report gets archived once
+# published - permanent storage of completed parlays, and the source
+# /premiumparlay reads back from when browsing a past date (see
+# find_archived_report), since re-resolving an old slip from scratch runs
+# into 365scores' own bulk-feed data window closing within a day or two.
 PARLAY_SLIP_CHANNEL_ID = 1538412823250608300
-PUBLISH_CHANNEL_ID = 1518103826786156696
+PUBLISH_CHANNEL_ID = 1540479187758874664
 
 # dailylog's own won/lost/push/void marks, plus two states dailylog itself
 # never has: "pending" (still live/not started, same yellow as an
@@ -270,7 +274,38 @@ def grade_parlay(resolved_legs: list[dict]) -> str:
 _TITLE_SUFFIX = {"won": f"{dailylog.WINMARK} HIT", "lost": f"{dailylog.LOSSMARK} Busted", "pending": "⏳ Pending"}
 
 
-def build_parlay_embed(name: str, odds: str, resolved_legs: list[dict]) -> discord.Embed:
+# Every archived embed's footer starts with this exact text, followed by
+# the slip's own "YYYY-MM-DD" Eastern date - a simple, greppable tag that
+# survives round-tripping through Discord (footers aren't otherwise used
+# for anything else here) so find_archived_dates/find_archived_report can
+# read the date back out of a channel's message history later, without
+# needing any separate persisted index.
+_ARCHIVE_FOOTER_PREFIX = "Scorebox • "
+
+
+def _archive_footer_text(date_str: str) -> str:
+    return f"{_ARCHIVE_FOOTER_PREFIX}{date_str}"
+
+
+def archived_date_from_embed(embed: discord.Embed) -> Optional[str]:
+    footer = embed.footer.text if embed.footer else None
+    if not footer or not footer.startswith(_ARCHIVE_FOOTER_PREFIX):
+        return None
+    return footer[len(_ARCHIVE_FOOTER_PREFIX) :]
+
+
+def slip_date_str(messages: list[discord.Message]) -> str:
+    """The Eastern calendar date this slip "belongs to" - the earliest
+    message's own posted time, not whenever Publish happens to get
+    clicked. Confirmed live as the reason this matters: a slip posted at
+    11pm whose last leg doesn't finish until after midnight (extra
+    innings, a long match) must still archive under the day it was
+    posted, not the day someone finally published it."""
+    earliest = min(messages, key=lambda m: m.created_at)
+    return scores365.eastern_date_str(earliest.created_at.timestamp()) or dailylog.today_str()
+
+
+def build_parlay_embed(name: str, odds: str, resolved_legs: list[dict], date_str: Optional[str] = None) -> discord.Embed:
     overall = grade_parlay(resolved_legs)
     color_key = {"won": "won", "lost": "lost"}.get(overall, "inprogress")
     lines = [f"{_LEG_MARKS.get(leg['status'], '❓')} {leg['label']} — {leg['detail']}" for leg in resolved_legs]
@@ -279,6 +314,8 @@ def build_parlay_embed(name: str, odds: str, resolved_legs: list[dict]) -> disco
         description="\n".join(lines),
         color=scoreimage.EMBED_COLOR[color_key],
     )
+    if date_str:
+        embed.set_footer(text=_archive_footer_text(date_str))
     embed.timestamp = discord.utils.utcnow()
     return embed
 
@@ -290,17 +327,47 @@ def combine_slip_text(messages: list[discord.Message]) -> str:
     return "\n\n".join(m.content for m in messages)
 
 
-async def build_report(source_text: str) -> list[discord.Embed]:
+async def build_report(source_text: str, date_str: Optional[str] = None) -> list[discord.Embed]:
     """Parses source_text (a "MASTER PARLAYS" message's raw content) and
     resolves every leg of every parlay found - one embed per parlay, same
     order as the source message. Empty list if the message has no
-    recognizable parlays at all (caller decides how to report that)."""
+    recognizable parlays at all (caller decides how to report that).
+    date_str, when given, gets tagged into each embed's footer for later
+    archive lookup by date (see slip_date_str/find_archived_report) -
+    omitted for a plain preview that's never meant to be archived."""
     parlays = parse_master_parlays(source_text)
     embeds = []
     for parlay in parlays:
         resolved_legs = [await resolve_leg(leg) for leg in parlay["legs"]]
-        embeds.append(build_parlay_embed(parlay["name"], parlay["odds"], resolved_legs))
+        embeds.append(build_parlay_embed(parlay["name"], parlay["odds"], resolved_legs, date_str))
     return embeds
+
+
+async def find_archived_dates(channel: discord.abc.Messageable, limit: int = 200) -> list[str]:
+    """Most-recent-first distinct dates with at least one archived parlay
+    report in this channel - used for /premiumparlay's own date dropdown,
+    same idea as dailylog.available_dates for /summary."""
+    dates: list[str] = []
+    async for message in channel.history(limit=limit):
+        for embed in message.embeds:
+            date_str = archived_date_from_embed(embed)
+            if date_str and date_str not in dates:
+                dates.append(date_str)
+    return dates
+
+
+async def find_archived_report(channel: discord.abc.Messageable, date_str: str, limit: int = 200) -> list[discord.Embed]:
+    """Every archived parlay embed tagged with this date, oldest first (as
+    originally posted) - a straight re-display of what was already
+    published, no re-resolution needed since a published report is
+    already a final, graded snapshot."""
+    matches: list[tuple[discord.Message, discord.Embed]] = []
+    async for message in channel.history(limit=limit):
+        for embed in message.embeds:
+            if archived_date_from_embed(embed) == date_str:
+                matches.append((message, embed))
+    matches.reverse()
+    return [embed for _message, embed in matches]
 
 
 async def find_latest_slip(channel: discord.abc.Messageable, limit: int = 50) -> Optional[list[discord.Message]]:

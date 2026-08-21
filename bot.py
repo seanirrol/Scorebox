@@ -3006,7 +3006,8 @@ class MasterParlayPublishView(discord.ui.View):
             await interaction.edit_original_response(content="Couldn't re-fetch the original slip - part of it may have been deleted.", embeds=[], view=None)
             self.stop()
             return
-        embeds = await masterparlay.build_report(masterparlay.combine_slip_text(sources))
+        date_str = masterparlay.slip_date_str(sources)
+        embeds = await masterparlay.build_report(masterparlay.combine_slip_text(sources), date_str)
         if not embeds:
             await interaction.edit_original_response(content="Nothing to publish - no parlays found in the slip anymore.", embeds=[], view=None)
             self.stop()
@@ -3015,16 +3016,64 @@ class MasterParlayPublishView(discord.ui.View):
         for i in range(0, len(embeds), 10):
             await target.send(embeds=embeds[i : i + 10])
         botlog.event(
-            f"🎟️ Master parlay report published to <#{masterparlay.PUBLISH_CHANNEL_ID}> "
+            f"🎟️ Master parlay report ({date_str}) published to <#{masterparlay.PUBLISH_CHANNEL_ID}> "
             f"(previewed in <#{interaction.channel_id}>) by **{interaction.user}**"
         )
-        await interaction.edit_original_response(content="Published.", embeds=[], view=None)
+        await interaction.edit_original_response(content=f"Published to the {date_str} archive.", embeds=[], view=None)
         self.stop()
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.edit_message(content="Cancelled - nothing published.", embeds=[], view=None)
         self.stop()
+
+    @discord.ui.button(label="View Past Dates", style=discord.ButtonStyle.secondary)
+    async def view_past_dates(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        archive = client.get_channel(masterparlay.PUBLISH_CHANNEL_ID) or await client.fetch_channel(masterparlay.PUBLISH_CHANNEL_ID)
+        dates = await masterparlay.find_archived_dates(archive)
+        if not dates:
+            await interaction.edit_original_response(content="No archived parlay reports found yet.", embeds=[], view=None)
+            self.stop()
+            return
+        view = MasterParlayArchiveDateView(dates, interaction.user.id)
+        await interaction.edit_original_response(content="Pick a date to view archived parlay reports:", embeds=[], view=view)
+        self.stop()
+
+
+class _MasterParlayArchiveDateSelect(discord.ui.Select):
+    """Mirrors _SummaryDateSelect - one option per date that has at least
+    one archived parlay report, read back from the archive channel's
+    footer tags (see masterparlay.find_archived_dates) rather than a
+    separate index, since published reports are already the permanent
+    record."""
+
+    def __init__(self, dates: list[str], requester_id: int):
+        options = [discord.SelectOption(label=d) for d in dates]
+        super().__init__(placeholder="Pick a date to view...", min_values=1, max_values=1, options=options)
+        self.requester_id = requester_id
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.requester_id:
+            await interaction.response.send_message("Only the person who ran /premiumparlay can use this.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        archive = client.get_channel(masterparlay.PUBLISH_CHANNEL_ID) or await client.fetch_channel(masterparlay.PUBLISH_CHANNEL_ID)
+        date_str = self.values[0]
+        embeds = await masterparlay.find_archived_report(archive, date_str)
+        if not embeds:
+            await interaction.edit_original_response(content=f"No archived parlay reports found for {date_str} anymore.", embeds=[], view=None)
+            return
+        truncated = ""
+        if len(embeds) > 10:
+            truncated = f" (showing 10 of {len(embeds)})"
+        await interaction.edit_original_response(content=f"Archived parlay reports for {date_str}.{truncated}", embeds=embeds[:10], view=None)
+
+
+class MasterParlayArchiveDateView(discord.ui.View):
+    def __init__(self, dates: list[str], requester_id: int):
+        super().__init__(timeout=300)
+        self.add_item(_MasterParlayArchiveDateSelect(dates, requester_id))
 
 
 @tree.command(name="premiumparlay", description="Preview the latest MASTER PARLAYS slip graded against tracked legs, then optionally publish it")
