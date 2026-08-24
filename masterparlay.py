@@ -59,14 +59,18 @@ import tracker
 PREMIUM_SCORES_CHANNEL_ID = 1536429372217761833
 
 # Where GreenFox posts the "MASTER PARLAYS" slip itself (/premiumparlay is
-# only usable here) - published/archived reports now post back into this
-# same channel too (per explicit request), rather than a separate archive
-# channel. /premiumparlay's own "View Past Dates" browsing (see
-# find_archived_report) reads from here as well, since re-resolving an
-# old slip from scratch runs into 365scores' own bulk-feed data window
-# closing within a day or two.
+# only usable here) - kept separate from PUBLISH_CHANNEL_ID below so this
+# channel stays just the raw slip feed, not cluttered with every day's
+# published report on top of it.
 PARLAY_SLIP_CHANNEL_ID = 1538412823250608300
-PUBLISH_CHANNEL_ID = PARLAY_SLIP_CHANNEL_ID
+
+# Permanent storage for published parlay reports, tagged by the slip's own
+# posted date (see slip_date_str/_archive_footer_text) - /premiumparlay's
+# "View Past Dates" browsing (see find_archived_report) reads back from
+# here, so a past day's results stay available even though re-resolving
+# an old slip from scratch runs into 365scores' own bulk-feed data window
+# closing within a day or two.
+PUBLISH_CHANNEL_ID = 1540479187758874664
 
 # dailylog's own won/lost/push/void marks, plus two states dailylog itself
 # never has: "pending" (still live/not started, same yellow as an
