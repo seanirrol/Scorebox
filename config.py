@@ -10,6 +10,12 @@ load_dotenv()
 
 DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN", "")
 
+# Used by image_picks.py to read a picks-slate graphic (an image, not text)
+# via Claude's vision - unset means image-based picks messages are silently
+# skipped (only their text content, if any, still gets parsed normally).
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+IMAGE_PICKS_MODEL = os.environ.get("IMAGE_PICKS_MODEL", "claude-sonnet-4-6")
+
 # How often (seconds) a tracked match's embed is refreshed.
 UPDATE_INTERVAL_SECONDS = int(os.environ.get("UPDATE_INTERVAL_SECONDS", "30"))
 

@@ -1,0 +1,118 @@
+#!/usr/bin/env python3
+"""
+Regression tests for image_picks.py - the Claude-vision adapter that
+transcribes a picks-slate graphic into the bracket-tagged plain text
+picks.parse_picks_message already understands. The actual Anthropic API
+call is mocked throughout; these tests only cover this module's own
+wrapping/error-handling logic, not Claude's own transcription quality.
+
+Run with: python -m unittest discover -s tests -t .
+"""
+
+import os
+import sys
+import unittest
+from unittest.mock import MagicMock, patch
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import anthropic
+
+import image_picks
+
+
+def _run(coro):
+    import asyncio
+    return asyncio.new_event_loop().run_until_complete(coro)
+
+
+class ExtractPicksText(unittest.TestCase):
+    def test_returns_none_when_no_client_configured(self):
+        with patch.object(image_picks, "_client", None):
+            result = _run(image_picks.extract_picks_text(b"fake-image-bytes", "image/png"))
+        self.assertIsNone(result)
+
+    def test_returns_transcribed_text_on_success(self):
+        with patch.object(image_picks, "_client", MagicMock()), \
+             patch.object(image_picks, "_extract_sync", return_value="[MLB] Cincinnati Reds F5 ML"):
+            result = _run(image_picks.extract_picks_text(b"fake-image-bytes", "image/png"))
+        self.assertEqual(result, "[MLB] Cincinnati Reds F5 ML")
+
+    def test_api_error_returns_none_instead_of_raising(self):
+        # A failed/rate-limited call must never take down on_message's
+        # whole picks pipeline - the message's own text content (if any)
+        # should still get parsed normally.
+        with patch.object(image_picks, "_client", MagicMock()), \
+             patch.object(image_picks, "_extract_sync", side_effect=anthropic.APIError("boom", request=MagicMock(), body=None)):
+            result = _run(image_picks.extract_picks_text(b"fake-image-bytes", "image/png"))
+        self.assertIsNone(result)
+
+    def test_empty_model_response_is_a_valid_falsy_result_not_none(self):
+        # Distinct from "not configured"/"API failed" - the model looked
+        # at the image and found nothing parseable in it.
+        with patch.object(image_picks, "_client", MagicMock()), \
+             patch.object(image_picks, "_extract_sync", return_value=""):
+            result = _run(image_picks.extract_picks_text(b"fake-image-bytes", "image/png"))
+        self.assertEqual(result, "")
+
+
+class ExtractSync(unittest.TestCase):
+    """_extract_sync itself, with the Anthropic client's create() call
+    mocked - covers the request shape and response-joining logic."""
+
+    def _fake_response(self, text):
+        block = MagicMock()
+        block.type = "text"
+        block.text = text
+        response = MagicMock()
+        response.content = [block]
+        return response
+
+    def test_joins_multiple_text_blocks(self):
+        block1 = MagicMock(type="text", text="[MLB] Cincinnati Reds F5 ML\n")
+        block2 = MagicMock(type="text", text="[WNBA] Atlanta Dream ML")
+        response = MagicMock()
+        response.content = [block1, block2]
+        fake_client = MagicMock()
+        fake_client.messages.create.return_value = response
+        with patch.object(image_picks, "_client", fake_client):
+            result = image_picks._extract_sync(b"fake-bytes", "image/png")
+        self.assertEqual(result, "[MLB] Cincinnati Reds F5 ML\n[WNBA] Atlanta Dream ML")
+
+    def test_ignores_non_text_blocks(self):
+        text_block = MagicMock(type="text", text="[MLB] Cincinnati Reds F5 ML")
+        other_block = MagicMock(type="thinking")
+        response = MagicMock()
+        response.content = [other_block, text_block]
+        fake_client = MagicMock()
+        fake_client.messages.create.return_value = response
+        with patch.object(image_picks, "_client", fake_client):
+            result = image_picks._extract_sync(b"fake-bytes", "image/png")
+        self.assertEqual(result, "[MLB] Cincinnati Reds F5 ML")
+
+    def test_strips_surrounding_whitespace(self):
+        block = MagicMock(type="text", text="\n\n[MLB] Cincinnati Reds F5 ML\n\n")
+        response = MagicMock()
+        response.content = [block]
+        fake_client = MagicMock()
+        fake_client.messages.create.return_value = response
+        with patch.object(image_picks, "_client", fake_client):
+            result = image_picks._extract_sync(b"fake-bytes", "image/png")
+        self.assertEqual(result, "[MLB] Cincinnati Reds F5 ML")
+
+    def test_passes_base64_image_and_media_type_in_request(self):
+        import base64
+        response = self._fake_response("[MLB] Cincinnati Reds F5 ML")
+        fake_client = MagicMock()
+        fake_client.messages.create.return_value = response
+        with patch.object(image_picks, "_client", fake_client):
+            image_picks._extract_sync(b"hello", "image/jpeg")
+        _args, kwargs = fake_client.messages.create.call_args
+        image_block = kwargs["messages"][0]["content"][0]
+        self.assertEqual(image_block["type"], "image")
+        self.assertEqual(image_block["source"]["media_type"], "image/jpeg")
+        self.assertEqual(image_block["source"]["data"], base64.b64encode(b"hello").decode("ascii"))
+
+
+if __name__ == "__main__":
+    unittest.main()

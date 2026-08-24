@@ -34,6 +34,7 @@ import esportstracker
 import f5tracker
 import halftracker
 import htfttracker
+import image_picks
 import inning1tracker
 import inningtracker
 import kboproptracker
@@ -1431,6 +1432,35 @@ async def _auto_esports(
     return message.id
 
 
+async def _extract_image_picks_text(message: discord.Message) -> str:
+    """Reads every image attachment on a picks-channel message via
+    image_picks (Claude vision) and joins their transcribed pick lines
+    together - None/empty results (no ANTHROPIC_API_KEY configured, no
+    image attachments, or the model found nothing readable) all collapse
+    to "" so callers can just treat this as an optional text suffix,
+    never an error to handle specially. Multiple images (confirmed
+    GreenFox posts these as a single slate graphic, but nothing stops a
+    multi-image message) are each read independently and combined - a
+    line from one image ending up on the same message as a line from
+    another is no different from two lines in the same block of text."""
+    images = [a for a in message.attachments if (a.content_type or "").startswith("image/")]
+    if not images:
+        return ""
+    texts = []
+    for attachment in images:
+        try:
+            image_bytes = await attachment.read()
+        except discord.HTTPException as e:
+            log.warning("Failed to download image attachment %s: %s", attachment.filename, e)
+            continue
+        text = await image_picks.extract_picks_text(image_bytes, attachment.content_type)
+        if text:
+            texts.append(text)
+    if texts:
+        log.info("Image picks: transcribed %d line(s) from %d image(s)", sum(len(t.splitlines()) for t in texts), len(texts))
+    return "\n".join(texts)
+
+
 @client.event
 async def on_message(message: discord.Message):
     target_channel_id = config.PICKS_CHANNEL_MAP.get(message.channel.id)
@@ -1441,10 +1471,15 @@ async def on_message(message: discord.Message):
         return
     _processed_message_ids.add(message.id)
 
-    log.info("Picks channel message received: %r", message.content)
-    parsed = picks.parse_picks_message(message.content)
+    content = message.content
+    image_text = await _extract_image_picks_text(message)
+    if image_text:
+        content = f"{content}\n{image_text}" if content else image_text
+
+    log.info("Picks channel message received: %r", content)
+    parsed = picks.parse_picks_message(content)
     log.info("Parsed %d pick(s) from that message", len(parsed))
-    line_count = len([ln for ln in message.content.splitlines() if ln.strip()])
+    line_count = len([ln for ln in content.splitlines() if ln.strip()])
     botlog.event(
         f"📥 Picks message from **{message.author}** in <#{message.channel.id}>: "
         f"parsed {len(parsed)}/{line_count} line(s)"
