@@ -146,7 +146,7 @@ _YRFI_LINE_RE = re.compile(r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b)\s*.+?[-:]\s*(YRFI
 # unmatched - it settles the same way (once the 1st inning itself ends),
 # just against an arbitrary combined-runs line instead of the fixed 0.5.
 _INNING_RUN_TOTAL_RE = re.compile(
-    r"^(.+?)\s*(?:@|\bvs\.?|\bv\.?|\bat\b)\s*(.+?)\s*-\s*(Over|Under)\s+([\d.]+)\s+1st\s+Inning\b",
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s*-\s*(Over|Under)\s+([\d.]+)\s+1st\s+Inning\b",
     re.IGNORECASE,
 )
 
@@ -180,14 +180,14 @@ _SET1_MARKER_RE = re.compile(
 # without the explicit "1st Set" marker this would otherwise be graded
 # against the whole match's sets-won score instead of just Set 1's games.
 _SET1_TOTAL_GAMES_RE = re.compile(
-    r"^(.+?)\s*(?:@|\bvs\.?|\bv\.?|\bat\b)\s*(.+?)\s*-\s*1st\s+set\s*(?:total\s+)?(?:games\s+)?(Over|Under)\s+([\d.]+)",
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s*-\s*1st\s+set\s*(?:total\s+)?(?:games\s+)?(Over|Under)\s+([\d.]+)",
     re.IGNORECASE,
 )
 # Same market, number-before-marker word order (confirmed live: "Over 8.5
 # 1st Set Total Games") - mirrors _MATCH_TOTAL_GAMES_AFTER_RE's same
 # before/after split below for the whole-match version.
 _SET1_TOTAL_GAMES_AFTER_RE = re.compile(
-    r"^(.+?)\s*(?:@|\bvs\.?|\bv\.?|\bat\b)\s*(.+?)\s*-?\s*(Over|Under)\s+([\d.]+)\s*1st\s+set\s*(?:total\s+)?games\b",
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s*-?\s*(Over|Under)\s+([\d.]+)\s*1st\s+set\s*(?:total\s+)?games\b",
     re.IGNORECASE,
 )
 
@@ -199,11 +199,11 @@ _SET1_TOTAL_GAMES_AFTER_RE = re.compile(
 # generic total against tennis's sets-won score, which could never reach a
 # realistic games-total line like 23.5.
 _MATCH_TOTAL_GAMES_BEFORE_RE = re.compile(
-    r"^(.+?)\s*(?:@|\bvs\.?|\bv\.?|\bat\b)\s*(.+?)\s*-\s*(?:total\s+)?games\s+(Over|Under)\s+([\d.]+)",
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s*-\s*(?:total\s+)?games\s+(Over|Under)\s+([\d.]+)",
     re.IGNORECASE,
 )
 _MATCH_TOTAL_GAMES_AFTER_RE = re.compile(
-    r"^(.+?)\s*(?:@|\bvs\.?|\bv\.?|\bat\b)\s*(.+?)\s*-?\s*(Over|Under)\s+([\d.]+)\s*(?:total\s+)?games\b",
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s*-?\s*(Over|Under)\s+([\d.]+)\s*(?:total\s+)?games\b",
     re.IGNORECASE,
 )
 
@@ -219,11 +219,11 @@ _MATCH_TOTAL_GAMES_AFTER_RE = re.compile(
 # the player's own name folded into the "team" match-lookup string instead
 # of ever being used to orient which side's games actually get graded).
 _PLAYER_TOTAL_GAMES_BEFORE_RE = re.compile(
-    r"^(.+?)\s*(?:@|\bvs\.?|\bv\.?|\bat\b)\s*(.+?)\s*-\s*(.+?)\s+(?:total\s+)?games\s+(Over|Under)\s+([\d.]+)",
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s*-\s*(.+?)\s+(?:total\s+)?games\s+(Over|Under)\s+([\d.]+)",
     re.IGNORECASE,
 )
 _PLAYER_TOTAL_GAMES_AFTER_RE = re.compile(
-    r"^(.+?)\s*(?:@|\bvs\.?|\bv\.?|\bat\b)\s*(.+?)\s*-\s*(.+?)\s+(Over|Under)\s+([\d.]+)\s*(?:total\s+)?games\b",
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s*-\s*(.+?)\s+(Over|Under)\s+([\d.]+)\s*(?:total\s+)?games\b",
     re.IGNORECASE,
 )
 
@@ -285,7 +285,7 @@ _WIN_A_SET_WORDING = r"a\s+set|at\s+least\s+1\s+sets?|1\+\s*sets?"
 # either word order) - whether the named player wins at least one set
 # during the match, not who wins the match outright.
 _WIN_A_SET_RE = re.compile(
-    rf"^(.+?)\s*(?:@|\bvs\.?|\bv\.?|\bat\b)\s*(.+?)\s*-\s*(.+?)\s+to\s+win\s+(?:{_WIN_A_SET_WORDING})\b",
+    rf"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s*-\s*(.+?)\s+to\s+win\s+(?:{_WIN_A_SET_WORDING})\b",
     re.IGNORECASE,
 )
 
@@ -304,7 +304,7 @@ _WIN_A_SET_NOMATCHUP_RE = re.compile(
 # 3-way "1st inning result" market. Either team name is enough to look the
 # game up - grading only cares whether the 1st inning runs end level.
 _INNING1_DRAW_RE = re.compile(
-    r"^(.+?)\s*(?:@|\bvs\.?|\bv\.?|\bat\b)\s*(.+?)\s*-\s*1st\s+inning\s+(?:draw|tie)\b",
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s*-\s*1st\s+inning\s+(?:draw|tie)\b",
     re.IGNORECASE,
 )
 
@@ -338,7 +338,7 @@ _F5_TOTAL_RE = re.compile(
 # this graded against the WHOLE game's total instead of just the first 5
 # innings.
 _F5_COMBINED_TOTAL_RE = re.compile(
-    r"^(.+?)\s*(?:@|\bvs\.?|\bv\.?|\bat\b)\s*(.+?)\s*-\s*"
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s*-\s*"
     r"(?:f5|first\s+5\s+innings|first\s+five\s+innings|1st\s+5\s+innings)"
     r"\s*(?:total\s*)?(Over|Under)\s+([\d.]+)",
     re.IGNORECASE,
@@ -352,7 +352,7 @@ _F5_COMBINED_TOTAL_RE = re.compile(
 # The named team is validated against a matchup side the same way
 # _NAMED_TEAM_TOTAL_RE is, to avoid false positives.
 _F5_HANDICAP_RE = re.compile(
-    r"^(.+?)\s*(?:@|\bvs\.?|\bv\.?|\bat\b)\s*(.+?)\s*-\s*"
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s*-\s*"
     r"(?:f5|first\s+5\s+innings|first\s+five\s+innings|1st\s+5\s+innings)"
     r"\s+(.+?)\s+([+-]\d+(?:\.\d+)?)\b",
     re.IGNORECASE,
@@ -384,7 +384,7 @@ _1H_TOTAL_RE = re.compile(
 # names) is what distinguishes it. Checked before the generic game-total
 # parser below, same reasoning as F5's combined total for baseball.
 _1H_COMBINED_TOTAL_RE = re.compile(
-    r"^(.+?)\s*(?:@|\bvs\.?|\bv\.?|\bat\b)\s*(.+?)\s*-\s*"
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s*-\s*"
     r"(?:1h|1st\s+half|first\s+half)"
     r"\s*(?:total\s*)?(Over|Under)\s+([\d.]+)",
     re.IGNORECASE,
@@ -401,7 +401,7 @@ _1H_COMBINED_TOTAL_RE = re.compile(
 # stage data shape that hasn't been checked, so it's deliberately left out
 # rather than guessed at.
 _HT_FT_RE = re.compile(
-    r"^(?:.+?\s*(?:@|\bvs\.?|\bv\.?|\bat\b)\s*.+?\s*-\s*)?"
+    r"^(?:.+?\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*.+?\s*-\s*)?"
     r"(.+?)\s*/\s*(.+?)\s+(?:Halftime\s*/\s*Fulltime|HT\s*/\s*FT)\b",
     re.IGNORECASE,
 )
@@ -414,7 +414,7 @@ _HT_FT_RE = re.compile(
 # excludes "/" so this never double-matches the two-team form above (that
 # one's tried first anyway - see _parse_ht_ft_pick).
 _HT_FT_SAME_TEAM_RE = re.compile(
-    r"^(?:.+?\s*(?:@|\bvs\.?|\bv\.?|\bat\b)\s*.+?\s*-\s*)?"
+    r"^(?:.+?\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*.+?\s*-\s*)?"
     r"([^/]+?)\s+(?:Halftime\s*/\s*Fulltime|HT\s*/\s*FT)(?:\s+ML)?\s*$",
     re.IGNORECASE,
 )
@@ -474,7 +474,7 @@ def _parse_team_spread_nomatchup_pick(sport: str, description: str) -> Optional[
 # optional trailing scoring-unit word as the no-matchup version above, for
 # the same reason ("Broncos -3.5 Points").
 _TEAM_SPREAD_MATCHUP_RE = re.compile(
-    r"^(.+?)\s*(?:@|\bvs\.?|\bv\.?|\bat\b)\s*(.+?)\s*-\s*(.+?)\s*\(?([+-]\d+(?:\.\d+)?)\)?(?:\s+(?:Points|Pts|Runs|Goals))?\s*$",
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s*-\s*(.+?)\s*\(?([+-]\d+(?:\.\d+)?)\)?(?:\s+(?:Points|Pts|Runs|Goals))?\s*$",
     re.IGNORECASE,
 )
 
@@ -495,13 +495,49 @@ def _parse_team_spread_matchup_pick(sport: str, description: str) -> Optional[di
         return None  # doesn't look like either matchup side - don't guess
     return {"kind": "team_total", "sport": sport, "team": team, "direction": "spread", "line": float(m.group(4))}
 
+
+# "Golden State Valkyries at Minnesota Lynx - Minnesota Lynx ML" - the
+# matchup-named counterpart to a bare moneyline pick. Confirmed live as a
+# serious bug, not just a missed track: without a dedicated parser for
+# this shape, it fell through to _parse_team_pick's own generic fallback
+# (which deliberately excludes "at" from its own vs/v matchup loop - see
+# that function's comment), which just strips the trailing "ML" and
+# returns the ENTIRE "Golden State Valkyries at Minnesota Lynx -
+# Minnesota Lynx" string as the "picked" team. Since
+# scores365.names_match does a substring check, that bloated string
+# matches BOTH teams' names - the pick graded "won" no matter which side
+# actually won, since whichever team's name comes up is always a
+# substring of it. Same optional trailing-word tolerance as the spread
+# version isn't needed here since "ML"/"Moneyline" is already the anchor.
+_TEAM_ML_MATCHUP_RE = re.compile(
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s*-\s*(.+?)\s+(?:ML|Moneyline)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _parse_team_ml_matchup_pick(sport: str, description: str) -> Optional[dict]:
+    text = _clean_line(description)
+    m = _TEAM_ML_MATCHUP_RE.match(text)
+    if not m:
+        return None
+    team_a, team_b, named_team = m.group(1).strip(), m.group(2).strip(), m.group(3).strip()
+    if not team_a or not team_b or not named_team:
+        return None
+    if scores365.names_match(named_team, team_a):
+        team = team_a
+    elif scores365.names_match(named_team, team_b):
+        team = team_b
+    else:
+        return None  # doesn't look like either matchup side - don't guess
+    return {"kind": "track", "sport": sport, "team": team}
+
 # "Daniel Rodriguez vs Uros Medic - Under 2.5 Rounds" - a UFC round total
 # (see grade_ufc_round_total). Requires "Rounds" explicitly since it would
 # otherwise match the same shape as a generic combined game total
 # (_TOTAL_LINE_RE) - checked before that generic parser for the same reason
 # F5's combined total is checked before it for baseball.
 _UFC_ROUND_TOTAL_RE = re.compile(
-    r"^(.+?)\s*(?:@|\bvs\.?|\bv\.?|\bat\b)\s*(.+?)\s*-\s*(?:total\s*)?(Over|Under)\s+([\d.]+)\s*rounds?\b",
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s*-\s*(?:total\s*)?(Over|Under)\s+([\d.]+)\s*rounds?\b",
     re.IGNORECASE,
 )
 
@@ -521,7 +557,7 @@ _UFC_ROUND_TOTAL_RE = re.compile(
 # accepted a bare number or "Total <word>"), silently misparsed as a team
 # moneyline pick on "LA Galaxy" instead of a game total.
 _TOTAL_LINE_RE = re.compile(
-    r"^(.+?)\s*(?:@|\bvs\.?|\bv\.?|\bat\b)\s*(.+?)\s*(?:-\s*)?(Over|Under)\s+([\d.]+)(?:\s+\S.*)?\s*$",
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s*(?:-\s*)?(Over|Under)\s+([\d.]+)(?:\s+\S.*)?\s*$",
     re.IGNORECASE,
 )
 
@@ -535,7 +571,7 @@ _TOTAL_LINE_RE = re.compile(
 # (fuzzy-matched) rather than trusted blindly, so stray wording here
 # doesn't get mistaken for a team name.
 _NAMED_TEAM_TOTAL_RE = re.compile(
-    r"^(.+?)\s*(?:@|\bvs\.?|\bv\.?|\bat\b)\s*(.+?)\s*-\s*(.+?)\s+(Over|Under)\s+([\d.]+)\b",
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s*-\s*(.+?)\s+(Over|Under)\s+([\d.]+)\b",
     re.IGNORECASE,
 )
 
@@ -1364,7 +1400,7 @@ def _parse_ufc_round_total_pick(description: str) -> Optional[dict]:
 # "Team A vs Team B - Team X (-1.5) Map Handicap" / "... - Team X -1.5 Map
 # Handicap" (parens optional either way).
 _ESPORTS_MAP_HANDICAP_RE = re.compile(
-    r"^(.+?)\s*(?:@|\bvs\.?|\bv\.?|\bat\b)\s*(.+?)\s*-\s*(.+?)\s*\(?([+-]\d+(?:\.\d+)?)\)?\s*map\s*handicap\b",
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s*-\s*(.+?)\s*\(?([+-]\d+(?:\.\d+)?)\)?\s*map\s*handicap\b",
     re.IGNORECASE,
 )
 
@@ -1372,16 +1408,16 @@ _ESPORTS_MAP_HANDICAP_RE = re.compile(
 # - Over 2.5 Total Maps" or "... Over 2.5 Maps" (marker after) - same
 # before/after split as tennis's total-games markers elsewhere in this file.
 _ESPORTS_TOTAL_MAPS_BEFORE_RE = re.compile(
-    r"^(.+?)\s*(?:@|\bvs\.?|\bv\.?|\bat\b)\s*(.+?)\s*-\s*(?:total\s+)?maps\s+(Over|Under)\s+([\d.]+)", re.IGNORECASE,
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s*-\s*(?:total\s+)?maps\s+(Over|Under)\s+([\d.]+)", re.IGNORECASE,
 )
 _ESPORTS_TOTAL_MAPS_AFTER_RE = re.compile(
-    r"^(.+?)\s*(?:@|\bvs\.?|\bv\.?|\bat\b)\s*(.+?)\s*-?\s*(Over|Under)\s+([\d.]+)\s*(?:total\s+)?maps\b", re.IGNORECASE,
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s*-?\s*(Over|Under)\s+([\d.]+)\s*(?:total\s+)?maps\b", re.IGNORECASE,
 )
 
 # "Team A vs Team B - Team X Map 2 Winner" - the individual-map flavor, not
 # the overall series (see _parse_esports_match_winner below for that).
 _ESPORTS_MAP_WINNER_RE = re.compile(
-    r"^(.+?)\s*(?:@|\bvs\.?|\bv\.?|\bat\b)\s*(.+?)\s*-\s*(.+?)\s+map\s*(\d+)\s+winner\b", re.IGNORECASE,
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s*-\s*(.+?)\s+map\s*(\d+)\s+winner\b", re.IGNORECASE,
 )
 
 # "Team A vs Team B - Team X ML and Map 2 Winner" / "... Match Winner / Map
@@ -1392,7 +1428,7 @@ _ESPORTS_MAP_WINNER_RE = re.compile(
 # if it were part of the team name and still fuzzy-match, silently
 # misparsing this as a plain Map N Winner pick.
 _ESPORTS_MATCH_AND_MAP_WINNER_RE = re.compile(
-    r"^(.+?)\s*(?:@|\bvs\.?|\bv\.?|\bat\b)\s*(.+?)\s*-\s*(.+?)\s+(?:ml|moneyline|match\s+winner)\s*(?:and|\+|/|&)\s*map\s*(\d+)\s+winner\b",
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s*-\s*(.+?)\s+(?:ml|moneyline|match\s+winner)\s*(?:and|\+|/|&)\s*map\s*(\d+)\s+winner\b",
     re.IGNORECASE,
 )
 
@@ -1400,7 +1436,7 @@ _ESPORTS_MATCH_AND_MAP_WINNER_RE = re.compile(
 # at Least One Map" - whether the named team avoids being swept, not who
 # wins the series outright.
 _ESPORTS_WIN_AT_LEAST_ONE_MAP_RE = re.compile(
-    r"^(.+?)\s*(?:@|\bvs\.?|\bv\.?|\bat\b)\s*(.+?)\s*-\s*(.+?)\s+(?:to\s+win|wins?)\s+(?:at\s+least\s+)?(?:one|1)\s+maps?\b",
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s*-\s*(.+?)\s+(?:to\s+win|wins?)\s+(?:at\s+least\s+)?(?:one|1)\s+maps?\b",
     re.IGNORECASE,
 )
 
@@ -1409,7 +1445,7 @@ _ESPORTS_WIN_AT_LEAST_ONE_MAP_RE = re.compile(
 # without it there's no reliable marker distinguishing this from arbitrary
 # trailing text.
 _ESPORTS_CORRECT_SCORE_RE = re.compile(
-    r"^(.+?)\s*(?:@|\bvs\.?|\bv\.?|\bat\b)\s*(.+?)\s*-\s*(.+?)\s+to\s+win\s+(\d+)\s*-\s*(\d+)\b",
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s*-\s*(.+?)\s+to\s+win\s+(\d+)\s*-\s*(\d+)\b",
     re.IGNORECASE,
 )
 
@@ -1418,10 +1454,10 @@ _ESPORTS_CORRECT_SCORE_RE = re.compile(
 # in the series, Dota 2 only (see esports.grade_total_kills - CS2 has no
 # kill data anywhere).
 _ESPORTS_TOTAL_KILLS_BEFORE_RE = re.compile(
-    r"^(.+?)\s*(?:@|\bvs\.?|\bv\.?|\bat\b)\s*(.+?)\s*-\s*(?:total\s+)?kills\s+(Over|Under)\s+([\d.]+)", re.IGNORECASE,
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s*-\s*(?:total\s+)?kills\s+(Over|Under)\s+([\d.]+)", re.IGNORECASE,
 )
 _ESPORTS_TOTAL_KILLS_AFTER_RE = re.compile(
-    r"^(.+?)\s*(?:@|\bvs\.?|\bv\.?|\bat\b)\s*(.+?)\s*-?\s*(Over|Under)\s+([\d.]+)\s*(?:total\s+)?kills\b", re.IGNORECASE,
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s*-?\s*(Over|Under)\s+([\d.]+)\s*(?:total\s+)?kills\b", re.IGNORECASE,
 )
 
 # "Team A vs Team B - Team X Over 60.5 Total Kills" - one named team's own
@@ -1430,10 +1466,10 @@ _ESPORTS_TOTAL_KILLS_AFTER_RE = re.compile(
 # from the combined-total shape (which has no name there at all) - checked
 # first, same convention as tennis's _PLAYER_TOTAL_GAMES_BEFORE/AFTER_RE.
 _ESPORTS_TEAM_TOTAL_KILLS_BEFORE_RE = re.compile(
-    r"^(.+?)\s*(?:@|\bvs\.?|\bv\.?|\bat\b)\s*(.+?)\s*-\s*(.+?)\s+(?:total\s+)?kills\s+(Over|Under)\s+([\d.]+)", re.IGNORECASE,
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s*-\s*(.+?)\s+(?:total\s+)?kills\s+(Over|Under)\s+([\d.]+)", re.IGNORECASE,
 )
 _ESPORTS_TEAM_TOTAL_KILLS_AFTER_RE = re.compile(
-    r"^(.+?)\s*(?:@|\bvs\.?|\bv\.?|\bat\b)\s*(.+?)\s*-\s*(.+?)\s+(Over|Under)\s+([\d.]+)\s*(?:total\s+)?kills\b", re.IGNORECASE,
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s*-\s*(.+?)\s+(Over|Under)\s+([\d.]+)\s*(?:total\s+)?kills\b", re.IGNORECASE,
 )
 
 # "Team A vs Team B - Team X (-4.5) Map 1 Kills Handicap" / "... - Team X
@@ -1444,7 +1480,7 @@ _ESPORTS_TEAM_TOTAL_KILLS_AFTER_RE = re.compile(
 # nothing between "map" and "handicap", the other has no "map N" at all).
 # Dota 2 only, same restriction as every other kills market here.
 _ESPORTS_MAP_KILLS_HANDICAP_RE = re.compile(
-    r"^(.+?)\s*(?:@|\bvs\.?|\bv\.?|\bat\b)\s*(.+?)\s*-\s*(.+?)\s*\(?([+-]\d+(?:\.\d+)?)\)?\s*map\s*(\d+)\s*kills\s*handicap\b",
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s*-\s*(.+?)\s*\(?([+-]\d+(?:\.\d+)?)\)?\s*map\s*(\d+)\s*kills\s*handicap\b",
     re.IGNORECASE,
 )
 
@@ -1456,11 +1492,11 @@ _ESPORTS_MAP_KILLS_HANDICAP_RE = re.compile(
 # team either shape - same "no team name at all" convention as the
 # combined-total pair elsewhere in this file. Dota 2 only.
 _ESPORTS_MAP_TOTAL_KILLS_BEFORE_RE = re.compile(
-    r"^(.+?)\s*(?:@|\bvs\.?|\bv\.?|\bat\b)\s*(.+?)\s*-?\s*(Over|Under)\s+([\d.]+)\s*map\s*(\d+)\s*(?:total\s+)?kills\b",
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s*-?\s*(Over|Under)\s+([\d.]+)\s*map\s*(\d+)\s*(?:total\s+)?kills\b",
     re.IGNORECASE,
 )
 _ESPORTS_MAP_TOTAL_KILLS_AFTER_RE = re.compile(
-    r"^(.+?)\s*(?:@|\bvs\.?|\bv\.?|\bat\b)\s*(.+?)\s*-\s*map\s*(\d+)\s*(?:total\s+)?kills\s+(Over|Under)\s+([\d.]+)",
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s*-\s*map\s*(\d+)\s*(?:total\s+)?kills\s+(Over|Under)\s+([\d.]+)",
     re.IGNORECASE,
 )
 
@@ -1784,6 +1820,10 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
         matchup_spread = _parse_team_spread_matchup_pick(sport, description)
         if matchup_spread:
             return matchup_spread
+
+        matchup_ml = _parse_team_ml_matchup_pick(sport, description)
+        if matchup_ml:
+            return matchup_ml
 
     if sport == "nfl":
         onehalf_combined = _parse_1h_combined_total_pick(description, sport)

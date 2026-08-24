@@ -443,6 +443,68 @@ class NflSpreadWithMatchup(unittest.TestCase):
         self.assertEqual(results[0]["team"], "Stefanos Tsitsipas")
 
 
+class TeamMlWithMatchup(unittest.TestCase):
+    """"Team A at Team B - Team X ML" - a moneyline pick with the matchup
+    named, the ML counterpart to NflSpreadWithMatchup above. Confirmed
+    live as a serious bug, not just a missed track: with no dedicated
+    parser, this fell through to _parse_team_pick's generic fallback,
+    which returned the ENTIRE "Team A at Team B - Team X" string as the
+    "picked" team. Since scores365.names_match does a substring check,
+    that bloated string matches BOTH teams' names - the pick graded
+    "won" no matter which side actually won, silently for however long
+    until someone noticed."""
+
+    def test_at_separated_named_team_moneyline(self):
+        pick = picks.parse_pick_line("[WNBA] Golden State Valkyries at Minnesota Lynx - Minnesota Lynx ML (FanDuel -100)")
+        self.assertEqual(pick, {"kind": "track", "sport": "basketball", "team": "Minnesota Lynx"})
+
+    def test_at_separated_named_team_moneyline_other_side(self):
+        pick = picks.parse_pick_line("[WNBA] Atlanta Dream at Los Angeles Sparks - Atlanta Dream ML (FanDuel -100)")
+        self.assertEqual(pick["team"], "Atlanta Dream")
+
+    def test_full_word_moneyline_also_recognized(self):
+        pick = picks.parse_pick_line("[NFL] Packers at Broncos - Broncos Moneyline (Fanatics -130)")
+        self.assertEqual(pick["team"], "Broncos")
+
+    def test_named_team_not_matching_either_side_isnt_guessed_by_this_parser(self):
+        # _parse_team_ml_matchup_pick itself correctly declines (named
+        # team matches neither side) - but, same pre-existing gap as
+        # NflSpreadWithMatchup's own equivalent test, _parse_description's
+        # ultimate fallback (_parse_team_pick's "no cutword matched
+        # either, just return whatever's left" case) still swallows the
+        # whole garbled string as a literal team name rather than
+        # returning None. Not something this parser is responsible for -
+        # documenting the current behavior, not asserting a stronger
+        # guarantee.
+        pick = picks.parse_pick_line("[NFL] Packers at Broncos - Chiefs ML (Fanatics -130)")
+        self.assertEqual(pick, {"kind": "track", "sport": "nfl", "team": "Packers at Broncos - Chiefs"})
+
+
+class TeamNameStartingWithVIsNotMistakenForTheVSeparator(unittest.TestCase):
+    """Confirmed live as the root cause behind TeamMlWithMatchup's bug
+    above: the shared matchup-separator fragment's "v"/"vs" alternatives
+    had no trailing word boundary, so "Golden State Valkyries" matched
+    the bare "V" at the start of "Valkyries" as if it were the standalone
+    separator word "v", well before the regex ever reached the real "at"
+    separator later in the string - garbling the captured team name for
+    every matchup-pair parser that shares this fragment, not just the ML
+    one. A team/player name starting with "V" (or "Vs") sitting anywhere
+    before the real separator is enough to trigger it."""
+
+    def test_v_starting_team_name_before_the_real_at_separator(self):
+        pick = picks.parse_pick_line("[WNBA] Golden State Valkyries at Minnesota Lynx - Minnesota Lynx ML (FanDuel -100)")
+        self.assertEqual(pick["team"], "Minnesota Lynx")
+
+    def test_v_starting_team_name_in_a_spread_pick(self):
+        pick = picks.parse_pick_line("[NFL] Vikings at Broncos - Broncos -3.5 (Fanatics -130)")
+        self.assertEqual(pick["team"], "Broncos")
+        self.assertEqual(pick["line"], -3.5)
+
+    def test_bare_v_separator_still_works_after_the_boundary_fix(self):
+        pick = picks.parse_pick_line("[NFL] Packers v Broncos - Broncos -3.5 (Fanatics -130)")
+        self.assertEqual(pick["team"], "Broncos")
+
+
 class BasketballSpreadNoMatchup(unittest.TestCase):
     """Same no-opponent-named spread shape as NflSpreadNoMatchup above, but
     for WNBA/NBA - confirmed live, a real "Phoenix Mercury -2.5 (Alt
