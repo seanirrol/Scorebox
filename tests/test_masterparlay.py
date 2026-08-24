@@ -390,128 +390,131 @@ class _FakeChannel:
 
 
 class FindLatestSlip(unittest.TestCase):
-    """GreenFox's real slips split across multiple messages, sometimes a
-    few seconds apart (Discord's own per-message length cap - confirmed
-    live, a real 4-parlay slip landed as two messages 20 seconds apart),
-    sometimes tens of minutes apart (a follow-up slip posted later the
-    same parlay day) - grouping is bounded to the current parlay-day
-    window (3:00 AM Eastern to 3:00 AM Eastern, not a plain calendar day
-    - see masterparlay's module docstring), not proximity, so everything
-    posted since the last cutoff combines into one slip regardless of the
-    gap between messages, and nothing before that cutoff is ever
-    included."""
+    """GreenFox posts a given parlay day's slate the night before -
+    confirmed live, as early as 10:00 PM through 3:00 AM Eastern - so the
+    live view shows whichever posting window (D-1's 3am cutoff through
+    D's 3am cutoff) most recently closed, not whatever's accumulated
+    since the last cutoff (GreenFox doesn't even start posting the next
+    slate until 10pm regardless of how long ago the last cutoff was)."""
 
-    # 2026-08-20 20:39:19 UTC = 2026-08-20 16:39:19 EDT - comfortably
-    # mid-afternoon, well after that day's 3am cutoff and well before the
-    # next one, so every _t() offset used below stays predictable.
-    NOW = datetime.datetime(2026, 8, 20, 20, 39, 19, tzinfo=datetime.timezone.utc)
-
-    def _t(self, seconds_ago):
-        return self.NOW - datetime.timedelta(seconds=seconds_ago)
+    # 2026-08-25 11:00:00 UTC = 2026-08-25 07:00:00 EDT - a normal
+    # daytime check, well after that morning's 3am cutoff. The live
+    # window this resolves to is everything posted from 2026-08-24
+    # 07:00 UTC (2026-08-24 03:00 EDT) through 2026-08-25 07:00 UTC
+    # (2026-08-25 03:00 EDT, inclusive) - GreenFox's real 10pm-3am
+    # posting pattern for "the 25th's" slate.
+    NOW = datetime.datetime(2026, 8, 25, 11, 0, 0, tzinfo=datetime.timezone.utc)
 
     def _find(self, channel):
         return _run(masterparlay.find_latest_slip(channel, now=self.NOW.timestamp()))
 
     def test_two_messages_close_together_same_author_combine(self):
-        older = _FakeMessage(1, "🎟️ MASTER PARLAYS 🎟️\n🎟️ The Daily Double (+115)\n• Leg 1: Tampa Bay Rays ML (-150 | 88% Conf)", 42, self._t(20))
-        newer = _FakeMessage(2, "🎟️ The Four-Fold Fortress (+345)\n• Leg 1: Houston Astros F5 ML (-135 | 87% Conf)", 42, self._t(0))
+        # 10:00:00pm and 10:00:20pm EDT the night before - well inside
+        # the live window.
+        older = _FakeMessage(1, "🎟️ MASTER PARLAYS 🎟️\n🎟️ The Daily Double (+115)\n• Leg 1: Tampa Bay Rays ML (-150 | 88% Conf)", 42, datetime.datetime(2026, 8, 25, 2, 0, 0, tzinfo=datetime.timezone.utc))
+        newer = _FakeMessage(2, "🎟️ The Four-Fold Fortress (+345)\n• Leg 1: Houston Astros F5 ML (-135 | 87% Conf)", 42, datetime.datetime(2026, 8, 25, 2, 0, 20, tzinfo=datetime.timezone.utc))
         channel = _FakeChannel([older, newer])
         run = self._find(channel)
         self.assertEqual([m.id for m in run], [1, 2])  # oldest first
 
     def test_combined_text_carries_both_messages_parlays(self):
-        older = _FakeMessage(1, "🎟️ The Daily Double (+115)\n• Leg 1: Tampa Bay Rays ML (-150 | 88% Conf)", 42, self._t(20))
-        newer = _FakeMessage(2, "🎟️ The Four-Fold Fortress (+345)\n• Leg 1: Houston Astros F5 ML (-135 | 87% Conf)", 42, self._t(0))
+        older = _FakeMessage(1, "🎟️ The Daily Double (+115)\n• Leg 1: Tampa Bay Rays ML (-150 | 88% Conf)", 42, datetime.datetime(2026, 8, 25, 2, 0, 0, tzinfo=datetime.timezone.utc))
+        newer = _FakeMessage(2, "🎟️ The Four-Fold Fortress (+345)\n• Leg 1: Houston Astros F5 ML (-135 | 87% Conf)", 42, datetime.datetime(2026, 8, 25, 2, 0, 20, tzinfo=datetime.timezone.utc))
         combined = masterparlay.combine_slip_text([older, newer])
         parlays = masterparlay.parse_master_parlays(combined)
         self.assertEqual([p["name"] for p in parlays], ["The Daily Double", "The Four-Fold Fortress"])
 
     def test_same_window_despite_a_big_gap_still_combines(self):
-        # A follow-up slip posted 30 minutes after the first two, same
-        # parlay-day window - per explicit request, this combines instead
-        # of being treated as a separate, unreachable-once-superseded slip.
-        first = _FakeMessage(1, "🎟️ The Daily Double (+115)\n• Leg 1: Tampa Bay Rays ML (-150 | 88% Conf)", 42, self._t(35 * 60))
-        second = _FakeMessage(2, "🎟️ The Triple Threat (+170)\n• Leg 1: Houston Astros F5 ML (-135 | 87% Conf)", 42, self._t(34 * 60))
-        third = _FakeMessage(3, "🎟️ The Four-Fold Fortress (+345)\n• Leg 1: Atlanta Dream ML (-350 | 87% Conf)", 42, self._t(0))
+        # 10:00pm, 10:30pm, 11:00pm EDT the night before - a follow-up
+        # slip 30 minutes later, still well inside the same posting
+        # window, well before the 3am cutoff.
+        first = _FakeMessage(1, "🎟️ The Daily Double (+115)\n• Leg 1: Tampa Bay Rays ML (-150 | 88% Conf)", 42, datetime.datetime(2026, 8, 25, 2, 0, 0, tzinfo=datetime.timezone.utc))
+        second = _FakeMessage(2, "🎟️ The Triple Threat (+170)\n• Leg 1: Houston Astros F5 ML (-135 | 87% Conf)", 42, datetime.datetime(2026, 8, 25, 2, 30, 0, tzinfo=datetime.timezone.utc))
+        third = _FakeMessage(3, "🎟️ The Four-Fold Fortress (+345)\n• Leg 1: Atlanta Dream ML (-350 | 87% Conf)", 42, datetime.datetime(2026, 8, 25, 3, 0, 0, tzinfo=datetime.timezone.utc))
         channel = _FakeChannel([first, second, third])
         run = self._find(channel)
         self.assertEqual([m.id for m in run], [1, 2, 3])
 
     def test_different_author_breaks_the_run(self):
-        slip = _FakeMessage(1, "🎟️ The Daily Double (+115)\n• Leg 1: Tampa Bay Rays ML (-150 | 88% Conf)", 42, self._t(20))
-        other = _FakeMessage(2, "unrelated chat", 99, self._t(10))
-        newer_slip = _FakeMessage(3, "🎟️ The Four-Fold Fortress (+345)\n• Leg 1: Houston Astros F5 ML (-135 | 87% Conf)", 42, self._t(0))
+        slip = _FakeMessage(1, "🎟️ The Daily Double (+115)\n• Leg 1: Tampa Bay Rays ML (-150 | 88% Conf)", 42, datetime.datetime(2026, 8, 25, 2, 0, 0, tzinfo=datetime.timezone.utc))
+        other = _FakeMessage(2, "unrelated chat", 99, datetime.datetime(2026, 8, 25, 2, 10, 0, tzinfo=datetime.timezone.utc))
+        newer_slip = _FakeMessage(3, "🎟️ The Four-Fold Fortress (+345)\n• Leg 1: Houston Astros F5 ML (-135 | 87% Conf)", 42, datetime.datetime(2026, 8, 25, 2, 20, 0, tzinfo=datetime.timezone.utc))
         channel = _FakeChannel([slip, other, newer_slip])
         run = self._find(channel)
         self.assertEqual([m.id for m in run], [3])
 
-    def test_message_from_previous_parlay_day_is_excluded(self):
-        old_slip = _FakeMessage(1, "🎟️ The Daily Double (+115)\n• Leg 1: Tampa Bay Rays ML (-150 | 88% Conf)", 42, self._t(24 * 3600))
-        new_slip = _FakeMessage(2, "🎟️ The Four-Fold Fortress (+345)\n• Leg 1: Houston Astros F5 ML (-135 | 87% Conf)", 42, self._t(0))
+    def test_message_from_a_previous_parlay_day_is_excluded(self):
+        # 2026-08-23 20:00 UTC = 2026-08-23 16:00 EDT - the previous
+        # afternoon, well before the live window even opens
+        # (2026-08-24 07:00 UTC).
+        old_slip = _FakeMessage(1, "🎟️ The Daily Double (+115)\n• Leg 1: Tampa Bay Rays ML (-150 | 88% Conf)", 42, datetime.datetime(2026, 8, 23, 20, 0, 0, tzinfo=datetime.timezone.utc))
+        new_slip = _FakeMessage(2, "🎟️ The Four-Fold Fortress (+345)\n• Leg 1: Houston Astros F5 ML (-135 | 87% Conf)", 42, datetime.datetime(2026, 8, 25, 2, 0, 0, tzinfo=datetime.timezone.utc))
         channel = _FakeChannel([old_slip, new_slip])
         run = self._find(channel)
         self.assertEqual([m.id for m in run], [2])
 
-    def test_message_before_this_mornings_3am_cutoff_is_excluded(self):
-        # 2026-08-20 06:30:00 UTC = 2026-08-20 02:30:00 EDT - same
-        # calendar day as NOW, but before that day's own 3am cutoff, so
-        # it belongs to the *previous* parlay day, not today's.
-        before_cutoff = datetime.datetime(2026, 8, 20, 6, 30, 0, tzinfo=datetime.timezone.utc)
-        channel = _FakeChannel([_FakeMessage(1, "🎟️ The Daily Double (+115)\n• Leg 1: Tampa Bay Rays ML (-150 | 88% Conf)", 42, before_cutoff)])
-        self.assertIsNone(self._find(channel))
-
-    def test_late_night_message_and_early_morning_now_share_a_window(self):
-        # A slip posted at 11pm the previous evening is still "today's"
-        # slip if NOW is 2am - both sides of midnight, neither side of
-        # the 3am cutoff.
-        posted = datetime.datetime(2026, 8, 20, 3, 0, 0, tzinfo=datetime.timezone.utc)  # 2026-08-19 23:00 EDT
-        now = datetime.datetime(2026, 8, 20, 6, 0, 0, tzinfo=datetime.timezone.utc)  # 2026-08-20 02:00 EDT
-        channel = _FakeChannel([_FakeMessage(1, "🎟️ The Daily Double (+115)\n• Leg 1: Tampa Bay Rays ML (-150 | 88% Conf)", 42, posted)])
-        run = _run(masterparlay.find_latest_slip(channel, now=now.timestamp()))
+    def test_message_right_at_the_closing_cutoff_is_included(self):
+        # 2026-08-25 07:00:00 UTC = 2026-08-25 03:00:00 EDT exactly - the
+        # live window's own closing cutoff, inclusive.
+        at_cutoff = datetime.datetime(2026, 8, 25, 7, 0, 0, tzinfo=datetime.timezone.utc)
+        channel = _FakeChannel([_FakeMessage(1, "🎟️ The Daily Double (+115)\n• Leg 1: Tampa Bay Rays ML (-150 | 88% Conf)", 42, at_cutoff)])
+        run = self._find(channel)
         self.assertEqual([m.id for m in run], [1])
 
-    def test_no_slip_in_history_returns_none(self):
-        channel = _FakeChannel([_FakeMessage(1, "just chatting", 42, self._t(0))])
+    def test_message_just_after_the_closing_cutoff_is_excluded(self):
+        # 2026-08-25 07:00:01 UTC = 2026-08-25 03:00:01 EDT - one second
+        # past the cutoff that closes the live window, belongs to the
+        # *next* parlay day instead.
+        after_cutoff = datetime.datetime(2026, 8, 25, 7, 0, 1, tzinfo=datetime.timezone.utc)
+        channel = _FakeChannel([_FakeMessage(1, "🎟️ The Daily Double (+115)\n• Leg 1: Tampa Bay Rays ML (-150 | 88% Conf)", 42, after_cutoff)])
         self.assertIsNone(self._find(channel))
 
-    def test_nothing_posted_since_last_cutoff_returns_none_even_with_older_slip(self):
-        # The old slip genuinely exists in the channel's history, but a
-        # new parlay day has already begun with nothing posted in it yet -
-        # must not silently fall back to the older one (that's the
-        # archive's job, via a date the user explicitly picks).
-        old_slip = _FakeMessage(1, "🎟️ The Daily Double (+115)\n• Leg 1: Tampa Bay Rays ML (-150 | 88% Conf)", 42, self._t(24 * 3600))
+    def test_no_slip_in_history_returns_none(self):
+        channel = _FakeChannel([_FakeMessage(1, "just chatting", 42, datetime.datetime(2026, 8, 25, 2, 0, 0, tzinfo=datetime.timezone.utc))])
+        self.assertIsNone(self._find(channel))
+
+    def test_nothing_posted_in_the_live_window_returns_none_even_with_older_slip(self):
+        # The old slip genuinely exists in the channel's history (a
+        # previous parlay day's slate), but nothing's posted in the live
+        # window yet - must not silently fall back to the older one
+        # (that's the archive's job, via a date the user explicitly
+        # picks).
+        old_slip = _FakeMessage(1, "🎟️ The Daily Double (+115)\n• Leg 1: Tampa Bay Rays ML (-150 | 88% Conf)", 42, datetime.datetime(2026, 8, 23, 20, 0, 0, tzinfo=datetime.timezone.utc))
         channel = _FakeChannel([old_slip])
         self.assertIsNone(self._find(channel))
 
 
 class SlipDateStr(unittest.TestCase):
-    """The archived date always comes from when the slip was actually
-    posted, not whenever /premiumparlay happens to get run or published -
-    confirmed as the whole point of the archive redesign, so a slip
-    posted late at night still files under the day it was posted even if
-    the last leg (or the Publish click) lands after midnight."""
+    """A slip's archived date always comes from when it was actually
+    posted, looking FORWARD to the next 3am Eastern cutoff (GreenFox
+    posts a day's slate the night before, 10pm-3am - confirmed live) -
+    not whenever /premiumparlay happens to get run or published."""
+
+    def test_evening_post_tags_the_upcoming_days_slate(self):
+        # 2026-08-25 02:00 UTC = 2026-08-24 22:00 EDT (10pm) - the start
+        # of GreenFox's usual posting window for "the 25th's" slate.
+        posted = _FakeMessage(1, "a", 42, datetime.datetime(2026, 8, 25, 2, 0, 0, tzinfo=datetime.timezone.utc))
+        self.assertEqual(masterparlay.slip_date_str([posted]), "2026-08-25")
+
+    def test_post_just_before_3am_cutoff_still_tags_that_mornings_date(self):
+        # 2026-08-25 06:30 UTC = 2026-08-25 02:30 EDT - already past
+        # midnight locally, but still before that morning's 3am cutoff,
+        # so it's still "the 25th's" slate, not the 26th's.
+        posted = _FakeMessage(1, "a", 42, datetime.datetime(2026, 8, 25, 6, 30, 0, tzinfo=datetime.timezone.utc))
+        self.assertEqual(masterparlay.slip_date_str([posted]), "2026-08-25")
 
     def test_uses_earliest_message_regardless_of_list_order(self):
-        import datetime
-        early = _FakeMessage(1, "a", 42, datetime.datetime(2026, 8, 20, 16, 0, 0, tzinfo=datetime.timezone.utc))
-        late = _FakeMessage(2, "b", 42, datetime.datetime(2026, 8, 21, 2, 0, 0, tzinfo=datetime.timezone.utc))
-        self.assertEqual(masterparlay.slip_date_str([late, early]), "2026-08-20")
+        early = _FakeMessage(1, "a", 42, datetime.datetime(2026, 8, 25, 2, 0, 0, tzinfo=datetime.timezone.utc))  # 10pm EDT the 24th
+        late = _FakeMessage(2, "b", 42, datetime.datetime(2026, 8, 25, 6, 30, 0, tzinfo=datetime.timezone.utc))  # 2:30am EDT the 25th
+        self.assertEqual(masterparlay.slip_date_str([late, early]), "2026-08-25")
 
-    def test_late_night_post_that_crosses_midnight_utc_stays_eastern_day(self):
-        import datetime
-        # 2026-08-21 02:00 UTC = 2026-08-20 22:00 EDT - still the 20th
-        # locally even though it's already the 21st in UTC.
-        posted = _FakeMessage(1, "a", 42, datetime.datetime(2026, 8, 21, 2, 0, 0, tzinfo=datetime.timezone.utc))
-        self.assertEqual(masterparlay.slip_date_str([posted]), "2026-08-20")
+    def test_post_right_at_the_cutoff_still_belongs_to_that_mornings_date(self):
+        posted = _FakeMessage(1, "a", 42, datetime.datetime(2026, 8, 25, 7, 0, 0, tzinfo=datetime.timezone.utc))  # exactly 3am EDT
+        self.assertEqual(masterparlay.slip_date_str([posted]), "2026-08-25")
 
-    def test_slip_posted_after_midnight_but_before_3am_cutoff_still_tags_previous_day(self):
-        # 2026-08-21 05:30 UTC = 2026-08-21 01:30 EDT - already the 21st
-        # by plain calendar date, but before that day's own 3am cutoff,
-        # so it's still part of the 20th's parlay day - the whole point
-        # of the 3am-cutoff redesign, distinct from a plain midnight
-        # boundary.
-        posted = _FakeMessage(1, "a", 42, datetime.datetime(2026, 8, 21, 5, 30, 0, tzinfo=datetime.timezone.utc))
-        self.assertEqual(masterparlay.slip_date_str([posted]), "2026-08-20")
+    def test_post_just_after_the_cutoff_tags_the_next_days_slate(self):
+        posted = _FakeMessage(1, "a", 42, datetime.datetime(2026, 8, 25, 7, 0, 1, tzinfo=datetime.timezone.utc))  # 3:00:01am EDT
+        self.assertEqual(masterparlay.slip_date_str([posted]), "2026-08-26")
 
 
 class ParlayDayWindow(unittest.TestCase):
@@ -633,10 +636,11 @@ class AutoArchive(unittest.TestCase):
         state.save_daily_log(data)
 
     def _slip_message_for_2026_08_20(self):
-        # 2026-08-20 20:00 UTC = 2026-08-20 16:00 EDT - comfortably inside
-        # the 2026-08-20 parlay-day window (2026-08-20 07:00 UTC through
-        # 2026-08-21 07:00 UTC).
-        posted = datetime.datetime(2026, 8, 20, 20, 0, 0, tzinfo=datetime.timezone.utc)
+        # 2026-08-20 02:00 UTC = 2026-08-19 22:00 EDT (10pm) - GreenFox's
+        # real posting pattern for "the 20th's" slate, inside the window
+        # (2026-08-19 07:00 UTC, 2026-08-20 07:00 UTC] that
+        # _find_slip_for_parlay_day looks at for date_str "2026-08-20".
+        posted = datetime.datetime(2026, 8, 20, 2, 0, 0, tzinfo=datetime.timezone.utc)
         return _FakeMessage(1, "🎟️ The Daily Double (+115)\n• Leg 1: Tampa Bay Rays ML (-150 | 88% Conf)", 42, posted)
 
     def test_auto_archive_parlay_day_publishes_and_returns_count(self):

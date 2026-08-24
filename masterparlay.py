@@ -84,13 +84,20 @@ PARLAY_SLIP_CHANNEL_ID = 1538412823250608300
 # closing within a day or two.
 PUBLISH_CHANNEL_ID = 1540479187758874664
 
-# See module docstring's "Parlay day windows" section.
+# See module docstring's "Parlay day windows" section. GreenFox posts a
+# given day's slate the *night before* (confirmed live: as early as
+# 10:00 PM through 3:00 AM Eastern), so "day D's parlays" are the ones
+# posted in the window (D-1's 3am, D's 3am] - a post is tagged by
+# looking FORWARD to the next 3am cutoff, not back to the last one (see
+# _parlay_day_date_str). /premiumparlay's own live view then shows
+# whichever window most recently *closed* (see find_latest_slip) - not
+# whatever's accumulated since the last cutoff, since GreenFox hasn't
+# even started posting the next window's slate until 10pm regardless.
 _PARLAY_DAY_CUTOFF_HOUR = 3
 
 
-def _parlay_day_start(epoch: float) -> float:
-    """Epoch of the most recent 3:00 AM Eastern at or before epoch - the
-    start of whichever parlay-day window epoch falls into."""
+def _floor_cutoff(epoch: float) -> float:
+    """Epoch of the most recent 3:00 AM Eastern at or before epoch."""
     local = datetime.datetime.fromtimestamp(epoch, tz=scores365.EASTERN)
     cutoff = local.replace(hour=_PARLAY_DAY_CUTOFF_HOUR, minute=0, second=0, microsecond=0)
     if local < cutoff:
@@ -98,34 +105,70 @@ def _parlay_day_start(epoch: float) -> float:
     return cutoff.timestamp()
 
 
-def _next_parlay_day_start(epoch: float) -> float:
-    """Epoch of the 3:00 AM Eastern cutoff that closes epoch's own parlay
-    day - timedelta(days=1) on an aware datetime preserves the wall-clock
-    hour across a DST change, same pattern scores365.next_eastern_midnight_epoch
-    already relies on, so this stays exactly 3:00 AM even on a DST-transition
-    day rather than drifting by an hour."""
-    current_start = datetime.datetime.fromtimestamp(_parlay_day_start(epoch), tz=scores365.EASTERN)
-    return (current_start + datetime.timedelta(days=1)).timestamp()
+def _ceil_cutoff(epoch: float) -> float:
+    """Epoch of the next 3:00 AM Eastern at or after epoch - the cutoff
+    that a post at epoch is tagged under (see _parlay_day_date_str)."""
+    local = datetime.datetime.fromtimestamp(epoch, tz=scores365.EASTERN)
+    cutoff = local.replace(hour=_PARLAY_DAY_CUTOFF_HOUR, minute=0, second=0, microsecond=0)
+    if local > cutoff:
+        cutoff += datetime.timedelta(days=1)
+    return cutoff.timestamp()
 
 
-def _parlay_day_date_str(epoch: float) -> str:
-    """Which parlay day epoch belongs to, as "YYYY-MM-DD" - the calendar
-    date of that window's own 3:00 AM start, not epoch's raw calendar
-    date. A message posted at 1:00 AM Eastern the "next" day is still
-    within the previous day's parlay-day window (hasn't hit 3:00 AM yet),
-    so it's tagged with the previous date."""
-    return scores365.eastern_date_str(_parlay_day_start(epoch)) or dailylog.today_str()
+def _next_cutoff_strictly_after(epoch: float) -> float:
+    """Epoch of the next 3:00 AM Eastern strictly after epoch (unlike
+    _ceil_cutoff, epoch landing exactly on a cutoff still advances a full
+    day) - what the auto-archive loop sleeps until next."""
+    local = datetime.datetime.fromtimestamp(epoch, tz=scores365.EASTERN)
+    cutoff = local.replace(hour=_PARLAY_DAY_CUTOFF_HOUR, minute=0, second=0, microsecond=0)
+    if local >= cutoff:
+        cutoff += datetime.timedelta(days=1)
+    return cutoff.timestamp()
+
+
+def _cutoff_plus_days(cutoff_epoch: float, days: int) -> float:
+    """Shifts a cutoff instant by whole days, DST-safe - timedelta(days=n)
+    on an aware datetime preserves the wall-clock hour across a DST
+    change, same pattern scores365.next_eastern_midnight_epoch already
+    relies on, so this stays exactly 3:00 AM even on a DST-transition day
+    rather than drifting by an hour."""
+    dt = datetime.datetime.fromtimestamp(cutoff_epoch, tz=scores365.EASTERN)
+    return (dt + datetime.timedelta(days=days)).timestamp()
+
+
+def _parlay_day_date_str(post_epoch: float) -> str:
+    """Which parlay day a message posted at post_epoch belongs to - the
+    calendar date of the *next* 3:00 AM Eastern cutoff at or after it
+    (GreenFox posts a day's slate the night before, so an 11pm post is
+    for the day whose cutoff is still hours ahead, not the day that
+    already started hours earlier)."""
+    return scores365.eastern_date_str(_ceil_cutoff(post_epoch)) or dailylog.today_str()
+
+
+def _live_window(now_epoch: float) -> tuple[float, float]:
+    """(start, end] of the parlay day whose posting window most recently
+    closed as of now_epoch - the one /premiumparlay's live view shows.
+    Deliberately NOT "since the last cutoff up to now" - GreenFox doesn't
+    start posting the next window's slate until 10pm regardless of how
+    long ago the last cutoff was, so that would show nothing all day."""
+    end = _floor_cutoff(now_epoch)
+    start = _cutoff_plus_days(end, -1)
+    return start, end
 
 
 def previous_parlay_day_str(now_epoch: float) -> str:
-    """The parlay day that most recently closed - used by the nightly
-    auto-archive job to know which day's slip to grab once its own
-    3:00 AM Eastern cutoff has passed."""
-    return _parlay_day_date_str(_parlay_day_start(now_epoch) - 1)
+    """The parlay day one full day older than the live one - ready to
+    archive since its games have now had a full extra day (past its own
+    posting cutoff) to finish. Used by the nightly auto-archive job:
+    when it fires right at a cutoff (e.g. 8/25 3am), this is "8/24" - the
+    day whose slate closed at 8/24's own 3am cutoff."""
+    _live_start, live_end = _live_window(now_epoch)
+    archive_cutoff = _cutoff_plus_days(live_end, -1)
+    return scores365.eastern_date_str(archive_cutoff) or dailylog.today_str()
 
 
 def seconds_until_next_parlay_day_cutoff(now_epoch: float) -> float:
-    return _next_parlay_day_start(now_epoch) - now_epoch
+    return _next_cutoff_strictly_after(now_epoch) - now_epoch
 
 
 # dailylog's own won/lost/push/void marks, plus two states dailylog itself
@@ -550,22 +593,24 @@ async def _find_slip_in_window(
 
 
 async def find_latest_slip(channel: discord.abc.Messageable, limit: int = 200, now: Optional[float] = None) -> Optional[list[discord.Message]]:
-    """The current parlay day's slip only (see module docstring) - None
-    once nothing new has posted since the last 3:00 AM Eastern cutoff,
-    even if an older slip still exists earlier in the channel's history.
-    That older slip is available through the archive instead (see
-    find_archived_report), not as a silent fallback here."""
+    """The parlay day whose posting window most recently closed (see
+    _live_window) - None once that window closed with nothing posted in
+    it, even if an older slip still exists earlier in the channel's
+    history. That older slip is available through the archive instead
+    (see find_archived_report), not as a silent fallback here."""
     now = now if now is not None else time.time()
-    return await _find_slip_in_window(channel, _parlay_day_start(now), None, limit)
+    window_start, window_end = _live_window(now)
+    return await _find_slip_in_window(channel, window_start, window_end + 1, limit)  # +1s: window_end itself is inclusive
 
 
 async def _find_slip_for_parlay_day(channel: discord.abc.Messageable, date_str: str, limit: int = 200) -> Optional[list[discord.Message]]:
     """The slip (if any) that belongs to the given parlay day - used by
-    the nightly auto-archive job to grab the day that just closed."""
+    the nightly auto-archive job to grab the day that's ready to
+    archive."""
     day = datetime.date.fromisoformat(date_str)
-    window_start = datetime.datetime.combine(day, datetime.time(_PARLAY_DAY_CUTOFF_HOUR), tzinfo=scores365.EASTERN).timestamp()
-    window_end = _next_parlay_day_start(window_start)
-    return await _find_slip_in_window(channel, window_start, window_end, limit)
+    window_end = datetime.datetime.combine(day, datetime.time(_PARLAY_DAY_CUTOFF_HOUR), tzinfo=scores365.EASTERN).timestamp()
+    window_start = _cutoff_plus_days(window_end, -1)
+    return await _find_slip_in_window(channel, window_start, window_end + 1, limit)  # +1s: window_end itself is inclusive
 
 
 async def auto_archive_parlay_day(
