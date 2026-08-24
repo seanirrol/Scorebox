@@ -34,10 +34,22 @@ text itself becomes the "name", odds is left blank) and each leg carries
 a matchup prefix and/or bracketed context and a bookmaker+odds suffix
 that must be stripped down to the same bare "Team Pick"/"Player Over N
 Stat" shape the resolvers below expect - see _clean_recommended_leg.
+
+"Parlay day" windows: unlike every other tracker's Eastern-midnight
+calendar day, a parlay day runs from 3:00 AM Eastern to the next 3:00 AM
+Eastern (see _PARLAY_DAY_CUTOFF_HOUR) - a later cutoff to comfortably
+outlast extra innings/delays before that day's slip is considered
+"done" and eligible for the nightly auto-archive (see
+auto_archive_if_needed). find_latest_slip only ever looks at the
+*current* parlay-day window - once the cutoff passes with nothing new
+posted, the previous day's results live in the archive channel instead
+(PUBLISH_CHANNEL_ID), not as a silent fallback here.
 """
 
 import asyncio
+import datetime
 import re
+import time
 from typing import Optional
 
 import discord
@@ -71,6 +83,50 @@ PARLAY_SLIP_CHANNEL_ID = 1538412823250608300
 # an old slip from scratch runs into 365scores' own bulk-feed data window
 # closing within a day or two.
 PUBLISH_CHANNEL_ID = 1540479187758874664
+
+# See module docstring's "Parlay day windows" section.
+_PARLAY_DAY_CUTOFF_HOUR = 3
+
+
+def _parlay_day_start(epoch: float) -> float:
+    """Epoch of the most recent 3:00 AM Eastern at or before epoch - the
+    start of whichever parlay-day window epoch falls into."""
+    local = datetime.datetime.fromtimestamp(epoch, tz=scores365.EASTERN)
+    cutoff = local.replace(hour=_PARLAY_DAY_CUTOFF_HOUR, minute=0, second=0, microsecond=0)
+    if local < cutoff:
+        cutoff -= datetime.timedelta(days=1)
+    return cutoff.timestamp()
+
+
+def _next_parlay_day_start(epoch: float) -> float:
+    """Epoch of the 3:00 AM Eastern cutoff that closes epoch's own parlay
+    day - timedelta(days=1) on an aware datetime preserves the wall-clock
+    hour across a DST change, same pattern scores365.next_eastern_midnight_epoch
+    already relies on, so this stays exactly 3:00 AM even on a DST-transition
+    day rather than drifting by an hour."""
+    current_start = datetime.datetime.fromtimestamp(_parlay_day_start(epoch), tz=scores365.EASTERN)
+    return (current_start + datetime.timedelta(days=1)).timestamp()
+
+
+def _parlay_day_date_str(epoch: float) -> str:
+    """Which parlay day epoch belongs to, as "YYYY-MM-DD" - the calendar
+    date of that window's own 3:00 AM start, not epoch's raw calendar
+    date. A message posted at 1:00 AM Eastern the "next" day is still
+    within the previous day's parlay-day window (hasn't hit 3:00 AM yet),
+    so it's tagged with the previous date."""
+    return scores365.eastern_date_str(_parlay_day_start(epoch)) or dailylog.today_str()
+
+
+def previous_parlay_day_str(now_epoch: float) -> str:
+    """The parlay day that most recently closed - used by the nightly
+    auto-archive job to know which day's slip to grab once its own
+    3:00 AM Eastern cutoff has passed."""
+    return _parlay_day_date_str(_parlay_day_start(now_epoch) - 1)
+
+
+def seconds_until_next_parlay_day_cutoff(now_epoch: float) -> float:
+    return _next_parlay_day_start(now_epoch) - now_epoch
+
 
 # dailylog's own won/lost/push/void marks, plus two states dailylog itself
 # never has: "pending" (still live/not started, same yellow as an
@@ -360,14 +416,14 @@ def archived_date_from_embed(embed: discord.Embed) -> Optional[str]:
 
 
 def slip_date_str(messages: list[discord.Message]) -> str:
-    """The Eastern calendar date this slip "belongs to" - the earliest
-    message's own posted time, not whenever Publish happens to get
-    clicked. Confirmed live as the reason this matters: a slip posted at
-    11pm whose last leg doesn't finish until after midnight (extra
-    innings, a long match) must still archive under the day it was
+    """The parlay day this slip "belongs to" (see module docstring) - the
+    earliest message's own posted time, not whenever Publish happens to
+    get clicked, and using the 3:00 AM Eastern cutoff rather than
+    midnight so a slip posted at 11pm (or even 1am the "next" day) whose
+    last leg doesn't finish for hours still archives under the day it was
     posted, not the day someone finally published it."""
     earliest = min(messages, key=lambda m: m.created_at)
-    return scores365.eastern_date_str(earliest.created_at.timestamp()) or dailylog.today_str()
+    return _parlay_day_date_str(earliest.created_at.timestamp())
 
 
 def build_parlay_embed(name: str, odds: str, resolved_legs: list[dict], date_str: Optional[str] = None) -> discord.Embed:
@@ -458,30 +514,88 @@ async def find_archived_report(channel: discord.abc.Messageable, date_str: str, 
     return [embed for _message, embed in matches]
 
 
-async def find_latest_slip(channel: discord.abc.Messageable, limit: int = 50) -> Optional[list[discord.Message]]:
-    """Every message from the most recent Eastern calendar date (matching
-    dailylog's own date convention) that has at least one same-author
-    message containing a recognizable parlay, oldest first - combined
-    into one slip regardless of how far apart they land within that day.
-    GreenFox's own slips routinely split across multiple messages (a
-    real one landed 20 seconds apart, Discord's own per-message length
-    cap), each continuing the previous one's parlay list rather than
-    repeating the banner - and per explicit request, messages posted
-    later the same day (e.g. a follow-up slip 30 minutes after the
-    first) are meant to combine too, not just messages close together in
-    time. Doesn't check the author specifically (so this isn't tied to
-    GreenFox's own account id) beyond requiring every message in the run
-    to share one. None if nothing qualifies within `limit` messages."""
-    history = [message async for message in channel.history(limit=limit)]  # newest first
+async def _find_slip_in_window(
+    channel: discord.abc.Messageable, window_start: float, window_end: Optional[float], limit: int,
+) -> Optional[list[discord.Message]]:
+    """Every message within [window_start, window_end) (window_end=None
+    means open-ended, up through the newest message) that belongs to one
+    same-author run containing at least one recognizable parlay, oldest
+    first - combined into one slip regardless of how far apart they land
+    within the window. GreenFox's own slips routinely split across
+    multiple messages (a real one landed 20 seconds apart, Discord's own
+    per-message length cap), each continuing the previous one's parlay
+    list rather than repeating the banner - and per explicit request,
+    messages posted later in the same window (e.g. a follow-up slip 30
+    minutes after the first) are meant to combine too, not just messages
+    close together in time. Doesn't check the author specifically (so
+    this isn't tied to GreenFox's own account id) beyond requiring every
+    message in the run to share one. None if nothing qualifies within
+    `limit` messages. oldest_first=False is explicit here - passing
+    after= alone flips discord.py's own default to oldest-first, which
+    would silently break this scan's newest-first assumption."""
+    after = datetime.datetime.fromtimestamp(window_start, tz=datetime.timezone.utc)
+    before = datetime.datetime.fromtimestamp(window_end, tz=datetime.timezone.utc) if window_end is not None else None
+    history = [message async for message in channel.history(limit=limit, after=after, before=before, oldest_first=False)]
     start_idx = next((i for i, m in enumerate(history) if parse_master_parlays(m.content)), None)
     if start_idx is None:
         return None
     run = [history[start_idx]]
-    target_date = scores365.eastern_date(history[start_idx].created_at.timestamp())
     for message in history[start_idx + 1 :]:
         prev = run[-1]
-        if message.author.id != prev.author.id or scores365.eastern_date(message.created_at.timestamp()) != target_date:
+        if message.author.id != prev.author.id:
             break
         run.append(message)
     run.reverse()
     return run
+
+
+async def find_latest_slip(channel: discord.abc.Messageable, limit: int = 200, now: Optional[float] = None) -> Optional[list[discord.Message]]:
+    """The current parlay day's slip only (see module docstring) - None
+    once nothing new has posted since the last 3:00 AM Eastern cutoff,
+    even if an older slip still exists earlier in the channel's history.
+    That older slip is available through the archive instead (see
+    find_archived_report), not as a silent fallback here."""
+    now = now if now is not None else time.time()
+    return await _find_slip_in_window(channel, _parlay_day_start(now), None, limit)
+
+
+async def _find_slip_for_parlay_day(channel: discord.abc.Messageable, date_str: str, limit: int = 200) -> Optional[list[discord.Message]]:
+    """The slip (if any) that belongs to the given parlay day - used by
+    the nightly auto-archive job to grab the day that just closed."""
+    day = datetime.date.fromisoformat(date_str)
+    window_start = datetime.datetime.combine(day, datetime.time(_PARLAY_DAY_CUTOFF_HOUR), tzinfo=scores365.EASTERN).timestamp()
+    window_end = _next_parlay_day_start(window_start)
+    return await _find_slip_in_window(channel, window_start, window_end, limit)
+
+
+async def auto_archive_parlay_day(
+    slip_channel: discord.abc.Messageable, archive_channel: discord.abc.Messageable, date_str: str,
+) -> Optional[int]:
+    """Archives every parlay found in date_str's slip (no curation -
+    there's nobody around at 3am to click checkboxes). Returns how many
+    parlays got archived, or None if there was no slip for that day at
+    all. Doesn't check whether date_str is already archived - see
+    auto_archive_if_needed for that."""
+    messages = await _find_slip_for_parlay_day(slip_channel, date_str)
+    if not messages:
+        return None
+    embeds = await build_report(combine_slip_text(messages), date_str)
+    if not embeds:
+        return None
+    for i in range(0, len(embeds), 10):
+        await archive_channel.send(embeds=embeds[i : i + 10])
+    return len(embeds)
+
+
+async def auto_archive_if_needed(
+    slip_channel: discord.abc.Messageable, archive_channel: discord.abc.Messageable, date_str: str,
+) -> Optional[int]:
+    """Skips date_str if anything's already archived for it (a manual
+    Publish earlier in the day takes precedence - no duplicate entries),
+    otherwise archives the full day via auto_archive_parlay_day. Returns
+    how many parlays got archived, or None if skipped / nothing to
+    archive."""
+    existing = await find_archived_report(archive_channel, date_str, limit=50)
+    if existing:
+        return None
+    return await auto_archive_parlay_day(slip_channel, archive_channel, date_str)

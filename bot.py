@@ -16,6 +16,7 @@ import asyncio
 import io
 import logging
 import re
+import time
 from typing import NamedTuple, Optional
 
 import discord
@@ -139,6 +140,33 @@ _tracked_lines: dict[int, dict[str, int]] = {}
 _processed_message_ids: set[int] = set()
 
 
+_masterparlay_auto_archive_started = False
+
+
+async def _masterparlay_auto_archive_loop():
+    """Runs forever, waking once per parlay day at its 3:00 AM Eastern
+    cutoff (see masterparlay's module docstring) to archive whatever
+    slip just closed - auto_archive_if_needed itself skips a day that
+    was already manually published via /premiumparlay's Publish button,
+    so this is purely a safety net for days nobody touched it. Also
+    fires once immediately on startup (before the first sleep) so a
+    restart that straddled the 3am boundary doesn't silently skip a
+    day."""
+    await client.wait_until_ready()
+    slip_channel = client.get_channel(masterparlay.PARLAY_SLIP_CHANNEL_ID) or await client.fetch_channel(masterparlay.PARLAY_SLIP_CHANNEL_ID)
+    archive_channel = client.get_channel(masterparlay.PUBLISH_CHANNEL_ID) or await client.fetch_channel(masterparlay.PUBLISH_CHANNEL_ID)
+    while True:
+        date_str = masterparlay.previous_parlay_day_str(time.time())
+        try:
+            archived = await masterparlay.auto_archive_if_needed(slip_channel, archive_channel, date_str)
+            if archived:
+                botlog.event(f"🎟️ Auto-archived {archived} parlay(s) for {date_str} to <#{masterparlay.PUBLISH_CHANNEL_ID}>")
+        except Exception:
+            log.exception("Masterparlay auto-archive failed for %s", date_str)
+            botlog.event(f"⚠️ Masterparlay auto-archive failed for {date_str} (see server logs)")
+        await asyncio.sleep(masterparlay.seconds_until_next_parlay_day_cutoff(time.time()))
+
+
 async def _safe_resume(name: str, coro):
     """Isolates one module's resume_all() from every other - previously a
     single exception (e.g. a KeyError from an old persisted-state schema)
@@ -197,6 +225,14 @@ async def on_ready():
         "inning1_result": _resolve_pending_inning1_result,
         "playerprops": _resolve_pending_playerprops,
     }))
+
+    global _masterparlay_auto_archive_started
+    if not _masterparlay_auto_archive_started:
+        # on_ready can fire again on a gateway reconnect, not just once at
+        # startup - this guard is what keeps that from spawning a second,
+        # duplicate forever-loop each time.
+        _masterparlay_auto_archive_started = True
+        asyncio.create_task(_masterparlay_auto_archive_loop())
 
 
 def _find_message_owner(card_message_id: int) -> Optional[tuple[str, tuple]]:

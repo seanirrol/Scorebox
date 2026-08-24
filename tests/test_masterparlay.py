@@ -363,14 +363,29 @@ class _FakeMessage:
 
 
 class _FakeChannel:
-    """Newest-first history, matching discord.py's own ordering - the
-    thing find_latest_slip actually depends on."""
+    """after/before/oldest_first are honored the same way discord.py's
+    real Messageable.history() does (including its own default-flipping
+    quirk: passing after= alone without an explicit oldest_first flips
+    the default to oldest-first) - _find_slip_in_window depends on this
+    filtering, not just ordering."""
 
     def __init__(self, messages_oldest_first):
-        self._messages = list(reversed(messages_oldest_first))
+        self._messages = list(messages_oldest_first)
+        self.sent: list[list] = []  # each entry is one send(embeds=...) call's embed list
 
-    async def history(self, limit=50):
-        for message in self._messages[:limit]:
+    async def send(self, embeds=None, **kwargs):
+        self.sent.append(embeds or [])
+
+    async def history(self, limit=50, after=None, before=None, oldest_first=None):
+        messages = self._messages
+        if after is not None:
+            messages = [m for m in messages if m.created_at.timestamp() > after.timestamp()]
+        if before is not None:
+            messages = [m for m in messages if m.created_at.timestamp() < before.timestamp()]
+        if oldest_first is None:
+            oldest_first = after is not None
+        ordered = messages if oldest_first else list(reversed(messages))
+        for message in ordered[:limit]:
             yield message
 
 
@@ -379,23 +394,29 @@ class FindLatestSlip(unittest.TestCase):
     few seconds apart (Discord's own per-message length cap - confirmed
     live, a real 4-parlay slip landed as two messages 20 seconds apart),
     sometimes tens of minutes apart (a follow-up slip posted later the
-    same day) - grouping is per Eastern calendar date (matching
-    dailylog's own date convention), not proximity, so everything posted
-    on the same day combines into one slip regardless of the gap between
-    messages, and a new day's slip never merges with the previous one's."""
+    same parlay day) - grouping is bounded to the current parlay-day
+    window (3:00 AM Eastern to 3:00 AM Eastern, not a plain calendar day
+    - see masterparlay's module docstring), not proximity, so everything
+    posted since the last cutoff combines into one slip regardless of the
+    gap between messages, and nothing before that cutoff is ever
+    included."""
+
+    # 2026-08-20 20:39:19 UTC = 2026-08-20 16:39:19 EDT - comfortably
+    # mid-afternoon, well after that day's 3am cutoff and well before the
+    # next one, so every _t() offset used below stays predictable.
+    NOW = datetime.datetime(2026, 8, 20, 20, 39, 19, tzinfo=datetime.timezone.utc)
 
     def _t(self, seconds_ago):
-        import datetime
-        # 2026-08-20 20:39:19 UTC = 2026-08-20 16:39:19 EDT - comfortably
-        # mid-day Eastern, nowhere near a midnight boundary.
-        base = datetime.datetime(2026, 8, 20, 20, 39, 19, tzinfo=datetime.timezone.utc)
-        return base - datetime.timedelta(seconds=seconds_ago)
+        return self.NOW - datetime.timedelta(seconds=seconds_ago)
+
+    def _find(self, channel):
+        return _run(masterparlay.find_latest_slip(channel, now=self.NOW.timestamp()))
 
     def test_two_messages_close_together_same_author_combine(self):
         older = _FakeMessage(1, "🎟️ MASTER PARLAYS 🎟️\n🎟️ The Daily Double (+115)\n• Leg 1: Tampa Bay Rays ML (-150 | 88% Conf)", 42, self._t(20))
         newer = _FakeMessage(2, "🎟️ The Four-Fold Fortress (+345)\n• Leg 1: Houston Astros F5 ML (-135 | 87% Conf)", 42, self._t(0))
         channel = _FakeChannel([older, newer])
-        run = _run(masterparlay.find_latest_slip(channel))
+        run = self._find(channel)
         self.assertEqual([m.id for m in run], [1, 2])  # oldest first
 
     def test_combined_text_carries_both_messages_parlays(self):
@@ -405,15 +426,15 @@ class FindLatestSlip(unittest.TestCase):
         parlays = masterparlay.parse_master_parlays(combined)
         self.assertEqual([p["name"] for p in parlays], ["The Daily Double", "The Four-Fold Fortress"])
 
-    def test_same_day_despite_a_big_gap_still_combines(self):
+    def test_same_window_despite_a_big_gap_still_combines(self):
         # A follow-up slip posted 30 minutes after the first two, same
-        # Eastern day - per explicit request, this now combines instead
+        # parlay-day window - per explicit request, this combines instead
         # of being treated as a separate, unreachable-once-superseded slip.
         first = _FakeMessage(1, "🎟️ The Daily Double (+115)\n• Leg 1: Tampa Bay Rays ML (-150 | 88% Conf)", 42, self._t(35 * 60))
         second = _FakeMessage(2, "🎟️ The Triple Threat (+170)\n• Leg 1: Houston Astros F5 ML (-135 | 87% Conf)", 42, self._t(34 * 60))
         third = _FakeMessage(3, "🎟️ The Four-Fold Fortress (+345)\n• Leg 1: Atlanta Dream ML (-350 | 87% Conf)", 42, self._t(0))
         channel = _FakeChannel([first, second, third])
-        run = _run(masterparlay.find_latest_slip(channel))
+        run = self._find(channel)
         self.assertEqual([m.id for m in run], [1, 2, 3])
 
     def test_different_author_breaks_the_run(self):
@@ -421,19 +442,46 @@ class FindLatestSlip(unittest.TestCase):
         other = _FakeMessage(2, "unrelated chat", 99, self._t(10))
         newer_slip = _FakeMessage(3, "🎟️ The Four-Fold Fortress (+345)\n• Leg 1: Houston Astros F5 ML (-135 | 87% Conf)", 42, self._t(0))
         channel = _FakeChannel([slip, other, newer_slip])
-        run = _run(masterparlay.find_latest_slip(channel))
+        run = self._find(channel)
         self.assertEqual([m.id for m in run], [3])
 
-    def test_different_calendar_day_breaks_the_run(self):
+    def test_message_from_previous_parlay_day_is_excluded(self):
         old_slip = _FakeMessage(1, "🎟️ The Daily Double (+115)\n• Leg 1: Tampa Bay Rays ML (-150 | 88% Conf)", 42, self._t(24 * 3600))
         new_slip = _FakeMessage(2, "🎟️ The Four-Fold Fortress (+345)\n• Leg 1: Houston Astros F5 ML (-135 | 87% Conf)", 42, self._t(0))
         channel = _FakeChannel([old_slip, new_slip])
-        run = _run(masterparlay.find_latest_slip(channel))
+        run = self._find(channel)
         self.assertEqual([m.id for m in run], [2])
+
+    def test_message_before_this_mornings_3am_cutoff_is_excluded(self):
+        # 2026-08-20 06:30:00 UTC = 2026-08-20 02:30:00 EDT - same
+        # calendar day as NOW, but before that day's own 3am cutoff, so
+        # it belongs to the *previous* parlay day, not today's.
+        before_cutoff = datetime.datetime(2026, 8, 20, 6, 30, 0, tzinfo=datetime.timezone.utc)
+        channel = _FakeChannel([_FakeMessage(1, "🎟️ The Daily Double (+115)\n• Leg 1: Tampa Bay Rays ML (-150 | 88% Conf)", 42, before_cutoff)])
+        self.assertIsNone(self._find(channel))
+
+    def test_late_night_message_and_early_morning_now_share_a_window(self):
+        # A slip posted at 11pm the previous evening is still "today's"
+        # slip if NOW is 2am - both sides of midnight, neither side of
+        # the 3am cutoff.
+        posted = datetime.datetime(2026, 8, 20, 3, 0, 0, tzinfo=datetime.timezone.utc)  # 2026-08-19 23:00 EDT
+        now = datetime.datetime(2026, 8, 20, 6, 0, 0, tzinfo=datetime.timezone.utc)  # 2026-08-20 02:00 EDT
+        channel = _FakeChannel([_FakeMessage(1, "🎟️ The Daily Double (+115)\n• Leg 1: Tampa Bay Rays ML (-150 | 88% Conf)", 42, posted)])
+        run = _run(masterparlay.find_latest_slip(channel, now=now.timestamp()))
+        self.assertEqual([m.id for m in run], [1])
 
     def test_no_slip_in_history_returns_none(self):
         channel = _FakeChannel([_FakeMessage(1, "just chatting", 42, self._t(0))])
-        self.assertIsNone(_run(masterparlay.find_latest_slip(channel)))
+        self.assertIsNone(self._find(channel))
+
+    def test_nothing_posted_since_last_cutoff_returns_none_even_with_older_slip(self):
+        # The old slip genuinely exists in the channel's history, but a
+        # new parlay day has already begun with nothing posted in it yet -
+        # must not silently fall back to the older one (that's the
+        # archive's job, via a date the user explicitly picks).
+        old_slip = _FakeMessage(1, "🎟️ The Daily Double (+115)\n• Leg 1: Tampa Bay Rays ML (-150 | 88% Conf)", 42, self._t(24 * 3600))
+        channel = _FakeChannel([old_slip])
+        self.assertIsNone(self._find(channel))
 
 
 class SlipDateStr(unittest.TestCase):
@@ -455,6 +503,45 @@ class SlipDateStr(unittest.TestCase):
         # locally even though it's already the 21st in UTC.
         posted = _FakeMessage(1, "a", 42, datetime.datetime(2026, 8, 21, 2, 0, 0, tzinfo=datetime.timezone.utc))
         self.assertEqual(masterparlay.slip_date_str([posted]), "2026-08-20")
+
+    def test_slip_posted_after_midnight_but_before_3am_cutoff_still_tags_previous_day(self):
+        # 2026-08-21 05:30 UTC = 2026-08-21 01:30 EDT - already the 21st
+        # by plain calendar date, but before that day's own 3am cutoff,
+        # so it's still part of the 20th's parlay day - the whole point
+        # of the 3am-cutoff redesign, distinct from a plain midnight
+        # boundary.
+        posted = _FakeMessage(1, "a", 42, datetime.datetime(2026, 8, 21, 5, 30, 0, tzinfo=datetime.timezone.utc))
+        self.assertEqual(masterparlay.slip_date_str([posted]), "2026-08-20")
+
+
+class ParlayDayWindow(unittest.TestCase):
+    """previous_parlay_day_str/seconds_until_next_parlay_day_cutoff back
+    the nightly auto-archive loop - it needs to know both which day just
+    closed and exactly how long to sleep until the next one does."""
+
+    def test_previous_parlay_day_before_cutoff_is_two_days_back(self):
+        # 2026-08-20 05:00 UTC = 2026-08-20 01:00 EDT - before that day's
+        # 3am cutoff, so "now" is still in the 19th's window, and the
+        # previous (already-closed) window is the 18th's.
+        now = datetime.datetime(2026, 8, 20, 5, 0, 0, tzinfo=datetime.timezone.utc)
+        self.assertEqual(masterparlay.previous_parlay_day_str(now.timestamp()), "2026-08-18")
+
+    def test_previous_parlay_day_after_cutoff_is_yesterday(self):
+        # 2026-08-20 16:39 UTC = 2026-08-20 12:39 EDT - well past that
+        # day's 3am cutoff, so "now" is in the 20th's window and the
+        # previous one is the 19th's.
+        now = datetime.datetime(2026, 8, 20, 16, 39, 0, tzinfo=datetime.timezone.utc)
+        self.assertEqual(masterparlay.previous_parlay_day_str(now.timestamp()), "2026-08-19")
+
+    def test_seconds_until_next_cutoff_matches_a_known_gap(self):
+        # 2026-08-20 07:00 UTC = 2026-08-20 03:00 EDT exactly - the next
+        # cutoff is exactly 24h away (no DST edge in this window).
+        now = datetime.datetime(2026, 8, 20, 7, 0, 0, tzinfo=datetime.timezone.utc)
+        self.assertAlmostEqual(masterparlay.seconds_until_next_parlay_day_cutoff(now.timestamp()), 24 * 3600, delta=1)
+
+    def test_seconds_until_next_cutoff_is_never_negative_right_after_a_cutoff(self):
+        now = datetime.datetime(2026, 8, 20, 7, 0, 1, tzinfo=datetime.timezone.utc)
+        self.assertGreater(masterparlay.seconds_until_next_parlay_day_cutoff(now.timestamp()), 0)
 
 
 class ArchiveFooterTagging(unittest.TestCase):
@@ -515,6 +602,80 @@ class FindArchivedDatesAndReport(unittest.TestCase):
         channel = _FakeChannel([self._tagged_message(1, "2026-08-20")])
         embeds = _run(masterparlay.find_archived_report(channel, "2099-01-01"))
         self.assertEqual(embeds, [])
+
+
+class AutoArchive(unittest.TestCase):
+    """The nightly auto-archive job (see bot.py's
+    _masterparlay_auto_archive_loop) - archives a full day's slip with no
+    curation (nobody's around at 3am to click checkboxes), but only once,
+    never duplicating over a manual Publish that already covered the same
+    date."""
+
+    def setUp(self):
+        self._real_path = state.DAILY_LOG_FILE
+        fd, self._tmp_path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        os.remove(self._tmp_path)
+        state.DAILY_LOG_FILE = self._tmp_path
+
+    def tearDown(self):
+        state.DAILY_LOG_FILE = self._real_path
+        if os.path.exists(self._tmp_path):
+            os.remove(self._tmp_path)
+
+    def _seed_rays_win(self):
+        key = tracker.track_key(masterparlay.PREMIUM_SCORES_CHANNEL_ID, 4614731, picked_team="Tampa Bay Rays")
+        data = state.load_daily_log()
+        data[dailylog._key(masterparlay.PREMIUM_SCORES_CHANNEL_ID, "tracker", key)] = {
+            "channel_id": masterparlay.PREMIUM_SCORES_CHANNEL_ID, "module": "tracker",
+            "status": "won", "label": "Tampa Bay Rays ML", "detail": "WON",
+        }
+        state.save_daily_log(data)
+
+    def _slip_message_for_2026_08_20(self):
+        # 2026-08-20 20:00 UTC = 2026-08-20 16:00 EDT - comfortably inside
+        # the 2026-08-20 parlay-day window (2026-08-20 07:00 UTC through
+        # 2026-08-21 07:00 UTC).
+        posted = datetime.datetime(2026, 8, 20, 20, 0, 0, tzinfo=datetime.timezone.utc)
+        return _FakeMessage(1, "🎟️ The Daily Double (+115)\n• Leg 1: Tampa Bay Rays ML (-150 | 88% Conf)", 42, posted)
+
+    def test_auto_archive_parlay_day_publishes_and_returns_count(self):
+        self._seed_rays_win()
+        slip_channel = _FakeChannel([self._slip_message_for_2026_08_20()])
+        archive_channel = _FakeChannel([])
+        with patch("scores365.find_match_for_team", return_value=({"id": 4614731}, 100)):
+            count = _run(masterparlay.auto_archive_parlay_day(slip_channel, archive_channel, "2026-08-20"))
+        self.assertEqual(count, 1)
+        self.assertEqual(len(archive_channel.sent), 1)
+        self.assertEqual(len(archive_channel.sent[0]), 1)
+        self.assertEqual(masterparlay.archived_date_from_embed(archive_channel.sent[0][0]), "2026-08-20")
+
+    def test_auto_archive_parlay_day_returns_none_when_no_slip_for_that_date(self):
+        slip_channel = _FakeChannel([])
+        archive_channel = _FakeChannel([])
+        result = _run(masterparlay.auto_archive_parlay_day(slip_channel, archive_channel, "2026-08-20"))
+        self.assertIsNone(result)
+        self.assertEqual(archive_channel.sent, [])
+
+    def test_auto_archive_if_needed_skips_when_already_archived(self):
+        self._seed_rays_win()
+        slip_channel = _FakeChannel([self._slip_message_for_2026_08_20()])
+        legs = [{"raw": "x", "status": "won", "label": "x", "detail": "Won"}]
+        already_archived = masterparlay.build_parlay_embed("Manual Publish", "+100", legs, date_str="2026-08-20")
+        archive_channel = _FakeChannel([_FakeMessage(2, "", 7, datetime.datetime(2026, 8, 20, tzinfo=datetime.timezone.utc), embeds=[already_archived])])
+        with patch("scores365.find_match_for_team", return_value=({"id": 4614731}, 100)):
+            result = _run(masterparlay.auto_archive_if_needed(slip_channel, archive_channel, "2026-08-20"))
+        self.assertIsNone(result)
+        self.assertEqual(archive_channel.sent, [])  # nothing new sent - skipped
+
+    def test_auto_archive_if_needed_archives_when_nothing_published_yet(self):
+        self._seed_rays_win()
+        slip_channel = _FakeChannel([self._slip_message_for_2026_08_20()])
+        archive_channel = _FakeChannel([])
+        with patch("scores365.find_match_for_team", return_value=({"id": 4614731}, 100)):
+            result = _run(masterparlay.auto_archive_if_needed(slip_channel, archive_channel, "2026-08-20"))
+        self.assertEqual(result, 1)
+        self.assertEqual(len(archive_channel.sent), 1)
 
 
 def _run(coro):
