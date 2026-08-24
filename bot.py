@@ -1447,17 +1447,34 @@ async def _extract_image_picks_text(message: discord.Message) -> str:
     if not images:
         return ""
     texts = []
+    failures = 0
     for attachment in images:
         try:
             image_bytes = await attachment.read()
         except discord.HTTPException as e:
             log.warning("Failed to download image attachment %s: %s", attachment.filename, e)
+            failures += 1
+            botlog.event(f"❌ Couldn't download image attachment **{attachment.filename}** from **{message.author}** in <#{message.channel.id}>: {e}")
             continue
         text = await image_picks.extract_picks_text(image_bytes, attachment.content_type)
-        if text:
+        if text is None:
+            failures += 1
+            botlog.event(
+                f"❌ Image picks: couldn't read **{attachment.filename}** from **{message.author}** in <#{message.channel.id}> "
+                f"(ANTHROPIC_API_KEY not configured, or the API call failed - see server logs)"
+            )
+        elif text:
             texts.append(text)
     if texts:
-        log.info("Image picks: transcribed %d line(s) from %d image(s)", sum(len(t.splitlines()) for t in texts), len(texts))
+        line_count = sum(len(t.splitlines()) for t in texts)
+        log.info("Image picks: transcribed %d line(s) from %d image(s)", line_count, len(texts))
+        transcript = "\n".join(texts)
+        botlog.event(
+            f"🖼️ Image picks from **{message.author}** in <#{message.channel.id}>: "
+            f"transcribed {line_count} line(s) from {len(texts)} image(s)\n```\n{transcript[:1700]}\n```"
+        )
+    elif not failures:
+        botlog.event(f"🖼️ Image picks from **{message.author}** in <#{message.channel.id}>: found nothing readable in {len(images)} image(s)")
     return "\n".join(texts)
 
 
