@@ -63,6 +63,62 @@ class ParseMasterParlays(unittest.TestCase):
         self.assertEqual(parlays[0]["legs"], ["Atlanta Dream ML"])
 
 
+class ParseRecommendedFormat(unittest.TestCase):
+    """GreenFox's wording drifted to a second slip shape with no named
+    parlay/combo odds at all - confirmed live, a whole day's worth of
+    these silently fell back to an older parseable message since nothing
+    recognized them at all. Real message content (channel
+    1538412823250608300, 2026-08-24)."""
+
+    _REAL_MESSAGE = (
+        "🎯 RECOMMENDED 1 GAME + 1 PROP DOUBLE LOCK\n"
+        "Leg 1 (Game): [WNBA] Golden State Valkyries at Minnesota Lynx - Minnesota Lynx ML (FanDuel -100)\n"
+        "Leg 2 (Prop): [WNBA Props] Rhyne Howard Over 14.5 Points (Alt Line) [Atlanta Dream at Los Angeles Sparks] (PrizePicks -205)\n"
+        "\n"
+        "🔒 RECOMMENDED 2-GAME OUTCOME DOUBLE\n"
+        "Leg 1 (Game 1): [WNBA] Golden State Valkyries at Minnesota Lynx - Minnesota Lynx ML (FanDuel -100)\n"
+        "Leg 2 (Game 2): [WNBA] Atlanta Dream at Los Angeles Sparks - Atlanta Dream ML (FanDuel -100)\n"
+        "\n"
+        "⚡ RECOMMENDED 1 GAME + 2 PROPS POWER TICKET\n"
+        "Leg 1 (Game): [WNBA] Golden State Valkyries at Minnesota Lynx - Minnesota Lynx ML (FanDuel -100)\n"
+        "Leg 2 (Prop 1): [WNBA Props] Rhyne Howard Over 14.5 Points (Alt Line) [Atlanta Dream at Los Angeles Sparks] (PrizePicks -205)\n"
+        "Leg 3 (Prop 2): [MLB] Player - Under 9.5 Runs (Alt Line) [Philadelphia Phillies @ Seattle Mariners] (DraftKings -100)"
+    )
+
+    def test_real_message_parses_all_three_parlays_with_blank_odds(self):
+        parlays = masterparlay.parse_master_parlays(self._REAL_MESSAGE)
+        self.assertEqual(len(parlays), 3)
+        self.assertEqual(parlays[0]["name"], "RECOMMENDED 1 GAME + 1 PROP DOUBLE LOCK")
+        self.assertEqual(parlays[0]["odds"], "")
+        self.assertEqual(parlays[1]["name"], "RECOMMENDED 2-GAME OUTCOME DOUBLE")
+        self.assertEqual(parlays[2]["name"], "RECOMMENDED 1 GAME + 2 PROPS POWER TICKET")
+
+    def test_game_leg_strips_matchup_prefix_leg_type_sport_tag_and_odds(self):
+        parlays = masterparlay.parse_master_parlays(self._REAL_MESSAGE)
+        self.assertEqual(parlays[0]["legs"][0], "Minnesota Lynx ML")
+
+    def test_prop_leg_strips_bracketed_matchup_and_odds_but_keeps_alt_line(self):
+        parlays = masterparlay.parse_master_parlays(self._REAL_MESSAGE)
+        self.assertEqual(parlays[0]["legs"][1], "Rhyne Howard Over 14.5 Points (Alt Line)")
+
+    def test_second_game_leg_also_strips_its_own_matchup_prefix(self):
+        parlays = masterparlay.parse_master_parlays(self._REAL_MESSAGE)
+        self.assertEqual(parlays[1]["legs"][1], "Atlanta Dream ML")
+
+    def test_malformed_third_party_leg_does_not_crash_and_stays_a_string(self):
+        # GreenFox's own template left "Player" unfilled for what should
+        # have been a team-total leg - not a market this bot supports
+        # anyway, but must never raise, just fail to resolve later.
+        parlays = masterparlay.parse_master_parlays(self._REAL_MESSAGE)
+        self.assertEqual(parlays[2]["legs"][2], "Player - Under 9.5 Runs (Alt Line)")
+
+    def test_cleaned_legs_match_the_existing_resolver_regexes(self):
+        # The whole point of the cleanup - resolve_leg's own regexes never
+        # needed to change, only the format-specific text feeding into them.
+        self.assertIsNotNone(masterparlay._ML_RE.match("Minnesota Lynx ML"))
+        self.assertIsNotNone(masterparlay._PLAYER_PROP_RE.match("Rhyne Howard Over 14.5 Points (Alt Line)"))
+
+
 class GradeParlay(unittest.TestCase):
     def test_all_won_is_won(self):
         legs = [{"status": "won"}, {"status": "won"}]
@@ -417,6 +473,14 @@ class ArchiveFooterTagging(unittest.TestCase):
         embed = discord.Embed(title="unrelated")
         embed.set_footer(text="Some other footer")
         self.assertIsNone(masterparlay.archived_date_from_embed(embed))
+
+    def test_blank_odds_title_has_no_dangling_parens(self):
+        # A "RECOMMENDED ..." parlay never states its own odds - the
+        # title must read as just the name, not "name ()".
+        legs = [{"raw": "x", "status": "won", "label": "x", "detail": "Won"}]
+        embed = masterparlay.build_parlay_embed("RECOMMENDED 1 GAME + 1 PROP DOUBLE LOCK", "", legs)
+        self.assertTrue(embed.title.startswith("RECOMMENDED 1 GAME + 1 PROP DOUBLE LOCK —"))
+        self.assertNotIn("()", embed.title)
 
 
 class FindArchivedDatesAndReport(unittest.TestCase):

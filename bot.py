@@ -2991,7 +2991,12 @@ class _MasterParlaySelect(discord.ui.Select):
         options = [
             discord.SelectOption(
                 label=p["name"][:100],
-                description=f"{_MASTERPARLAY_STATUS_LABEL.get(p['status'], p['status'])} • {p['odds']}"[:100],
+                # A "RECOMMENDED ..." parlay never states its own odds
+                # (see masterparlay's module docstring) - no dangling
+                # "• " left behind when there's nothing to show after it.
+                description=(
+                    f"{_MASTERPARLAY_STATUS_LABEL.get(p['status'], p['status'])}" + (f" • {p['odds']}" if p["odds"] else "")
+                )[:100],
                 value=str(i),
                 default=True,
             )

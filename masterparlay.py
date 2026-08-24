@@ -16,11 +16,24 @@ needed (current status + human-readable detail) keyed the same way
 currently-tracked pick (unsupported wording, or genuinely not tracked) is
 reported clearly as "not tracked" rather than silently dropped or guessed.
 
-Format (blank line between parlays, "Leg N:" lines under each):
+Two slip formats are recognized (GreenFox's own wording has drifted over
+time, confirmed live - a whole day's worth of slips silently fell back to
+an older parseable message once this second format showed up unannounced):
+
   🎟️ MASTER PARLAYS
   🎟️ The Daily Double (+115)
   • Leg 1: Tampa Bay Rays ML (-150 | 88% Conf)
   • Leg 2: Atlanta Dream ML (-350 | 87% Conf)
+
+  🎯 RECOMMENDED 1 GAME + 1 PROP DOUBLE LOCK
+  Leg 1 (Game): [WNBA] Golden State Valkyries at Minnesota Lynx - Minnesota Lynx ML (FanDuel -100)
+  Leg 2 (Prop): [WNBA Props] Rhyne Howard Over 14.5 Points (Alt Line) [Atlanta Dream at Los Angeles Sparks] (PrizePicks -205)
+
+The second format has no named parlay or combo odds at all (the header
+text itself becomes the "name", odds is left blank) and each leg carries
+a matchup prefix and/or bracketed context and a bookmaker+odds suffix
+that must be stripped down to the same bare "Team Pick"/"Player Over N
+Stat" shape the resolvers below expect - see _clean_recommended_leg.
 """
 
 import asyncio
@@ -68,6 +81,42 @@ _LEG_MARKS = {
 _PARLAY_HEADER_RE = re.compile(r"^🎟️\s*(.+?)\s*\(([+-]\d+)\)\s*$")
 _PARLAY_LEG_RE = re.compile(r"^[•\-]\s*Leg\s*\d+\s*:\s*(.+?)\s*\([+-]?\d+\s*\|\s*\d+%\s*Conf\.?\)\s*$", re.IGNORECASE)
 
+# Newer "RECOMMENDED ..." format - no named parlay/combo odds at all, just
+# an emoji (varies: 🎯/🔒/⚡/... - \W* accepts whatever GreenFox uses next
+# without needing another update) followed by the header text itself,
+# which becomes the parlay's "name" with odds left blank.
+_RECOMMENDED_HEADER_RE = re.compile(r"^\W*\s*(RECOMMENDED\b.+)$", re.IGNORECASE)
+# "Leg 1 (Game): [WNBA] Golden State Valkyries at Minnesota Lynx - Minnesota
+# Lynx ML (FanDuel -100)" - the "(Game)"/"(Prop 2)" leg-type tag and
+# "[WNBA]"/"[WNBA Props]" sport tag are both dropped, only the description
+# after them is kept (see _clean_recommended_leg for the matchup-prefix/
+# bracket/bookmaker-odds cleanup still needed on top of that).
+_RECOMMENDED_LEG_RE = re.compile(r"^Leg\s*\d+\s*\([^)]*\)\s*:\s*\[[^\]]+\]\s*(.+)$", re.IGNORECASE)
+
+# Strips a trailing "(FanDuel -100)"/"(PrizePicks -205)" bookmaker+odds
+# parenthetical - distinct from the old format's "(-150 | 88% Conf)" suffix
+# (_PARLAY_LEG_RE strips that one itself), this one starts with letters
+# not digits.
+_TRAILING_BOOK_ODDS_RE = re.compile(r"\s*\([A-Za-z][A-Za-z0-9 ]*\s+[+-]?\d[\d.]*\)\s*$")
+# A player prop leg can carry its own bracketed matchup context after the
+# stat line, e.g. "... Points (Alt Line) [Atlanta Dream at Los Angeles
+# Sparks]" - purely informational, the resolver only needs the player/
+# stat/line, not the matchup.
+_TRAILING_BRACKET_MATCHUP_RE = re.compile(r"\s*\[[^\]]+\]\s*$")
+# A game leg spells out the full matchup before its own pick, e.g. "Golden
+# State Valkyries at Minnesota Lynx - Minnesota Lynx ML" - only the part
+# after the dash is the actual pick text every resolver below expects.
+_LEADING_MATCHUP_RE = re.compile(r"^.+?\s+(?:at|vs\.?|v\.?)\s+.+?\s-\s+(.+)$", re.IGNORECASE)
+
+
+def _clean_recommended_leg(text: str) -> str:
+    text = _TRAILING_BOOK_ODDS_RE.sub("", text).strip()
+    text = _TRAILING_BRACKET_MATCHUP_RE.sub("", text).strip()
+    m = _LEADING_MATCHUP_RE.match(text)
+    if m:
+        text = m.group(1).strip()
+    return text
+
 # Leg wording shapes, tried in this order - F5 ML before plain ML (a bare
 # "(.+?)\s+(?:ML|Moneyline)$" would otherwise swallow "Houston Astros F5"
 # whole, "F5" included, since there's only one ML/Moneyline trailer to
@@ -102,7 +151,9 @@ def parse_master_parlays(text: str) -> list[dict]:
     """[{"name": str, "odds": str, "legs": [str, ...]}, ...] - the leading
     "🎟️ MASTER PARLAYS" banner line (no "(+odds)" suffix) never matches
     _PARLAY_HEADER_RE, so it's naturally skipped rather than treated as an
-    empty parlay of its own."""
+    empty parlay of its own. Recognizes both slip formats (see module
+    docstring) - odds is "" for a "RECOMMENDED ..." parlay, which never
+    states one."""
     parlays: list[dict] = []
     current: Optional[dict] = None
     for raw_line in text.splitlines():
@@ -114,9 +165,18 @@ def parse_master_parlays(text: str) -> list[dict]:
             current = {"name": header.group(1).strip(), "odds": header.group(2), "legs": []}
             parlays.append(current)
             continue
+        recommended_header = _RECOMMENDED_HEADER_RE.match(line)
+        if recommended_header:
+            current = {"name": recommended_header.group(1).strip(), "odds": "", "legs": []}
+            parlays.append(current)
+            continue
         leg = _PARLAY_LEG_RE.match(line)
         if leg and current is not None:
             current["legs"].append(leg.group(1).strip())
+            continue
+        recommended_leg = _RECOMMENDED_LEG_RE.match(line)
+        if recommended_leg and current is not None:
+            current["legs"].append(_clean_recommended_leg(recommended_leg.group(1).strip()))
     return parlays
 
 
@@ -310,8 +370,11 @@ def build_parlay_embed(name: str, odds: str, resolved_legs: list[dict], date_str
     overall = grade_parlay(resolved_legs)
     color_key = {"won": "won", "lost": "lost"}.get(overall, "inprogress")
     lines = [f"{_LEG_MARKS.get(leg['status'], '❓')} {leg['label']} — {leg['detail']}" for leg in resolved_legs]
+    # A "RECOMMENDED ..." parlay never states its own combo odds (see
+    # module docstring) - odds is "" for those, no bare "()" left behind.
+    title_prefix = f"{name} ({odds})" if odds else name
     embed = discord.Embed(
-        title=f"{name} ({odds}) — {_TITLE_SUFFIX[overall]}",
+        title=f"{title_prefix} — {_TITLE_SUFFIX[overall]}",
         description="\n".join(lines),
         color=scoreimage.EMBED_COLOR[color_key],
     )
