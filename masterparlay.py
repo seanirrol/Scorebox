@@ -232,6 +232,16 @@ def _clean_recommended_leg(text: str) -> str:
 _F5_ML_RE = re.compile(r"^(.+?)\s+F5\s+(?:ML|Moneyline)$", re.IGNORECASE)
 _SPREAD_RE = re.compile(r"^(.+?)\s+([+-]\d+(?:\.\d+)?)\s*(?:\(Alt Spread\))?$", re.IGNORECASE)
 _ML_RE = re.compile(r"^(.+?)\s+(?:ML|Moneyline)$", re.IGNORECASE)
+# "Philadelphia Phillies vs Seattle Mariners - Under 9.5 Runs" - a
+# combined GAME total (both teams' score together), not a single team's
+# own total (that's _SPREAD_RE/tracker's team_total path) or a player
+# stat (_PLAYER_PROP_RE, which needs a stat word after the number - this
+# is checked first since a bare "Runs"/"Points" trailing word would
+# otherwise also satisfy that regex's own catch-all stat group).
+_TOTAL_RE = re.compile(
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s*-\s*(?:total\s*)?(Over|Under)\s+([\d.]+)(?:\s+\S.*)?\s*$",
+    re.IGNORECASE,
+)
 _PLAYER_PROP_RE = re.compile(
     r"^(?:(.+?)\s*-\s*)?(.+?)\s+(Over|Under)\s+([\d.]+)\s+(.+?)(?:\s*\(Alt Line\))?$", re.IGNORECASE,
 )
@@ -248,6 +258,19 @@ _WIN_A_SET_RE = re.compile(r"^(.+?)\s+to\s+win\s+(?:a\s+set|at\s+least\s+1\s+set
 # resolve (same "try WNBA if NBA fails" idea bot.py's own _auto_playerprops
 # already uses, just generalized to every supported sport).
 _PROP_CANDIDATE_SPORTS = ("baseball", "basketball", "wnba", "nfl", "hockey")
+
+# GreenFox's own template occasionally leaves a team-total leg's "Player"
+# placeholder unfilled (confirmed live: "[MLB] Player - Under 9.5 Runs
+# (Alt Line) [Philadelphia Phillies @ Seattle Mariners]" on 2026-08-24 -
+# a broken template output, not a market this bot could ever resolve as
+# written since it never actually names either team, only a stray
+# "Player" left over from a player-prop template). No algorithm can
+# recover the intended teams from that - corrected on sight instead, a
+# straight substitution applied to the cleaned leg text before it's ever
+# handed to a resolver, same as if GreenFox had typed it correctly.
+_LEG_TEXT_CORRECTIONS = {
+    "Player - Under 9.5 Runs (Alt Line)": "Philadelphia Phillies vs Seattle Mariners - Under 9.5 Runs",
+}
 
 
 def parse_master_parlays(text: str) -> list[dict]:
@@ -275,11 +298,13 @@ def parse_master_parlays(text: str) -> list[dict]:
             continue
         leg = _PARLAY_LEG_RE.match(line)
         if leg and current is not None:
-            current["legs"].append(leg.group(1).strip())
+            leg_text = leg.group(1).strip()
+            current["legs"].append(_LEG_TEXT_CORRECTIONS.get(leg_text, leg_text))
             continue
         recommended_leg = _RECOMMENDED_LEG_RE.match(line)
         if recommended_leg and current is not None:
-            current["legs"].append(_clean_recommended_leg(recommended_leg.group(1).strip()))
+            leg_text = _clean_recommended_leg(recommended_leg.group(1).strip())
+            current["legs"].append(_LEG_TEXT_CORRECTIONS.get(leg_text, leg_text))
     return parlays
 
 
@@ -324,6 +349,19 @@ async def _resolve_ml_or_spread(text: str) -> Optional[dict]:
         key = tracker.track_key(PREMIUM_SCORES_CHANNEL_ID, game["id"], picked_team=team)
         return _dailylog_lookup("tracker", key)
     return None
+
+
+async def _resolve_total(text: str) -> Optional[dict]:
+    m = _TOTAL_RE.match(text)
+    if not m:
+        return None
+    team_a, direction, line = m.group(1).strip(), m.group(3).lower(), float(m.group(4))
+    result = await _resolve_team(team_a, None)
+    if not result:
+        return None
+    game, _sport_id = result
+    key = tracker.track_key(PREMIUM_SCORES_CHANNEL_ID, game["id"], total_direction=direction, total_line=line)
+    return _dailylog_lookup("tracker", key)
 
 
 async def _resolve_f5_ml(text: str) -> Optional[dict]:
@@ -412,7 +450,7 @@ async def resolve_leg(leg_text: str) -> dict:
     before that cleanup existed, and an unresolved leg's own text can
     still carry "(Alt Line)" too (only the "(odds | NN% Conf)" suffix is
     stripped by _PARLAY_LEG_RE at parse time, not every trailing paren)."""
-    for resolver in (_resolve_f5_ml, _resolve_games_handicap, _resolve_win_a_set, _resolve_ml_or_spread, _resolve_player_prop):
+    for resolver in (_resolve_f5_ml, _resolve_games_handicap, _resolve_win_a_set, _resolve_ml_or_spread, _resolve_total, _resolve_player_prop):
         entry = await resolver(leg_text)
         if entry:
             return {"raw": leg_text, "status": entry["status"], "label": picks.clean_label(entry["label"]), "detail": entry["detail"]}

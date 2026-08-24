@@ -105,12 +105,13 @@ class ParseRecommendedFormat(unittest.TestCase):
         parlays = masterparlay.parse_master_parlays(self._REAL_MESSAGE)
         self.assertEqual(parlays[1]["legs"][1], "Atlanta Dream ML")
 
-    def test_malformed_third_party_leg_does_not_crash_and_stays_a_string(self):
+    def test_malformed_third_party_leg_is_manually_corrected(self):
         # GreenFox's own template left "Player" unfilled for what should
-        # have been a team-total leg - not a market this bot supports
-        # anyway, but must never raise, just fail to resolve later.
+        # have been a team-total leg - no algorithm can recover the
+        # intended teams from that, so it's corrected on sight via
+        # _LEG_TEXT_CORRECTIONS instead (see that table's own docstring).
         parlays = masterparlay.parse_master_parlays(self._REAL_MESSAGE)
-        self.assertEqual(parlays[2]["legs"][2], "Player - Under 9.5 Runs (Alt Line)")
+        self.assertEqual(parlays[2]["legs"][2], "Philadelphia Phillies vs Seattle Mariners - Under 9.5 Runs")
 
     def test_cleaned_legs_match_the_existing_resolver_regexes(self):
         # The whole point of the cleanup - resolve_leg's own regexes never
@@ -240,6 +241,27 @@ class ResolveLeg(unittest.TestCase):
             result = _run(masterparlay.resolve_leg("Indiana Fever +3.5 (Alt Spread)"))
         self.assertEqual(result["status"], "pending")
         self.assertEqual(result["detail"], "LIVE, Q3")
+
+    def test_combined_game_total_leg_matches_a_seeded_pending(self):
+        # Confirmed live: a manually-corrected leg ("Philadelphia Phillies
+        # vs Seattle Mariners - Under 9.5 Runs" - see
+        # masterparlay._LEG_TEXT_CORRECTIONS) reported "not currently
+        # tracked" for a genuinely-tracked combined game total, because
+        # no resolver here handled that market shape at all (only a
+        # team's own total, via _resolve_ml_or_spread's spread path).
+        key = tracker.track_key(masterparlay.PREMIUM_SCORES_CHANNEL_ID, 4659920, total_direction="under", total_line=9.5)
+        self._seed("tracker", key, "pending", "Under 9.5 Total Runs", "NOT STARTED")
+        with patch("scores365.find_match_for_team", return_value=({"id": 4659920}, 100)) as mock_find:
+            result = _run(masterparlay.resolve_leg("Philadelphia Phillies vs Seattle Mariners - Under 9.5 Runs"))
+        mock_find.assert_called_once_with("Philadelphia Phillies", None, 0, 1, True)
+        self.assertEqual(result["status"], "pending")
+
+    def test_combined_game_total_leg_with_over_direction(self):
+        key = tracker.track_key(masterparlay.PREMIUM_SCORES_CHANNEL_ID, 4659921, total_direction="over", total_line=8.0)
+        self._seed("tracker", key, "won", "Over 8.0 Total Runs", "WON")
+        with patch("scores365.find_match_for_team", return_value=({"id": 4659921}, 100)):
+            result = _run(masterparlay.resolve_leg("New York Yankees at Boston Red Sox - Over 8.0 Runs"))
+        self.assertEqual(result["status"], "won")
 
     def test_games_handicap_leg_matches_a_seeded_win(self):
         key = settracker.track_key(masterparlay.PREMIUM_SCORES_CHANNEL_ID, 4819545, "games_handicap", "Sara Bejlek")
