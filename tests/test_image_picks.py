@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import anthropic
 
 import image_picks
+import picks
 
 
 def _run(coro):
@@ -54,6 +55,42 @@ class ExtractPicksText(unittest.TestCase):
              patch.object(image_picks, "_extract_sync", return_value=""):
             result = _run(image_picks.extract_picks_text(b"fake-image-bytes", "image/png"))
         self.assertEqual(result, "")
+
+    def test_dropped_bracket_from_the_model_gets_normalized(self):
+        # Confirmed live against a real test image: despite the prompt's
+        # explicit instruction, the model sometimes drops the bracket tag
+        # entirely ("MLB Cincinnati Reds F5 ML") - parse_picks_message
+        # can't use that line at all without the safety net normalizing
+        # it back into bracket form.
+        with patch.object(image_picks, "_client", MagicMock()), \
+             patch.object(image_picks, "_extract_sync", return_value="MLB Cincinnati Reds F5 ML\nWNBA Atlanta Dream ML"):
+            result = _run(image_picks.extract_picks_text(b"fake-image-bytes", "image/png"))
+        self.assertEqual(result, "[MLB] Cincinnati Reds F5 ML\n[WNBA] Atlanta Dream ML")
+        # And it actually parses now, which is the whole point.
+        self.assertEqual(len(picks.parse_picks_message(result)), 2)
+
+
+class NormalizeLine(unittest.TestCase):
+    def test_already_bracketed_line_is_unchanged(self):
+        self.assertEqual(image_picks._normalize_line("[MLB] Cincinnati Reds F5 ML"), "[MLB] Cincinnati Reds F5 ML")
+
+    def test_missing_bracket_gets_wrapped(self):
+        self.assertEqual(image_picks._normalize_line("MLB Cincinnati Reds F5 ML"), "[MLB] Cincinnati Reds F5 ML")
+
+    def test_two_word_section_prefers_longer_match(self):
+        self.assertEqual(image_picks._normalize_line("Dota 2 Team A ML"), "[Dota 2] Team A ML")
+
+    def test_unrecognized_leading_word_is_left_alone(self):
+        line = "Cincinnati Reds F5 ML"
+        self.assertEqual(image_picks._normalize_line(line), line)
+
+    def test_blank_line_is_left_alone(self):
+        self.assertEqual(image_picks._normalize_line(""), "")
+
+    def test_section_word_with_nothing_after_it_is_left_alone(self):
+        # Just a bare "MLB" on its own line - not a pick to wrap, and
+        # picks.py's own parser skips a bracket-less bare header anyway.
+        self.assertEqual(image_picks._normalize_line("MLB"), "MLB")
 
 
 class ExtractSync(unittest.TestCase):

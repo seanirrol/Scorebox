@@ -21,6 +21,7 @@ from typing import Optional
 import anthropic
 
 import config
+import picks
 
 log = logging.getLogger("scorebox.image_picks")
 
@@ -32,12 +33,22 @@ _client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY) if config.ANTHRO
 # in front of the parser rather than reaching into its internals.
 _SECTION_EXAMPLES = "MLB, NBA, WNBA, NFL, NHL, Soccer, Tennis, Rugby, Volleyball, UFC, Boxing, KBO, Dota 2, CS2"
 
-_PROMPT = f"""You are transcribing a sports-picks graphic into plain text lines a downstream parser will read. Output ONLY the transcribed lines - no commentary, no markdown, no code fences.
+_PROMPT = f"""You are transcribing a sports-picks graphic into plain text lines a downstream parser will read. Output ONLY the transcribed lines - no commentary, no markdown, no code fences, no blank lines.
 
-Format: one pick per line, exactly like this:
-[SportCategory] <pick text>
+Every single line you output MUST start with a sport name wrapped in literal square brackets, immediately followed by the pick text on the SAME line. This is a strict, non-negotiable format - never put the category on its own line, never omit the brackets, even if the image itself shows the sport/category as a separate heading above a list of picks.
 
-SportCategory must be one of: {_SECTION_EXAMPLES} (use whichever this image's own section/sport actually is).
+Correct:
+[MLB] Cincinnati Reds F5 ML
+[WNBA] Atlanta Dream ML
+
+Wrong (never do this):
+MLB
+Cincinnati Reds F5 ML
+
+Wrong (never do this either):
+MLB Cincinnati Reds F5 ML
+
+SportCategory (the text inside the brackets) must be one of: {_SECTION_EXAMPLES} (use whichever this image's own section/sport actually is - if the image groups several picks under one heading like "MLB", repeat "[MLB]" on every one of those picks' own lines, not just the first).
 
 Use EXACTLY these pick-text wordings, matching whatever bet each line in the image shows:
 - Moneyline: "Team Name ML"
@@ -55,11 +66,35 @@ Rules:
 - Ignore odds, win probabilities, confidence percentages, and "(ALT LINE)"/"(Incl. Overtime)" style annotations - do not include them in the output line.
 - If a line's bet type doesn't match any wording above, transcribe it as literally and simply as you can in the same "[Category] Team/Player + market" shape rather than omitting it.
 - If you cannot read a line with reasonable confidence, skip it entirely rather than guessing.
+
+Before finishing, check every line you are about to output starts with "[" - if any line doesn't, fix it before responding.
 """
 
 
 class ImagePicksError(Exception):
     pass
+
+
+def _normalize_line(line: str) -> str:
+    """Defensive safety net for when the model drops the bracket tag
+    despite the prompt's explicit instruction not to (confirmed live on
+    a real test image: output "MLB Cincinnati Reds F5 ML" with no
+    brackets at all, which parse_picks_message silently can't use at
+    all). If a line starts with a recognized section keyword (picks.py's
+    own _HEADER_SPORT_MAP - tries the 2-word prefix first so "Dota 2 ..."
+    matches before falling back to just "Dota"), wraps it in brackets
+    instead of silently losing that pick."""
+    line = line.strip()
+    if not line or line.startswith("["):
+        return line
+    words = line.split(" ")
+    for prefix_len in (2, 1):
+        if len(words) <= prefix_len:
+            continue
+        prefix, rest = " ".join(words[:prefix_len]), " ".join(words[prefix_len:])
+        if prefix.lower() in picks._HEADER_SPORT_MAP and rest:
+            return f"[{prefix}] {rest}"
+    return line
 
 
 def _extract_sync(image_bytes: bytes, media_type: str) -> str:
@@ -89,7 +124,8 @@ async def extract_picks_text(image_bytes: bytes, media_type: str) -> Optional[st
     if _client is None:
         return None
     try:
-        return await asyncio.to_thread(_extract_sync, image_bytes, media_type)
+        raw_text = await asyncio.to_thread(_extract_sync, image_bytes, media_type)
     except anthropic.APIError as e:
         log.warning("Image picks extraction failed: %s", e)
         return None
+    return "\n".join(_normalize_line(line) for line in raw_text.splitlines())
