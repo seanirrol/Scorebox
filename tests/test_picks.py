@@ -204,6 +204,56 @@ class ImplicitOverPlayerProp(unittest.TestCase):
         self.assertIsNone(pick)
 
 
+class MatchupPrefixedTennisProp(unittest.TestCase):
+    """"Player A vs Player B - Player A Under N Stat" - unlike every other
+    sport, tennis' own "team" IS the player, so the named side trivially
+    "matches" one of the matchup sides in _parse_named_team_total_pick.
+    Confirmed live: "Cristina Bucsa vs Anna Bondar - Cristina Bucsa Under
+    2.5 Aces" silently mistracked as a plain games total on Cristina
+    Bucsa, with the "Aces" stat name discarded entirely - that parser has
+    no way to tell a genuine team total apart from a tennis player's own
+    stat prop the way it can for every other sport (where a team total's
+    named side never coincidentally IS a player's own prop subject)."""
+
+    def test_matchup_prefixed_aces_prop_recovers_as_a_tennis_prop(self):
+        pick = picks.parse_pick_line(
+            "[Tennis Props] Cristina Bucsa vs Anna Bondar - Cristina Bucsa Under 2.5 Aces (Alt Line) (DraftKings -100)"
+        )
+        self.assertEqual(pick["kind"], "tennis_playerprops")
+        self.assertEqual(pick["player"], "Cristina Bucsa")
+        self.assertEqual(pick["stat"], "Aces")
+        self.assertEqual(pick["direction"], "under")
+        self.assertEqual(pick["line"], 2.5)
+
+    def test_matchup_prefixed_double_faults_prop_other_side(self):
+        pick = picks.parse_pick_line(
+            "[Tennis Props] Cristina Bucsa vs Anna Bondar - Anna Bondar Under 3.5 Double Faults (Alt Line) (DraftKings -100)"
+        )
+        self.assertEqual(pick["kind"], "tennis_playerprops")
+        self.assertEqual(pick["player"], "Anna Bondar")
+        self.assertEqual(pick["stat"], "Double Faults")
+
+    def test_genuine_named_games_total_under_props_tag_still_works(self):
+        # A real tennis games-total shape (games won, not a stat prop)
+        # tagged Props must still resolve normally - this fix only adds a
+        # prop-recovery attempt ahead of the generic parser, it doesn't
+        # remove that parser's own ability to handle real cases. Caught
+        # by _parse_player_total_games_pick earlier in the tennis block,
+        # before this fix's own check ever runs.
+        pick = picks.parse_pick_line("[Tennis Props] Iga Swiatek vs Coco Gauff - Iga Swiatek Over 8.5 Games (FanDuel -110)")
+        self.assertEqual(pick["kind"], "tennis_player_total_games")
+        self.assertEqual(pick["team"], "Iga Swiatek")
+
+    def test_non_prop_tagged_matchup_line_is_unaffected(self):
+        # is_prop_category gates this fix - a bare "[Tennis]" (not
+        # "Props") matchup line with Aces/Double Faults wording was never
+        # going to resolve as a prop either way (no props section means
+        # no prop intent signaled at all), so it should behave exactly as
+        # before: falls through to the generic (here, rejecting) parser.
+        pick = picks.parse_pick_line("[Tennis] Cristina Bucsa vs Anna Bondar - Cristina Bucsa Under 2.5 Aces (DraftKings -100)")
+        self.assertNotEqual((pick or {}).get("kind"), "tennis_playerprops")
+
+
 class StatAliases(unittest.TestCase):
     """Wording variants that don't substring-match the catalog label at
     all - each one silently dropped the whole pick until an explicit

@@ -1836,6 +1836,13 @@ def _strip_matchup_prefix(description: str) -> Optional[str]:
 
 
 def _parse_description(sport: str, sport_key: str, description: str, is_prop_category: bool) -> Optional[dict]:
+    # Computed up front (not just where it was first needed further down)
+    # since the tennis-specific block below also needs it, ahead of that
+    # original call site. NOT "at" here - see _parse_team_pick's own
+    # comment on why a bare "at" substring check is unsafe (confirmed
+    # live: "to Win at Least 1 Set" false-positived as a matchup).
+    has_matchup = any(sep in description for sep in (" vs. ", " vs ", " v. ", " v ", " @ "))
+
     if sport in ("dota2", "cs2"):
         # None of the generic total/player-prop/track fallback logic below
         # applies to esports at all (see _parse_esports_pick's own
@@ -1923,6 +1930,23 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
         if match_total_games:
             return match_total_games
 
+        if is_prop_category and has_matchup:
+            # Tennis' own "team" IS the player, so a matchup-prefixed stat
+            # prop (e.g. "Cristina Bucsa vs Anna Bondar - Cristina Bucsa
+            # Under 2.5 Aces") trivially "matches" one of the matchup
+            # sides in _parse_named_team_total_pick below - unlike every
+            # other sport, that parser has no way to tell a tennis
+            # player's own stat prop apart from a genuine team total, so
+            # it must never get first crack at a Props-tagged matchup
+            # line here. Confirmed live: the "Aces"/"Double Faults" stat
+            # name got silently discarded, mistracked as a plain games
+            # total instead.
+            remainder = _strip_matchup_prefix(description)
+            if remainder:
+                tennis_prop = _parse_tennis_player_prop(remainder)
+                if tennis_prop:
+                    return tennis_prop
+
     named_total = _parse_named_team_total_pick(sport, description)
     if named_total:
         return named_total
@@ -1933,11 +1957,7 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
     # for the same bet type. A team-vs-team matchup line (e.g. "Angels vs
     # Giants - Over 8.5 Total Runs") is excluded even though it also matches
     # the Over/Under shape, since that's a game total (handled above), not a
-    # single player's stat. NOT "at" here - see _parse_team_pick's own
-    # comment on why a bare "at" substring check is unsafe (confirmed
-    # live: "to Win at Least 1 Set" false-positived as a matchup, which
-    # gates out this whole block, dropping the pick entirely).
-    has_matchup = any(sep in description for sep in (" vs. ", " vs ", " v. ", " v ", " @ "))
+    # single player's stat. has_matchup itself was already computed up top.
 
     # Skipped entirely for an explicitly-tagged prop category - _TOTAL_LINE_RE
     # doesn't validate its "team_b" capture at all (unlike named_total above),

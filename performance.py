@@ -64,24 +64,33 @@ def _draw_bar(draw: ImageDraw.ImageDraw, x: float, y: float, width: int, height:
         draw.text((x + win_w + 6, y + height / 2), label, font=_PCT_FONT, fill=_LABEL_COLOR, anchor="lm")
 
 
+def _sport_pct(item):
+    _sport, tournaments = item
+    return _win_pct(sum(w for w, _l in tournaments.values()), sum(l for _w, l in tournaments.values()))
+
+
+def _visible_tournaments(sport: str, tournaments: dict[str, tuple[int, int]]) -> dict[str, tuple[int, int]]:
+    """A tournament bucket sharing its own sport's exact name (e.g. "NBA"
+    under sport "NBA" - a league with no real sub-tournament concept, see
+    sport_tournament_win_loss's own fallback; also how
+    _SPORT_BASELINE_OVERRIDE's manual reconciliation number gets folded
+    in) never gets its own visible sub-row - it's still counted in the
+    sport-level bar above, just not redundantly re-shown by itself.
+    Confirmed live: once a sport ALSO has real per-event tournament
+    buckets (e.g. MMA, past an earlier "only hide it if it's the ONLY
+    bucket" version of this check), the baseline's same-named bucket
+    started showing up as its own confusing extra row right alongside
+    them."""
+    return {t: wl for t, wl in tournaments.items() if t != sport}
+
+
 def render_chart(title: str, data: dict[str, dict[str, tuple[int, int]]]) -> bytes:
-    """data is dailylog.sport_tournament_win_loss's output:
+    """data is dailylog.sport_tournament_win_loss's own output:
     {sport: {tournament: (won, lost)}}. Sports are ordered by win%
     descending (best-performing first), tournaments within a sport the
-    same way. A sport with exactly one tournament sharing its own name
-    (e.g. "NBA" under sport "NBA" - a league with no real sub-tournament
-    concept, see sport_tournament_win_loss's own fallback) skips the
-    redundant sub-row entirely rather than showing the same bar twice."""
-    def _sport_pct(item):
-        _sport, tournaments = item
-        return _win_pct(sum(w for w, _l in tournaments.values()), sum(l for _w, l in tournaments.values()))
-
+    same way - see _visible_tournaments for which ones actually get a
+    sub-row."""
     sports = sorted(data.items(), key=_sport_pct, reverse=True)
-
-    def _visible_tournaments(sport: str, tournaments: dict[str, tuple[int, int]]) -> dict[str, tuple[int, int]]:
-        if len(tournaments) == 1 and sport in tournaments:
-            return {}
-        return tournaments
 
     # Sport header rows are taller than tournament sub-rows (SPORT_BAR_HEIGHT
     # vs. SUB_BAR_HEIGHT) - confirmed live, treating every row as sub-row
