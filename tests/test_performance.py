@@ -59,5 +59,36 @@ class VisibleTournaments(unittest.TestCase):
         self.assertEqual((total_won, total_lost), (34, 14))
 
 
+class RenderChartLongLabels(unittest.TestCase):
+    """Confirmed live: a long event/tournament name ("UFC Fight Night:
+    Hernandez vs. Rodrigues") drawn right-aligned with no width limit ran
+    off the LEFT edge of the image entirely instead of being clipped or
+    wrapped within its own label column - render_chart must never raise
+    for this, and the underlying _ellipsize call it now makes should
+    actually shorten a name that's too wide for its column."""
+
+    def test_long_tournament_name_does_not_crash_render(self):
+        data = {
+            "MMA": {
+                "MMA": (34, 13),
+                "UFC Fight Night: Hernandez vs. Rodrigues": (0, 3),
+            },
+        }
+        image_bytes = performance.render_chart("Win Rate - By Sports — Test", data)
+        self.assertGreater(len(image_bytes), 0)
+        self.assertTrue(image_bytes.startswith(b"\x89PNG"))
+
+    def test_long_tournament_name_gets_shortened_for_its_column(self):
+        import PIL.ImageDraw
+        from PIL import Image
+        from winlossgraph import _LEGEND_FONT
+
+        draw = PIL.ImageDraw.Draw(Image.new("RGBA", (10, 10)))
+        long_name = "UFC Fight Night: Hernandez vs. Rodrigues"
+        shortened = performance._ellipsize(long_name, _LEGEND_FONT, performance.SUB_LABEL_WIDTH - 15, draw)
+        self.assertLess(draw.textlength(shortened, font=_LEGEND_FONT), draw.textlength(long_name, font=_LEGEND_FONT))
+        self.assertTrue(shortened.endswith("…"))
+
+
 if __name__ == "__main__":
     unittest.main()

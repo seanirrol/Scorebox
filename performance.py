@@ -17,6 +17,7 @@ import io
 
 from PIL import Image, ImageDraw
 
+from scoreimage import _ellipsize
 from winlossgraph import _LABEL_FONT, _LEGEND_FONT, _PCT_FONT, _TITLE_FONT
 
 WIDTH = 760
@@ -111,13 +112,22 @@ def render_chart(title: str, data: dict[str, dict[str, tuple[int, int]]]) -> byt
     for sport, tournaments in sports:
         sport_won = sum(w for w, _l in tournaments.values())
         sport_lost = sum(l for _w, l in tournaments.values())
-        draw.text((SPORT_LABEL_WIDTH - 10, y + SPORT_BAR_HEIGHT / 2), sport, font=_LABEL_FONT, fill=_LABEL_COLOR, anchor="rm")
+        sport_label = _ellipsize(sport, _LABEL_FONT, SPORT_LABEL_WIDTH - 15, draw)
+        draw.text((SPORT_LABEL_WIDTH - 10, y + SPORT_BAR_HEIGHT / 2), sport_label, font=_LABEL_FONT, fill=_LABEL_COLOR, anchor="rm")
         _draw_bar(draw, SPORT_LABEL_WIDTH, y, _SPORT_BAR_WIDTH, SPORT_BAR_HEIGHT, sport_won, sport_lost)
         y += SPORT_BAR_HEIGHT + ROW_GAP
 
         visible = _visible_tournaments(sport, tournaments)
         for tournament, (won, lost) in sorted(visible.items(), key=lambda item: _win_pct(*item[1]), reverse=True):
-            draw.text((SUB_LABEL_WIDTH - 10, y + SUB_BAR_HEIGHT / 2), tournament, font=_LEGEND_FONT, fill=_SUB_LABEL_COLOR, anchor="rm")
+            # A long event/tournament name (confirmed live: "UFC Fight
+            # Night: Hernandez vs. Rodrigues" at the per-event breakdown's
+            # own smaller font) drawn right-aligned with no width limit
+            # ran off the LEFT edge of the image entirely rather than
+            # wrapping or clipping visibly - _ellipsize keeps it within
+            # its own label column instead, same as scoreimage's own
+            # long-name handling.
+            tournament_label = _ellipsize(tournament, _LEGEND_FONT, SUB_LABEL_WIDTH - 15, draw)
+            draw.text((SUB_LABEL_WIDTH - 10, y + SUB_BAR_HEIGHT / 2), tournament_label, font=_LEGEND_FONT, fill=_SUB_LABEL_COLOR, anchor="rm")
             _draw_bar(draw, SUB_LABEL_WIDTH, y, _SUB_BAR_WIDTH, SUB_BAR_HEIGHT, won, lost)
             y += SUB_BAR_HEIGHT + ROW_GAP
 
