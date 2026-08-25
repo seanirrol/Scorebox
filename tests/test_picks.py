@@ -244,14 +244,35 @@ class MatchupPrefixedTennisProp(unittest.TestCase):
         self.assertEqual(pick["kind"], "tennis_player_total_games")
         self.assertEqual(pick["team"], "Iga Swiatek")
 
-    def test_non_prop_tagged_matchup_line_is_unaffected(self):
-        # is_prop_category gates this fix - a bare "[Tennis]" (not
-        # "Props") matchup line with Aces/Double Faults wording was never
-        # going to resolve as a prop either way (no props section means
-        # no prop intent signaled at all), so it should behave exactly as
-        # before: falls through to the generic (here, rejecting) parser.
+    def test_bare_non_props_tag_still_resolves_the_prop(self):
+        # NOT gated on is_prop_category - confirmed live TWICE: once
+        # under a "[Tennis Props]" bracket tag, and again under a bare
+        # "Tennis" bullet-list section header (is_prop_category is False
+        # there, no "props" suffix at all) - the wording itself
+        # ("Aces"/"Double Faults" validated against TENNIS_STAT_CATALOG
+        # inside _parse_tennis_player_prop) is the real, sufficient
+        # signal, not whether the section happened to say "Props".
         pick = picks.parse_pick_line("[Tennis] Cristina Bucsa vs Anna Bondar - Cristina Bucsa Under 2.5 Aces (DraftKings -100)")
-        self.assertNotEqual((pick or {}).get("kind"), "tennis_playerprops")
+        self.assertEqual(pick["kind"], "tennis_playerprops")
+        self.assertEqual(pick["player"], "Cristina Bucsa")
+        self.assertEqual(pick["stat"], "Aces")
+
+    def test_bare_bullet_list_header_style_also_resolves(self):
+        # The exact real-world message shape this bug was found in - a
+        # bare "Tennis" section header followed by bulleted matchup-
+        # prefixed lines, parse_picks_message's OTHER supported style
+        # (see its own docstring) distinct from the bracket-tagged one
+        # every other test in this class uses.
+        results = picks.parse_picks_message(
+            "Tennis\n"
+            "• Cristina Bucsa vs Anna Bondar - Cristina Bucsa Under 2.5 Aces\n"
+            "• Cristina Bucsa vs Anna Bondar - Anna Bondar Under 3.5 Double Faults"
+        )
+        self.assertEqual(len(results), 2)
+        self.assertEqual(results[0]["kind"], "tennis_playerprops")
+        self.assertEqual(results[0]["stat"], "Aces")
+        self.assertEqual(results[1]["kind"], "tennis_playerprops")
+        self.assertEqual(results[1]["stat"], "Double Faults")
 
 
 class StatAliases(unittest.TestCase):

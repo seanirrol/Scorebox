@@ -1930,17 +1930,24 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
         if match_total_games:
             return match_total_games
 
-        if is_prop_category and has_matchup:
+        if has_matchup:
             # Tennis' own "team" IS the player, so a matchup-prefixed stat
             # prop (e.g. "Cristina Bucsa vs Anna Bondar - Cristina Bucsa
             # Under 2.5 Aces") trivially "matches" one of the matchup
             # sides in _parse_named_team_total_pick below - unlike every
             # other sport, that parser has no way to tell a tennis
             # player's own stat prop apart from a genuine team total, so
-            # it must never get first crack at a Props-tagged matchup
-            # line here. Confirmed live: the "Aces"/"Double Faults" stat
-            # name got silently discarded, mistracked as a plain games
-            # total instead.
+            # it must never get first crack at a matchup line here.
+            # Confirmed live TWICE: once under a "[Tennis Props]" bracket
+            # tag, and again under a bare "Tennis" bullet-list header (no
+            # "props" suffix at all, so is_prop_category is False there) -
+            # this can't be gated on is_prop_category, the wording alone
+            # has to signal it. Safe without that gate because
+            # _parse_tennis_player_prop already validates the stat name
+            # itself (TENNIS_STAT_CATALOG) - a genuine games-total pick
+            # never reaches here anyway, caught by
+            # _parse_player_total_games_pick/_parse_match_total_games_pick
+            # just above.
             remainder = _strip_matchup_prefix(description)
             if remainder:
                 tennis_prop = _parse_tennis_player_prop(remainder)
