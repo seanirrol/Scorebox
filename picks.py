@@ -1026,6 +1026,70 @@ def _clean_player_name(raw: str) -> str:
     return cleaned
 
 
+# "Shohei Ohtani Total Bases 0.5" - no Over/Under keyword at all.
+# Confirmed live: GreenFox's MLB props occasionally use this bare
+# wording, always meaning an implicit Over (the only side ever actually
+# offered at these lines - "Under 0.5 Total Bases" isn't a real market).
+# No Over/Under anchor exists to split player-name from stat-name on, so
+# _parse_implicit_over_player_prop tries the trailing 1-word then 2-word
+# span as the stat instead, keeping whichever one is a real, recognized
+# stat rather than guessing a fixed split point.
+_TRAILING_NUMBER_RE = re.compile(r"^(.+?)\s+([\d.]+)\s*(?:\(|$)")
+
+
+def _parse_implicit_over_player_prop(sport_key: str, sport: str, description: str) -> Optional[dict]:
+    if sport not in espn.SPORT_PATHS:
+        return None
+    m = _TRAILING_NUMBER_RE.match(description)
+    if not m:
+        return None
+    name_and_stat, line_text = m.group(1).strip(), m.group(2)
+    words = name_and_stat.split()
+    if len(words) < 2:
+        return None
+    catalog = espn.STAT_CATALOG.get(sport, {})
+
+    def build(stat_word_count, stat_label):
+        player = _clean_player_name(" ".join(words[:-stat_word_count]))
+        if not player:
+            return None
+        return {
+            "kind": "playerprops", "sport": _PROP_SPORT_OVERRIDE.get(sport_key, sport),
+            "player": player, "stat": stat_label, "direction": "over", "line": float(line_text),
+        }
+
+    # Exact catalog matches first, smallest stat span (largest player
+    # name) tried first - _match_stat_label's own fuzzy substring
+    # matching is too permissive to trust as the first signal here.
+    # Confirmed live: "Arike Ogunbowale Points 15.5" tried as a 2-word
+    # stat span first fuzzy-matched "Ogunbowale Points" against the
+    # catalog's plain "Points" label (which is a substring of it),
+    # silently stealing the player's own surname as if it were part of
+    # the stat name, before the correct 1-word "Points" split ever got a
+    # chance.
+    for stat_word_count in (1, 2):
+        if len(words) <= stat_word_count:
+            continue
+        raw_stat = " ".join(words[-stat_word_count:])
+        exact = next((label for label in catalog if label.lower() == raw_stat.lower()), None)
+        if exact:
+            result = build(stat_word_count, exact)
+            if result:
+                return result
+    # No exact hit anywhere - fall back to a fuzzy match, preferring the
+    # larger stat span (more context, less likely to misfire).
+    for stat_word_count in (2, 1):
+        if len(words) <= stat_word_count:
+            continue
+        raw_stat = " ".join(words[-stat_word_count:])
+        stat_label = _match_stat_label(sport, raw_stat)
+        if stat_label:
+            result = build(stat_word_count, stat_label)
+            if result:
+                return result
+    return None
+
+
 def _parse_player_prop(sport_key: str, sport: str, description: str) -> Optional[dict]:
     if sport not in espn.SPORT_PATHS:
         return None
@@ -1977,6 +2041,10 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
         if prop:
             return prop
 
+        implicit_prop = _parse_implicit_over_player_prop(sport_key, sport, description)
+        if implicit_prop:
+            return implicit_prop
+
         if not is_prop_category:
             if _looks_like_misfiled_prop(sport, description):
                 return None
@@ -2035,8 +2103,13 @@ def _parse_with_category(category: str, description: str) -> Optional[dict]:
     if _is_yrfi_header(category):
         return _parse_yrfi_line(description)
 
-    is_prop_category = category.lower().endswith("props")
-    sport_key = category.lower().replace("props", "").strip()
+    # "props?" (not just the plural) - confirmed live: a real "[MLB Prop]"
+    # (singular) tag left sport_key as "mlb prop", which _SPORT_MAP has no
+    # entry for at all, so the whole line failed to even identify a sport
+    # and never reached any prop parser in the first place.
+    lowered = category.lower().strip()
+    is_prop_category = bool(re.search(r"props?$", lowered))
+    sport_key = re.sub(r"props?$", "", lowered).strip()
     sport = _SPORT_MAP.get(sport_key)
     if not sport:
         return None

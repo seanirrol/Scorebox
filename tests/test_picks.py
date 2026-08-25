@@ -110,6 +110,100 @@ class MatchupPrefixedProps(unittest.TestCase):
         self.assertEqual(pick["player"], "Angel Reese")
 
 
+class SingularPropCategoryTag(unittest.TestCase):
+    """"[MLB Prop]" (singular) instead of the usual "[MLB Props]" (plural) -
+    confirmed live, a real GreenFox slate used the singular for its MLB
+    section specifically (WNBA still used the plural). The category
+    parser only stripped the plural "props" suffix, leaving sport_key as
+    "mlb prop" - no entry for that in _SPORT_MAP at all, so these lines
+    failed to identify a sport and were dropped before ever reaching any
+    prop parser, not just the implicit-Over one below."""
+
+    def test_singular_prop_tag_still_resolves_a_player_prop(self):
+        pick = picks.parse_pick_line("[MLB Prop] Shohei Ohtani Over 0.5 Total Bases (Bet365 -175)")
+        self.assertEqual(pick["kind"], "playerprops")
+        self.assertEqual(pick["player"], "Shohei Ohtani")
+        self.assertEqual(pick["stat"], "Total Bases")
+
+    def test_singular_prop_tag_sets_is_prop_category_the_same_as_plural(self):
+        # is_prop_category gates a handful of parser-order decisions (see
+        # _parse_description) - the matchup-prefixed-prop recovery only
+        # kicks in when this is True, same as the plural tag.
+        pick = picks.parse_pick_line(
+            "[MLB Prop] Colorado Rockies vs Arizona Diamondbacks - "
+            "Corbin Carroll Over 0.5 Total Bases (Alt Line) (FanDuel -100)"
+        )
+        self.assertEqual(pick["kind"], "playerprops")
+        self.assertEqual(pick["player"], "Corbin Carroll")
+
+    def test_plural_prop_tag_still_works_after_the_fix(self):
+        pick = picks.parse_pick_line("[WNBA Props] Arike Ogunbowale Over 15.5 Points (Bet365 -235)")
+        self.assertEqual(pick["kind"], "playerprops")
+
+
+class ImplicitOverPlayerProp(unittest.TestCase):
+    """"Player StatName N" with no Over/Under keyword at all - confirmed
+    live, a real MLB props section worded every line this way (e.g.
+    "Shohei Ohtani Total Bases 0.5", "Jose Ramirez Total Bases 0.5"),
+    always meaning an implicit Over (the only side ever actually offered
+    at these lines)."""
+
+    def test_no_direction_keyword_resolves_as_an_implicit_over(self):
+        pick = picks.parse_pick_line("[MLB Props] Shohei Ohtani Total Bases 0.5 (Bet365 -175)")
+        self.assertEqual(pick["kind"], "playerprops")
+        self.assertEqual(pick["player"], "Shohei Ohtani")
+        self.assertEqual(pick["stat"], "Total Bases")
+        self.assertEqual(pick["direction"], "over")
+        self.assertEqual(pick["line"], 0.5)
+
+    def test_single_word_stat_also_resolves(self):
+        pick = picks.parse_pick_line("[WNBA Props] Arike Ogunbowale Points 15.5 (Bet365 -235)")
+        self.assertEqual(pick["kind"], "playerprops")
+        self.assertEqual(pick["player"], "Arike Ogunbowale")
+        self.assertEqual(pick["stat"], "Points")
+
+    def test_explicit_over_keyword_still_preferred_when_present(self):
+        # _parse_player_prop (the explicit-direction parser) is tried
+        # first - this implicit fallback should never even fire when an
+        # Over/Under keyword is already there to anchor on.
+        pick = picks.parse_pick_line("[MLB Props] Shohei Ohtani Over 0.5 Total Bases (Bet365 -175)")
+        self.assertEqual(pick["kind"], "playerprops")
+        self.assertEqual(pick["direction"], "over")
+
+    def test_trailing_bracketed_matchup_and_odds_dont_confuse_the_split(self):
+        # A second "[...]" tag on the same line is split off by
+        # parse_picks_message's own _split_merged_bracket_lines before
+        # any per-line parser ever sees it (real GreenFox wording puts
+        # the matchup in trailing brackets like this) - going through the
+        # single-line parse_pick_line here would skip that preprocessing
+        # entirely and not reflect how this actually parses in production.
+        results = picks.parse_picks_message(
+            "[MLB Prop] Shohei Ohtani Total Bases 0.5 [Los Angeles Dodgers @ Atlanta Braves] (Bet365 -175)"
+        )
+        self.assertEqual(len(results), 1)
+        pick = results[0]
+        self.assertEqual(pick["kind"], "playerprops")
+        self.assertEqual(pick["player"], "Shohei Ohtani")
+        self.assertEqual(pick["stat"], "Total Bases")
+
+    def test_team_moneyline_is_not_mistaken_for_an_implicit_prop(self):
+        # No trailing bare number at all ("ML" isn't a number) - must not
+        # match this fallback.
+        pick = picks.parse_pick_line("[MLB] Cleveland Guardians ML (DraftKings -127)")
+        self.assertEqual(pick["kind"], "track")
+
+    def test_team_spread_is_not_mistaken_for_an_implicit_prop(self):
+        # Ends in a number, but "-3" has no space before the digit (the
+        # sign is attached) - and even if it matched, "Lynx" isn't a real
+        # stat, so _match_stat_label rejects it either way.
+        pick = picks.parse_pick_line("[NFL] Minnesota Lynx -3 (Fanatics -130)")
+        self.assertNotEqual((pick or {}).get("kind"), "playerprops")
+
+    def test_unrecognized_stat_word_does_not_guess(self):
+        pick = picks.parse_pick_line("[MLB Prop] Shohei Ohtani Nonsense Stat 0.5 (Bet365 -175)")
+        self.assertIsNone(pick)
+
+
 class StatAliases(unittest.TestCase):
     """Wording variants that don't substring-match the catalog label at
     all - each one silently dropped the whole pick until an explicit
