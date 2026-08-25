@@ -384,17 +384,14 @@ class SportTournamentWinLoss(DailyLogTestCase):
         # UFC/PFL/Bellator alike, per explicit request), but historical
         # entries still literally say "UFC" - _SPORT_DISPLAY_MERGE folds
         # those into the same "MMA" bucket rather than splitting the chart.
-        # Dated on/after the MMA baseline's as_of_date (2026-08-16) so
-        # these show their own itemized tournament rows rather than being
-        # absorbed into the baseline (see the baseline-specific tests
-        # below) - the baseline row itself is expected here too, same as
-        # test_sport_baseline_new_picks_on_or_after_as_of_date_add_on_top.
+        # MMA is also in _SINGLE_BUCKET_SPORTS (per explicit request, after
+        # its own earlier per-event breakdown turned out not to be wanted
+        # after all) - every real event's own tournament name (UFC 330,
+        # PFL Tampa, ...) collapses into the one combined "MMA" bucket
+        # alongside the baseline, rather than getting its own row.
         self._log(self.IN_CHANNEL, "ufctracker", "k1", "Jon Jones ML", "UFC", "UFC 330", "won", date_str="2026-08-20")
         self._log(self.IN_CHANNEL, "ufctracker", "k2", "Kayla Harrison ML", "MMA", "PFL Tampa", "won", date_str="2026-08-20")
-        self.assertEqual(
-            dailylog.sport_tournament_win_loss("2026-08")["MMA"],
-            {"MMA": (34, 13), "UFC 330": (1, 0), "PFL Tampa": (1, 0)},
-        )
+        self.assertEqual(dailylog.sport_tournament_win_loss("2026-08")["MMA"], {"MMA": (36, 13)})
 
     def test_sport_baseline_absorbs_picks_before_its_as_of_date(self):
         # Real MMA picks logged before the baseline's as_of_date (2026-08-16)
@@ -416,22 +413,24 @@ class SportTournamentWinLoss(DailyLogTestCase):
 
     def test_sport_baseline_new_picks_on_or_after_as_of_date_add_on_top(self):
         # A new pick tracked after the baseline's as_of_date combines with
-        # it (as its own tournament row) instead of replacing it, so the
-        # sport-level total (a sum across tournaments - see performance.py)
-        # keeps moving as new picks resolve rather than staying frozen.
+        # it (into the same single "MMA" bucket - see
+        # test_ufc_labeled_picks_merge_into_the_combined_mma_bucket)
+        # instead of replacing it, so the sport-level total (a sum across
+        # tournaments - see performance.py, trivial here since there's
+        # only ever the one) keeps moving as new picks resolve rather than
+        # staying frozen.
         self._log(self.IN_CHANNEL, "ufctracker", "k1", "Alex Pereira ML", "UFC", "UFC 332", "won", date_str="2026-08-20")
         result = dailylog.sport_tournament_win_loss("2026-08")["MMA"]
-        self.assertEqual(result, {"MMA": (34, 13), "UFC 332": (1, 0)})
-        self.assertEqual(
-            (sum(w for w, _l in result.values()), sum(l for _w, l in result.values())), (35, 13),
-        )
+        self.assertEqual(result, {"MMA": (35, 13)})
 
     def test_sport_baseline_doesnt_carry_into_a_later_months_own_filtered_view(self):
         # A September-only view shows just September's own real picks, not
         # the standing August baseline mixed in - only the all-time view
-        # and the exact month the baseline was set for get it.
+        # and the exact month the baseline was set for get it. Still
+        # collapses to the single "MMA" bucket regardless (see
+        # test_ufc_labeled_picks_merge_into_the_combined_mma_bucket).
         self._log(self.IN_CHANNEL, "ufctracker", "k1", "Alex Pereira ML", "UFC", "UFC 335", "won", date_str="2026-09-05")
-        self.assertEqual(dailylog.sport_tournament_win_loss("2026-09")["MMA"], {"UFC 335": (1, 0)})
+        self.assertEqual(dailylog.sport_tournament_win_loss("2026-09")["MMA"], {"MMA": (1, 0)})
 
     def test_sport_baseline_doesnt_apply_outside_the_default_channel_scope(self):
         other_server_channel = 555555

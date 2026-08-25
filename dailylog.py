@@ -340,13 +340,15 @@ def _fallback_sport(entry: dict) -> str:
 # their own confusingly-tiny buckets.
 _SPORT_DISPLAY_MERGE = {"Basketball": "WNBA", "Baseball": "MLB", "UFC": "MMA"}
 
-# Tennis and Soccer each span many real tournaments (Cincinnati/US Open;
-# various leagues/cups), each normally getting its own tournament sub-row -
-# explicitly NOT wanted for these two specifically (per request): every
-# pick combines into one single sport-named bar regardless of which
-# tournament it was actually from, unlike MMA/esports where the per-event
-# breakdown is the point.
-_SINGLE_BUCKET_SPORTS = {"Tennis", "Soccer"}
+# Each of these spans many real tournaments/events (Tennis: Cincinnati/US
+# Open/etc.; Soccer: various leagues/cups; MMA: each UFC card is its own
+# "tournament" name) that would otherwise each get their own sub-row -
+# explicitly NOT wanted for any of these three (per request, MMA added
+# after its own per-event breakdown - previously the intentional
+# exception - turned out not to be wanted after all): every pick combines
+# into one single sport-named bar regardless of which tournament/event it
+# was actually from.
+_SINGLE_BUCKET_SPORTS = {"Tennis", "Soccer", "MMA"}
 
 # A deliberate clean-slate reset for NBA specifically - existing NBA
 # entries (logged before scores365.sport_label could even tell NBA and
