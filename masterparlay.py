@@ -313,7 +313,7 @@ def _dailylog_lookup(module: str, track_key_str: str) -> Optional[dict]:
     return data.get(dailylog._key(PREMIUM_SCORES_CHANNEL_ID, module, track_key_str))
 
 
-async def _resolve_team(team: str, sport: Optional[str]) -> Optional[tuple[dict, int]]:
+async def _resolve_team(team: str, sport: Optional[str], reference_date: Optional[datetime.date] = None) -> Optional[tuple[dict, int]]:
     # allow_finished=True (with a day of lookback) - unlike a fresh
     # auto-track attempt, this is re-resolving a leg that was already
     # tracked hours ago and may well have finished by now (a graded
@@ -322,17 +322,26 @@ async def _resolve_team(team: str, sport: Optional[str]) -> Optional[tuple[dict,
     # already-finished game's leg at all, reporting "not currently
     # tracked" for a pick that plainly was). Same days_ahead=0/days_back=1
     # bounds bot.py's own /tracktoday already uses for this exact reason.
+    #
+    # reference_date anchors the lookup to the SLIP's own date rather than
+    # whenever this happens to be re-resolved - confirmed live: re-
+    # resolving a slip a day later against "Philadelphia Phillies" (no
+    # reference_date) picked up a brand-new Phillies game that had since
+    # started, not the one the slip was actually about, because
+    # find_match_for_team's own tie-break always prefers whichever
+    # candidate is closest to the real current moment. See
+    # scores365.find_match_for_team's own docstring for the full story.
     try:
-        return await asyncio.to_thread(scores365.find_match_for_team, team, sport, 0, 1, True)
+        return await asyncio.to_thread(scores365.find_match_for_team, team, sport, 0, 1, True, reference_date)
     except scores365.ScoresError:
         return None
 
 
-async def _resolve_ml_or_spread(text: str) -> Optional[dict]:
+async def _resolve_ml_or_spread(text: str, reference_date: Optional[datetime.date] = None) -> Optional[dict]:
     m = _SPREAD_RE.match(text)
     if m:
         team, line = m.group(1).strip(), float(m.group(2))
-        result = await _resolve_team(team, None)
+        result = await _resolve_team(team, None, reference_date)
         if not result:
             return None
         game, _sport_id = result
@@ -342,7 +351,7 @@ async def _resolve_ml_or_spread(text: str) -> Optional[dict]:
     m = _ML_RE.match(text)
     if m:
         team = m.group(1).strip()
-        result = await _resolve_team(team, None)
+        result = await _resolve_team(team, None, reference_date)
         if not result:
             return None
         game, _sport_id = result
@@ -351,12 +360,12 @@ async def _resolve_ml_or_spread(text: str) -> Optional[dict]:
     return None
 
 
-async def _resolve_total(text: str) -> Optional[dict]:
+async def _resolve_total(text: str, reference_date: Optional[datetime.date] = None) -> Optional[dict]:
     m = _TOTAL_RE.match(text)
     if not m:
         return None
     team_a, direction, line = m.group(1).strip(), m.group(3).lower(), float(m.group(4))
-    result = await _resolve_team(team_a, None)
+    result = await _resolve_team(team_a, None, reference_date)
     if not result:
         return None
     game, _sport_id = result
@@ -364,12 +373,12 @@ async def _resolve_total(text: str) -> Optional[dict]:
     return _dailylog_lookup("tracker", key)
 
 
-async def _resolve_f5_ml(text: str) -> Optional[dict]:
+async def _resolve_f5_ml(text: str, reference_date: Optional[datetime.date] = None) -> Optional[dict]:
     m = _F5_ML_RE.match(text)
     if not m:
         return None
     team = m.group(1).strip()
-    result = await _resolve_team(team, "baseball")
+    result = await _resolve_team(team, "baseball", reference_date)
     if not result:
         return None
     game, _sport_id = result
@@ -377,12 +386,12 @@ async def _resolve_f5_ml(text: str) -> Optional[dict]:
     return _dailylog_lookup("f5tracker", key)
 
 
-async def _resolve_games_handicap(text: str) -> Optional[dict]:
+async def _resolve_games_handicap(text: str, reference_date: Optional[datetime.date] = None) -> Optional[dict]:
     m = _GAMES_HANDICAP_RE.match(text)
     if not m:
         return None
     player, line = m.group(1).strip(), float(m.group(2))
-    result = await _resolve_team(player, "tennis")
+    result = await _resolve_team(player, "tennis", reference_date)
     if not result:
         return None
     game, _sport_id = result
@@ -390,12 +399,12 @@ async def _resolve_games_handicap(text: str) -> Optional[dict]:
     return _dailylog_lookup("settracker", key)
 
 
-async def _resolve_win_a_set(text: str) -> Optional[dict]:
+async def _resolve_win_a_set(text: str, reference_date: Optional[datetime.date] = None) -> Optional[dict]:
     m = _WIN_A_SET_RE.match(text)
     if not m:
         return None
     player = m.group(1).strip()
-    result = await _resolve_team(player, "tennis")
+    result = await _resolve_team(player, "tennis", reference_date)
     if not result:
         return None
     game, _sport_id = result
@@ -403,7 +412,7 @@ async def _resolve_win_a_set(text: str) -> Optional[dict]:
     return _dailylog_lookup("settracker", key)
 
 
-async def _resolve_player_prop(text: str) -> Optional[dict]:
+async def _resolve_player_prop(text: str, reference_date: Optional[datetime.date] = None) -> Optional[dict]:
     m = _PLAYER_PROP_RE.match(text)
     if not m:
         return None
@@ -427,8 +436,10 @@ async def _resolve_player_prop(text: str) -> Optional[dict]:
             continue
         if not entity:
             continue
-        # Same allow_finished=True reasoning as _resolve_team above.
-        event_id = await asyncio.to_thread(espn.find_current_event_id, sport, entity["team_id"], 0, 1, True)
+        # Same allow_finished=True/reference_date reasoning as
+        # _resolve_team above - espn.find_current_event_id shares the
+        # identical re-resolution-ambiguity fix (see its own docstring).
+        event_id = await asyncio.to_thread(espn.find_current_event_id, sport, entity["team_id"], 0, 1, True, reference_date)
         if not event_id:
             continue
         key = proptracker.prop_key(PREMIUM_SCORES_CHANNEL_ID, event_id, entity["id"], stat_key, direction, line)
@@ -438,7 +449,7 @@ async def _resolve_player_prop(text: str) -> Optional[dict]:
     return None
 
 
-async def resolve_leg(leg_text: str) -> dict:
+async def resolve_leg(leg_text: str, reference_date: Optional[datetime.date] = None) -> dict:
     """Best-effort classification + resolution against dailylog - returns
     {"raw", "status", "label", "detail"}. status is "unresolved" (not a
     real dailylog status) when the leg's wording isn't one of the shapes
@@ -449,9 +460,12 @@ async def resolve_leg(leg_text: str) -> dict:
     "(Bookmaker odds)"/"(Alt Line)" annotations for anything tracked
     before that cleanup existed, and an unresolved leg's own text can
     still carry "(Alt Line)" too (only the "(odds | NN% Conf)" suffix is
-    stripped by _PARLAY_LEG_RE at parse time, not every trailing paren)."""
+    stripped by _PARLAY_LEG_RE at parse time, not every trailing paren).
+    reference_date - see _resolve_team's own docstring; should be the
+    slip's own date (slip_date_str) whenever the caller has it, so a
+    re-resolution days later doesn't get confused by a team's newer game."""
     for resolver in (_resolve_f5_ml, _resolve_games_handicap, _resolve_win_a_set, _resolve_ml_or_spread, _resolve_total, _resolve_player_prop):
-        entry = await resolver(leg_text)
+        entry = await resolver(leg_text, reference_date)
         if entry:
             return {"raw": leg_text, "status": entry["status"], "label": picks.clean_label(entry["label"]), "detail": entry["detail"]}
     return {"raw": leg_text, "status": "unresolved", "label": picks.clean_label(leg_text), "detail": "Not currently tracked"}
@@ -532,17 +546,18 @@ def combine_slip_text(messages: list[discord.Message]) -> str:
     return "\n\n".join(m.content for m in messages)
 
 
-async def resolve_parlays(source_text: str) -> list[dict]:
+async def resolve_parlays(source_text: str, reference_date: Optional[datetime.date] = None) -> list[dict]:
     """Parses source_text and resolves every leg of every parlay found -
     one dict per parlay: {"name", "odds", "legs" (resolved legs), "status"
     (grade_parlay's overall won/lost/pending)}, same order as the source
     message. Shared by build_report (turns these into embeds) and
     /premiumparlay's own preview, which needs each parlay's outcome up
-    front to label its publish checklist before anything is published."""
+    front to label its publish checklist before anything is published.
+    reference_date - see resolve_leg's own docstring."""
     parlays = parse_master_parlays(source_text)
     resolved = []
     for parlay in parlays:
-        resolved_legs = [await resolve_leg(leg) for leg in parlay["legs"]]
+        resolved_legs = [await resolve_leg(leg, reference_date) for leg in parlay["legs"]]
         resolved.append({
             "name": parlay["name"],
             "odds": parlay["odds"],
@@ -552,7 +567,10 @@ async def resolve_parlays(source_text: str) -> list[dict]:
     return resolved
 
 
-async def build_report(source_text: str, date_str: Optional[str] = None, only_names: Optional[set[str]] = None) -> list[discord.Embed]:
+async def build_report(
+    source_text: str, date_str: Optional[str] = None, only_names: Optional[set[str]] = None,
+    reference_date: Optional[datetime.date] = None,
+) -> list[discord.Embed]:
     """Resolves every parlay in source_text into an embed, same order as
     the source message. Empty list if the message has no recognizable
     parlays at all (caller decides how to report that). date_str, when
@@ -561,8 +579,12 @@ async def build_report(source_text: str, date_str: Optional[str] = None, only_na
     plain preview that's never meant to be archived. only_names, when
     given, limits the report to parlays whose name is in the set - lets
     /premiumparlay publish only the parlays a user actually picked from
-    a multi-parlay slip instead of all-or-nothing."""
-    parlays = await resolve_parlays(source_text)
+    a multi-parlay slip instead of all-or-nothing. reference_date - see
+    resolve_leg's own docstring; distinct from date_str (a caller usually
+    has both, from the same slip_date_str call, but date_str is a display/
+    archive-tagging string while reference_date is the parsed date object
+    the resolvers actually need)."""
+    parlays = await resolve_parlays(source_text, reference_date)
     if only_names is not None:
         parlays = [p for p in parlays if p["name"] in only_names]
     return [build_parlay_embed(p["name"], p["odds"], p["legs"], date_str) for p in parlays]
@@ -662,7 +684,7 @@ async def auto_archive_parlay_day(
     messages = await _find_slip_for_parlay_day(slip_channel, date_str)
     if not messages:
         return None
-    embeds = await build_report(combine_slip_text(messages), date_str)
+    embeds = await build_report(combine_slip_text(messages), date_str, reference_date=datetime.date.fromisoformat(date_str))
     if not embeds:
         return None
     for i in range(0, len(embeds), 10):

@@ -411,6 +411,37 @@ class FindMatchForTeam(unittest.TestCase):
         result = scores365.find_match_for_team("Milwaukee Brewers", "baseball")
         self.assertEqual(result[0]["awayCompetitor"]["name"], "San Diego Padres")
 
+    def test_reference_date_picks_the_older_game_over_the_one_closest_to_now(self):
+        # Confirmed live: masterparlay.py re-resolving a days-old slip
+        # against a team that's since played again picked up the NEWER
+        # game instead of the one the slip was actually about, because
+        # the tie-break below always preferred whichever candidate was
+        # closest to the real current moment - which, once a newer game
+        # exists, is never the older one anymore.
+        self._games = [
+            self._game("Milwaukee Brewers", "Los Angeles Dodgers", status_group=4, days_offset=0),
+            self._game("Milwaukee Brewers", "San Diego Padres", status_group=4, days_offset=-2),
+        ]
+        older_date = (datetime.datetime.now(tz=scores365.EASTERN) - datetime.timedelta(days=2)).date()
+        result = scores365.find_match_for_team(
+            "Milwaukee Brewers", "baseball", days_ahead=0, days_back=3, allow_finished=True, reference_date=older_date,
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result[0]["awayCompetitor"]["name"], "San Diego Padres")
+
+    def test_without_reference_date_still_prefers_the_game_closest_to_now(self):
+        # Same setup as above, no reference_date - confirms the fix left
+        # every other (real-time) caller's own behavior unchanged.
+        self._games = [
+            self._game("Milwaukee Brewers", "Los Angeles Dodgers", status_group=4, days_offset=0),
+            self._game("Milwaukee Brewers", "San Diego Padres", status_group=4, days_offset=-2),
+        ]
+        result = scores365.find_match_for_team(
+            "Milwaukee Brewers", "baseball", days_ahead=0, days_back=3, allow_finished=True,
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result[0]["awayCompetitor"]["name"], "Los Angeles Dodgers")
+
 
 class EasternDateHelpers(unittest.TestCase):
     def test_eastern_date_str_from_epoch(self):

@@ -211,6 +211,7 @@ _STATUS_RANK = {"in": 0, "pre": 1, "post": 2}
 
 def find_current_event_id(
     sport: str, team_id: str, days_ahead: int = 1, days_back: int = 0, allow_finished: bool = False,
+    reference_date: Optional[datetime.date] = None,
 ) -> Optional[str]:
     """Search the league's current scoreboard for an event involving this
     team, preferring in-progress, then soonest scheduled, then most recent
@@ -232,9 +233,21 @@ def find_current_event_id(
     /tracktoday command passes the opposite bounds (days_ahead=0,
     days_back=1, allow_finished=True) to deliberately find today's or
     yesterday's event, whichever is most recent, including an
-    already-finished one."""
+    already-finished one.
+
+    reference_date - see scores365.find_match_for_team's own docstring;
+    same "re-resolve against the SAME event, not whichever one is closest
+    to right now" reasoning, and the same fix (a "post"/finished event's
+    tie-break switches from "most recent" to "closest to reference_date",
+    which are provably identical when reference_date is None/real now -
+    a finished event's timestamp is always in the past, so maximizing it
+    and minimizing its distance from "now" are the same ordering)."""
     sport_slug, league_slug = SPORT_PATHS[sport]
-    today = datetime.datetime.now(tz=scores365.EASTERN).date()
+    today = reference_date or datetime.datetime.now(tz=scores365.EASTERN).date()
+    reference_epoch = (
+        datetime.datetime.combine(today, datetime.time(12, 0), tzinfo=scores365.EASTERN).timestamp()
+        if reference_date else time.time()
+    )
     start = (today - datetime.timedelta(days=days_back)).strftime("%Y%m%d")
     end = (today + datetime.timedelta(days=days_ahead)).strftime("%Y%m%d")
     data = _get(f"{SITE_BASE}/{sport_slug}/{league_slug}/scoreboard", dates=f"{start}-{end}")
@@ -266,8 +279,12 @@ def find_current_event_id(
         # silently keeping whichever the API happened to list first rather
         # than the soonest one. Sort key ascending within a tier: soonest
         # first for scheduled/live, most recent first (negated epoch) for
-        # an already-finished game.
-        tiebreak = event_dt.timestamp() if state != "post" else -event_dt.timestamp()
+        # an already-finished game. "Most recent" and "closest to
+        # reference_epoch" are the same ordering for a finished event (its
+        # timestamp is always <= reference_epoch), so this is exactly the
+        # old "-event_dt.timestamp()" behavior when reference_date is
+        # None/real now, and correctly re-anchors to an older date otherwise.
+        tiebreak = event_dt.timestamp() if state != "post" else abs(event_dt.timestamp() - reference_epoch)
         key = (rank, tiebreak)
         if best is None or key < best_key:
             best, best_key = event, key

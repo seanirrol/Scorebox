@@ -807,6 +807,7 @@ def _candidates_for_team(games: list[dict], team: str) -> list[dict]:
 
 def find_match_for_team(
     team: str, sport: Optional[str] = None, days_ahead: int = 1, days_back: int = 0, allow_finished: bool = False,
+    reference_date: Optional[datetime.date] = None,
 ) -> Optional[tuple[dict, int]]:
     """
     Search 365scores' live game lists for a team, across all supported sports
@@ -833,10 +834,24 @@ def find_match_for_team(
     passes different bounds (days_ahead=0, days_back=1, allow_finished=
     True) - today's or yesterday's match, live/upcoming/already finished,
     whichever is most recent - since it exists specifically to manually
-    track a pick against a match that's already wrapped up."""
+    track a pick against a match that's already wrapped up.
+
+    reference_date, when given, replaces "today" as both the window's own
+    anchor AND the tie-break's notion of "now" (see below) - lets a caller
+    re-resolve a pick against the SAME game it originally meant, even
+    after the team has since played again. Confirmed live: masterparlay.py
+    re-resolving a days-old slip against "Philadelphia Phillies" picked up
+    a brand-new Phillies game instead of the one the slip actually
+    tracked, because the tie-break below always preferred whichever
+    candidate was closest to the real current moment - which, once a new
+    game exists, is never the old one anymore. None (the default) keeps
+    every other caller's existing "as of right now" behavior unchanged."""
     sport_ids = [SPORT_IDS[sport.lower()]] if sport and sport.lower() in SPORT_IDS else UNIQUE_SPORT_IDS
-    now = time.time()
-    today = datetime.datetime.now(tz=EASTERN).date()
+    today = reference_date or datetime.datetime.now(tz=EASTERN).date()
+    now = (
+        datetime.datetime.combine(today, datetime.time(12, 0), tzinfo=EASTERN).timestamp()
+        if reference_date else time.time()
+    )
     earliest_finished_date = today - datetime.timedelta(days=days_back)
     latest_notstarted_date = today + datetime.timedelta(days=days_ahead)
 

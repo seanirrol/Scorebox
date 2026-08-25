@@ -180,6 +180,21 @@ class ResolveLeg(unittest.TestCase):
         self.assertEqual(result["status"], "won")
         self.assertEqual(result["label"], "Tampa Bay Rays ML")
 
+    def test_reference_date_is_threaded_through_to_the_team_lookup(self):
+        # Confirmed live: re-resolving a slip against a team that's since
+        # played again picked up the wrong (newer) game entirely, because
+        # nothing anchored the lookup to the slip's own date - resolve_leg
+        # must actually pass reference_date all the way down to
+        # find_match_for_team, not just accept the parameter.
+        import datetime
+        key = tracker.track_key(masterparlay.PREMIUM_SCORES_CHANNEL_ID, 4614731, picked_team="Tampa Bay Rays")
+        self._seed("tracker", key, "won", "Tampa Bay Rays ML", "WON")
+        reference_date = datetime.date(2026, 8, 23)
+        with patch("scores365.find_match_for_team", return_value=({"id": 4614731}, 100)) as mock_find:
+            result = _run(masterparlay.resolve_leg("Tampa Bay Rays ML", reference_date))
+        mock_find.assert_called_once_with("Tampa Bay Rays", None, 0, 1, True, reference_date)
+        self.assertEqual(result["status"], "won")
+
     def test_full_word_moneyline_leg_also_matches(self):
         # Confirmed live: a real slip's "New York Yankees Moneyline"/
         # "Taylor Fritz Moneyline"/etc. legs all reported "Not currently
@@ -202,7 +217,7 @@ class ResolveLeg(unittest.TestCase):
         self._seed("tracker", key, "lost", "Tampa Bay Rays ML", "LOST")
         with patch("scores365.find_match_for_team", return_value=({"id": 4614731}, 100)) as mock_find:
             result = _run(masterparlay.resolve_leg("Tampa Bay Rays ML"))
-        mock_find.assert_called_once_with("Tampa Bay Rays", None, 0, 1, True)
+        mock_find.assert_called_once_with("Tampa Bay Rays", None, 0, 1, True, None)
         self.assertEqual(result["status"], "lost")
 
     def test_dirty_dailylog_label_still_gets_cleaned_for_display(self):
@@ -253,7 +268,7 @@ class ResolveLeg(unittest.TestCase):
         self._seed("tracker", key, "pending", "Under 9.5 Total Runs", "NOT STARTED")
         with patch("scores365.find_match_for_team", return_value=({"id": 4659920}, 100)) as mock_find:
             result = _run(masterparlay.resolve_leg("Philadelphia Phillies vs Seattle Mariners - Under 9.5 Runs"))
-        mock_find.assert_called_once_with("Philadelphia Phillies", None, 0, 1, True)
+        mock_find.assert_called_once_with("Philadelphia Phillies", None, 0, 1, True, None)
         self.assertEqual(result["status"], "pending")
 
     def test_combined_game_total_leg_with_over_direction(self):
@@ -268,7 +283,7 @@ class ResolveLeg(unittest.TestCase):
         self._seed("settracker", key, "won", "Sara Bejlek +5.5 Games", "WON")
         with patch("scores365.find_match_for_team", return_value=({"id": 4819545}, 103)) as mock_find:
             result = _run(masterparlay.resolve_leg("Sara Bejlek +5.5 Games"))
-        mock_find.assert_called_once_with("Sara Bejlek", "tennis", 0, 1, True)
+        mock_find.assert_called_once_with("Sara Bejlek", "tennis", 0, 1, True, None)
         self.assertEqual(result["status"], "won")
 
     def test_win_a_set_leg_matches_a_seeded_pending(self):
@@ -292,7 +307,7 @@ class ResolveLeg(unittest.TestCase):
         self.assertEqual(result["status"], "won")
         # Same allow_finished=True reasoning as the team-based resolvers -
         # an already-finished game's prop must still be findable.
-        mock_event.assert_called_once_with("wnba", "16", 0, 1, True)
+        mock_event.assert_called_once_with("wnba", "16", 0, 1, True, None)
 
     def test_unmatched_team_is_unresolved_not_a_guess(self):
         with patch("scores365.find_match_for_team", return_value=None):

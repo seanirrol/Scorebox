@@ -13,6 +13,7 @@ Commands:
 """
 
 import asyncio
+import datetime
 import io
 import logging
 import re
@@ -3140,7 +3141,10 @@ class MasterParlayPublishView(discord.ui.View):
         # the right parlay even if re-resolving nets a different ordering.
         selected_names = {self.parlay_names[i] for i in self.selected_indices if i < len(self.parlay_names)}
         date_str = masterparlay.slip_date_str(sources)
-        embeds = await masterparlay.build_report(masterparlay.combine_slip_text(sources), date_str, only_names=selected_names)
+        embeds = await masterparlay.build_report(
+            masterparlay.combine_slip_text(sources), date_str, only_names=selected_names,
+            reference_date=datetime.date.fromisoformat(date_str),
+        )
         if not embeds:
             await interaction.edit_original_response(content="Nothing to publish - the selected parlays are no longer in the slip.", embeds=[], view=None)
             self.stop()
@@ -3221,7 +3225,8 @@ async def premiumparlay(interaction: discord.Interaction):
     if not messages:
         await interaction.followup.send("No MASTER PARLAYS slip found in recent channel history.", ephemeral=True)
         return
-    parlays = await masterparlay.resolve_parlays(masterparlay.combine_slip_text(messages))
+    reference_date = datetime.date.fromisoformat(masterparlay.slip_date_str(messages))
+    parlays = await masterparlay.resolve_parlays(masterparlay.combine_slip_text(messages), reference_date)
     if not parlays:
         await interaction.followup.send("Found a slip but couldn't parse any parlays from it.", ephemeral=True)
         return
