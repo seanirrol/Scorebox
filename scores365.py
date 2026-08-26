@@ -1116,7 +1116,7 @@ def grade_1h_combined_total(home_points: int, away_points: int, direction: str, 
     return "won" if total < line else "lost"
 
 
-def grade_ht_ft(game: dict, ht_team: str, ft_team: str) -> Optional[str]:
+def grade_ht_ft(game: dict, ht_team: str, ft_team: str, sport_id: Optional[int] = None) -> Optional[str]:
     """Grades a Halftime/Fulltime pick - a compound bet needing BOTH legs
     to hit: ht_team must be strictly ahead (not tied) at the half, AND
     ft_team must be the final winner. Decided early (lost) the moment
@@ -1127,19 +1127,30 @@ def grade_ht_ft(game: dict, ht_team: str, ft_team: str) -> Optional[str]:
     this market. Doesn't support a "Draw" selection for either leg (not
     asked for, and a genuine fulltime tie can't happen in basketball/
     football/hockey anyway - only relevant for soccer, which isn't wired
-    up to this market yet)."""
+    up to this market yet).
+
+    sport_id switches the "first half" leg's own data source: volleyball
+    has no halftime concept, but its own sportsbooks offer the identical
+    compound shape as "Double Result (1st Set/Match)" - passing
+    SPORT_IDS["volleyball"] here grades that leg off Set 1's own final
+    score (volleyball_first_set_result) instead of quarters_breakdown.
+    Every other sport_id (including None, the default) keeps the original
+    quarters-based behavior."""
     home = (game.get("homeCompetitor") or {}).get("name", "")
     away = (game.get("awayCompetitor") or {}).get("name", "")
-    halftime = quarters_breakdown(game["id"], THROUGH_1H_QUARTER)
-    if halftime is None:
+    if sport_id == SPORT_IDS["volleyball"]:
+        first_leg = volleyball_first_set_result(game)
+    else:
+        first_leg = quarters_breakdown(game["id"], THROUGH_1H_QUARTER)
+    if first_leg is None:
         return None
-    home_half, away_half = halftime
+    home_half, away_half = first_leg
     if home_half > away_half:
         ht_leader = home
     elif away_half > home_half:
         ht_leader = away
     else:
-        ht_leader = None  # tied at the half - no named team can match
+        ht_leader = None  # tied at the half/set - no named team can match
     if not (ht_leader and names_match(ht_leader, ht_team)):
         return "lost"
     if not is_finished(game):

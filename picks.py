@@ -428,6 +428,27 @@ _HT_FT_SAME_TEAM_RE = re.compile(
     re.IGNORECASE,
 )
 
+# "Puerto Rico/Puerto Rico Double Result (1st Set/Match)" - volleyball's own
+# name for the exact same compound-bet shape as HT/FT above (1st-set leader
+# AND match winner, both legs must hit - see grade_ht_ft's sport_id branch,
+# which sources the "first half" side of the compound from
+# volleyball_first_set_result instead of quarters_breakdown when sport_id is
+# volleyball). Reuses the identical "ht_ft" pick kind - htfttracker.py/
+# grade_ht_ft already tell the two sports apart via sport_id, so no separate
+# kind or dispatcher is needed. Trailing "(1st Set/Match)" is optional (not
+# captured) - it's the sportsbook's own market-name decoration, not part of
+# the pick itself.
+_DOUBLE_RESULT_RE = re.compile(
+    r"^(?:.+?\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*.+?\s*-\s*)?"
+    r"(.+?)\s*/\s*(.+?)\s+Double\s*Result\b",
+    re.IGNORECASE,
+)
+_DOUBLE_RESULT_SAME_TEAM_RE = re.compile(
+    r"^(?:.+?\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*.+?\s*-\s*)?"
+    r"([^/]+?)\s+Double\s*Result\b",
+    re.IGNORECASE,
+)
+
 # "Denver Broncos -3.5" - a full-game point-spread pick, no opponent named
 # at all (this tipster's own wording always drops it - see
 # scores365.grade_spread). Distinguished from every other shape in this
@@ -1437,13 +1458,13 @@ def _parse_1h_combined_total_pick(description: str, sport: str) -> Optional[dict
 
 def _parse_ht_ft_pick(description: str, sport: str) -> Optional[dict]:
     text = _clean_line(description)
-    m = _HT_FT_RE.match(text)
+    m = _HT_FT_RE.match(text) or _DOUBLE_RESULT_RE.match(text)
     if m:
         ht_team, ft_team = m.group(1).strip(), m.group(2).strip()
         if not ht_team or not ft_team:
             return None
         return {"kind": "ht_ft", "sport": sport, "ht_team": ht_team, "ft_team": ft_team}
-    m = _HT_FT_SAME_TEAM_RE.match(text)
+    m = _HT_FT_SAME_TEAM_RE.match(text) or _DOUBLE_RESULT_SAME_TEAM_RE.match(text)
     if m:
         team = m.group(1).strip()
         if not team:
@@ -1901,7 +1922,7 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
         if f5_handicap:
             return f5_handicap
 
-    if sport in ("nfl", "basketball"):
+    if sport in ("nfl", "basketball", "volleyball"):
         ht_ft = _parse_ht_ft_pick(description, sport)
         if ht_ft:
             return ht_ft

@@ -14,6 +14,11 @@ half-only one. Backed by the same scores365.quarters_breakdown this bot
 already confirmed live works for both football (NFL/CFL) and basketball
 (WNBA/NBA) - see grade_ht_ft's own docstring.
 
+Also backs volleyball's own "Double Result (1st Set/Match)" market - the
+identical compound shape, just naming its own first leg "1st Set" instead
+of "Halftime" (see grade_ht_ft's sport_id branch and this module's own
+_market_label).
+
 Mirrors halftracker.py/f5tracker.py otherwise: hibernation before kickoff,
 🗑️-reaction delete, restart-safe persistence, and a ✅/❌ result reaction
 once the pick is graded.
@@ -63,6 +68,14 @@ _SERVICE_EMOJIS = {TRASH_EMOJI, *_RESULT_REACTIONS.values()}
 
 def _footer_text(message_id: Optional[int] = None) -> str:
     return f"Scorebox ({message_id}) • data via 365scores" if message_id else "Scorebox • data via 365scores"
+
+
+def _market_label(sport_id: Optional[int]) -> str:
+    """"Halftime/Fulltime" for basketball/football, "1st Set/Match" for
+    volleyball's own Double Result market - see scores365.grade_ht_ft's
+    matching sport_id branch, which sources the compound bet's first leg
+    from Set 1 instead of the half for the same sport_id check."""
+    return "1st Set/Match" if sport_id == scores365.SPORT_IDS["volleyball"] else "Halftime/Fulltime"
 
 
 def track_key(channel_id: int, game_id, ht_team: str, ft_team: str) -> str:
@@ -151,7 +164,7 @@ async def build_embed(
     away_competitor = game.get("awayCompetitor") or {}
     status = scores365.map_status_type(game.get("statusGroup"), game.get("statusText"))
 
-    result = scores365.grade_ht_ft(game, ht_team, ft_team)
+    result = scores365.grade_ht_ft(game, ht_team, ft_team, sport_id)
 
     if force_result:
         color_status = force_result
@@ -170,7 +183,8 @@ async def build_embed(
     if author_bits:
         embed.set_author(name=" • ".join(author_bits))
 
-    pick_text = f"{ht_team}/{ft_team} Halftime/Fulltime" if ht_team != ft_team else f"{ht_team} Halftime/Fulltime"
+    market_label = _market_label(sport_id)
+    pick_text = f"{ht_team}/{ft_team} {market_label}" if ht_team != ft_team else f"{ht_team} {market_label}"
     description_lines = [pick_text]
     if status == "notstarted":
         kickoff = scores365.start_epoch(game)
@@ -257,7 +271,8 @@ async def _track_loop(
             matchup = f"{(game.get('homeCompetitor') or {}).get('name', '?')} vs {(game.get('awayCompetitor') or {}).get('name', '?')}"
         else:
             matchup = f"Game `{game_id}`"
-        pick_desc = f"{ht_team}/{ft_team} Halftime/Fulltime" if ht_team != ft_team else f"{ht_team} Halftime/Fulltime"
+        market_label = _market_label(sport_id)
+        pick_desc = f"{ht_team}/{ft_team} {market_label}" if ht_team != ft_team else f"{ht_team} {market_label}"
         await parlaytracker.handle_leg_result(
             message.channel, channel_id, message, "htfttracker", key, f"{matchup} - {pick_desc}", "void", group_ids,
         )
@@ -323,7 +338,7 @@ async def _track_loop(
                 _persist(channel_id, game_id, message.id, sport_id, owner_id, ht_team, ft_team)
                 continue
 
-            result = scores365.grade_ht_ft(game, ht_team, ft_team)
+            result = scores365.grade_ht_ft(game, ht_team, ft_team, sport_id)
             if result is not None:
                 await _repost_final(embed, file)
 
@@ -466,7 +481,8 @@ def start_tracking(
     _active[key] = task
     register_message(message.id, channel_id, game_id, ht_team, ft_team, owner_id)
     if not label:
-        label = f"{ht_team}/{ft_team} Halftime/Fulltime" if ht_team != ft_team else f"{ht_team} Halftime/Fulltime"
+        market_label = _market_label(sport_id)
+        label = f"{ht_team}/{ft_team} {market_label}" if ht_team != ft_team else f"{ht_team} {market_label}"
     _persist(channel_id, game_id, message.id, sport_id, owner_id, ht_team, ft_team, section, label, origin_channel_id)
     dailylog.record_pick(
         channel_id, "htfttracker", key, section, label, message.id, origin_channel_id,

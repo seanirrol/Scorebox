@@ -1059,6 +1059,18 @@ class VolleyballSetHandicaps(unittest.TestCase):
         result = picks.parse_pick_line("[Volleyball] Greece +4.5 1st Set")
         self.assertEqual(result, {"kind": "volleyball_set1_handicap", "team": "Greece", "line": 4.5})
 
+    def test_double_result_same_team_shorthand(self):
+        result = picks.parse_pick_line("[Volleyball] Puerto Rico Double Result (1st Set/Match)")
+        self.assertEqual(result, {"kind": "ht_ft", "sport": "volleyball", "ht_team": "Puerto Rico", "ft_team": "Puerto Rico"})
+
+    def test_double_result_two_team_form(self):
+        result = picks.parse_pick_line("[Volleyball] Puerto Rico/Puerto Rico Double Result")
+        self.assertEqual(result, {"kind": "ht_ft", "sport": "volleyball", "ht_team": "Puerto Rico", "ft_team": "Puerto Rico"})
+
+    def test_double_result_with_matchup_prefix(self):
+        result = picks.parse_pick_line("[Volleyball] Puerto Rico vs Guatemala - Puerto Rico/Guatemala Double Result (1st Set/Match)")
+        self.assertEqual(result, {"kind": "ht_ft", "sport": "volleyball", "ht_team": "Puerto Rico", "ft_team": "Guatemala"})
+
 
 if __name__ == "__main__":
     unittest.main()

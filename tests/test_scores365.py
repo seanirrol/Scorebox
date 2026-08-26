@@ -365,6 +365,62 @@ class GradeHtFt(unittest.TestCase):
         self.assertEqual(scores365.grade_ht_ft(game, "Los Angeles Sparks", "Washington Mystics"), "won")
 
 
+class GradeHtFtVolleyballDoubleResult(unittest.TestCase):
+    """grade_ht_ft's sport_id branch for volleyball's own "Double Result
+    (1st Set/Match)" market - same compound-bet shape as GradeHtFt above,
+    just sourced from volleyball_first_set_result (Set 1's own final score)
+    instead of quarters_breakdown. Monkeypatches volleyball_set_scores (a
+    live 365scores per-game detail fetch) so this exercises the real
+    grading logic without a network request."""
+
+    def setUp(self):
+        self._orig = scores365.volleyball_set_scores
+        self._sets = None
+        scores365.volleyball_set_scores = lambda sport_id, status, game_id: self._sets
+
+    def tearDown(self):
+        scores365.volleyball_set_scores = self._orig
+
+    def _game(self, home_score=0.0, away_score=0.0, home_winner=None, away_winner=None, status_group=4):
+        return {
+            "id": 1, "statusGroup": status_group,
+            "homeCompetitor": {"name": "Puerto Rico", "score": home_score, "isWinner": home_winner},
+            "awayCompetitor": {"name": "Guatemala", "score": away_score, "isWinner": away_winner},
+        }
+
+    def test_set1_not_ended_yet_returns_none(self):
+        self._sets = None
+        self.assertIsNone(scores365.grade_ht_ft(self._game(status_group=3), "Puerto Rico", "Puerto Rico", scores365.SPORT_IDS["volleyball"]))
+
+    def test_wrong_team_winning_set1_loses_immediately_even_before_match_ends(self):
+        self._sets = [{"set_number": 1, "home": 20, "away": 25, "is_live": False}]  # Guatemala takes Set 1
+        self.assertEqual(
+            scores365.grade_ht_ft(self._game(status_group=3), "Puerto Rico", "Puerto Rico", scores365.SPORT_IDS["volleyball"]), "lost",
+        )
+
+    def test_both_legs_correct_wins(self):
+        self._sets = [{"set_number": 1, "home": 25, "away": 20, "is_live": False}]
+        game = self._game(home_score=3.0, away_score=1.0, home_winner=True, away_winner=False)
+        self.assertEqual(scores365.grade_ht_ft(game, "Puerto Rico", "Puerto Rico", scores365.SPORT_IDS["volleyball"]), "won")
+
+    def test_set1_correct_but_match_winner_wrong_loses(self):
+        self._sets = [{"set_number": 1, "home": 25, "away": 20, "is_live": False}]  # Puerto Rico takes Set 1
+        game = self._game(home_score=2.0, away_score=3.0, home_winner=False, away_winner=True)  # but loses the match
+        self.assertEqual(scores365.grade_ht_ft(game, "Puerto Rico", "Puerto Rico", scores365.SPORT_IDS["volleyball"]), "lost")
+
+    def test_no_sport_id_falls_back_to_quarters_breakdown_untouched(self):
+        # A stray call site that forgets to pass sport_id must keep the
+        # original basketball/football behavior, not silently misread a
+        # volleyball match's Set 1 as if it were a quarter score.
+        orig_quarters_breakdown = scores365.quarters_breakdown
+        scores365.quarters_breakdown = lambda game_id, through_quarter: None
+        try:
+            self._sets = [{"set_number": 1, "home": 25, "away": 20, "is_live": False}]
+            self.assertIsNone(scores365.grade_ht_ft(self._game(status_group=3), "Puerto Rico", "Puerto Rico"))
+        finally:
+            scores365.quarters_breakdown = orig_quarters_breakdown
+
+
 class FindMatchForTeam(unittest.TestCase):
     """find_match_for_team backs every auto-tracked pick's match lookup -
     monkeypatches _fetch_games_for_sport so this exercises the real
