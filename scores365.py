@@ -271,6 +271,44 @@ def volleyball_set_scores(sport_id: int, status: str, game_id) -> Optional[list[
     ]
 
 
+def volleyball_first_set_result(game: dict) -> Optional[tuple[int, int]]:
+    """(home_points, away_points) for Set 1 once it's actually ended - None
+    while Set 1 is still live or the match hasn't started yet. Lets a "1st
+    Set" market settle as soon as Set 1 itself finishes, without waiting on
+    the whole match - same early-decision shape as tennis_first_set_result."""
+    status = map_status_type(game.get("statusGroup"))
+    sets = volleyball_set_scores(SPORT_IDS["volleyball"], status, game.get("id"))
+    if not sets:
+        return None
+    set1 = next((s for s in sets if s["set_number"] == 1 and not s["is_live"]), None)
+    if not set1 or set1["home"] is None or set1["away"] is None:
+        return None
+    return (set1["home"], set1["away"])
+
+
+def grade_volleyball_set1_handicap(game: dict, team: str, line: float) -> Optional[str]:
+    """Grades a volleyball 1st-Set point-margin handicap pick (e.g. "Serbia
+    -4.5 1st Set") - same adjust-then-compare shape as grade_games_handicap,
+    but against Set 1's own final point score rather than games/sets won
+    across the whole match."""
+    breakdown = volleyball_first_set_result(game)
+    if breakdown is None:
+        return None
+    home_points, away_points = breakdown
+    home = (game.get("homeCompetitor") or {}).get("name", "")
+    away = (game.get("awayCompetitor") or {}).get("name", "")
+    if names_match(home, team):
+        picked, other = home_points, away_points
+    elif names_match(away, team):
+        picked, other = away_points, home_points
+    else:
+        return None
+    adjusted = picked + line
+    if adjusted == other:
+        return "push"
+    return "won" if adjusted > other else "lost"
+
+
 def tennis_current_set_score(game: dict) -> Optional[tuple[int, int]]:
     """Tennis-only current-set game score - already sitting on the bulk list's own `stages` array."""
     stages = game.get("stages") or []

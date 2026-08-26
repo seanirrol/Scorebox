@@ -272,6 +272,15 @@ _SETS_HANDICAP_NOMATCHUP_RE = re.compile(
     r"^(.+?)\s+([+-]\d+(?:\.\d+)?)\s*sets\b", re.IGNORECASE,
 )
 
+# "Serbia -4.5 1st Set" - volleyball's own Set 1 point-margin handicap, same
+# no-matchup shape as _GAMES_HANDICAP_NOMATCHUP_RE/_SETS_HANDICAP_NOMATCHUP_RE
+# above but against Set 1's own point score instead of games/sets won across
+# the whole match. Trailing wording like "Point Handicap" (a sportsbook's own
+# market label) doesn't need to match - .match() only anchors the start.
+_SET1_POINT_HANDICAP_NOMATCHUP_RE = re.compile(
+    r"^(.+?)\s+([+-]\d+(?:\.\d+)?)\s*1st\s*set\b", re.IGNORECASE,
+)
+
 # Every wording variant confirmed live for "wins at least one set" -
 # "a set", "at least 1 set(s)", and "1+ set(s)" (the last one fell through
 # to the simple-name fallback with no botlog trace at all, same failure
@@ -1263,6 +1272,19 @@ def _parse_sets_handicap_nomatchup_pick(description: str) -> Optional[dict]:
     return {"kind": "tennis_sets_handicap", "team": player, "line": float(m.group(2))}
 
 
+def _parse_volleyball_set1_handicap_nomatchup_pick(description: str) -> Optional[dict]:
+    """"Serbia -4.5 1st Set" - a volleyball Set 1 point-margin handicap, no
+    opponent named at all (see _SET1_POINT_HANDICAP_NOMATCHUP_RE)."""
+    text = _clean_line(description)
+    m = _SET1_POINT_HANDICAP_NOMATCHUP_RE.match(text)
+    if not m:
+        return None
+    team = m.group(1).strip()
+    if not team:
+        return None
+    return {"kind": "volleyball_set1_handicap", "team": team, "line": float(m.group(2))}
+
+
 def _parse_win_a_set_nomatchup_pick(description: str) -> Optional[dict]:
     """"Player to Win a Set" / "Player to Win at Least 1 Set" - the same
     market as _parse_win_a_set_pick, just with no opponent named at all
@@ -1884,6 +1906,13 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
         if ht_ft:
             return ht_ft
 
+    if sport in ("nfl", "basketball", "volleyball"):
+        # Volleyball's own "Set Handicap" (e.g. "Turkey -1.5") is just a
+        # plain full-game spread as far as grading goes - 365scores' own
+        # "score" field for a volleyball match already IS sets won (see
+        # scores365.grade_spread/main_scores), so it needs no dedicated
+        # volleyball parser here, just the same shape already confirmed
+        # live for NFL/WNBA.
         spread = _parse_team_spread_nomatchup_pick(sport, description)
         if spread:
             return spread
@@ -2016,6 +2045,11 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
             inning1_team = _parse_inning1_team_pick(description)
             if inning1_team:
                 return {"kind": "inning1_result", "sport": sport, "team": inning1_team, "pick": inning1_team}
+
+        if sport == "volleyball":
+            set1_handicap_nomatchup = _parse_volleyball_set1_handicap_nomatchup_pick(description)
+            if set1_handicap_nomatchup:
+                return set1_handicap_nomatchup
 
         if sport == "tennis":
             set1_team = _parse_set1_pick(description)

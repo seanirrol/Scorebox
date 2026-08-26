@@ -1037,5 +1037,28 @@ class BareSectionHeaders(unittest.TestCase):
         self.assertEqual(results[0]["player"], "Dustin May")
 
 
+class VolleyballSetHandicaps(unittest.TestCase):
+    """Volleyball's own "Set Handicap" (a plain full-match spread - 365scores'
+    match score field for volleyball already is sets won, see
+    scores365.grade_spread) and "1st Set" point handicap (a new, dedicated
+    market - see settracker.py's set1_point_handicap)."""
+
+    def test_bare_team_spread_is_a_plain_spread_pick(self):
+        result = picks.parse_pick_line("[Volleyball] Turkey -1.5")
+        self.assertEqual(result, {"kind": "team_total", "sport": "volleyball", "team": "Turkey", "direction": "spread", "line": -1.5})
+
+    def test_matchup_prefixed_team_spread_is_a_plain_spread_pick(self):
+        result = picks.parse_pick_line("[Volleyball] Germany vs Turkey - Turkey -1.5")
+        self.assertEqual(result, {"kind": "team_total", "sport": "volleyball", "team": "Turkey", "direction": "spread", "line": -1.5})
+
+    def test_set1_point_handicap_no_matchup(self):
+        result = picks.parse_pick_line("[Volleyball] Serbia -4.5 1st Set")
+        self.assertEqual(result, {"kind": "volleyball_set1_handicap", "team": "Serbia", "line": -4.5})
+
+    def test_set1_point_handicap_positive_line(self):
+        result = picks.parse_pick_line("[Volleyball] Greece +4.5 1st Set")
+        self.assertEqual(result, {"kind": "volleyball_set1_handicap", "team": "Greece", "line": 4.5})
+
+
 if __name__ == "__main__":
     unittest.main()

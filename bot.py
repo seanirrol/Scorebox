@@ -1189,19 +1189,25 @@ async def _auto_tennis_market(
     channel: discord.abc.Messageable, team: str, market: str,
     direction: Optional[str] = None, line: Optional[float] = None,
     section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
-    manual: bool = False, queue_on_miss: bool = True,
+    manual: bool = False, queue_on_miss: bool = True, sport: str = "tennis",
 ):
     """Tennis "extra market" picks (1st Set ML/Total Games, Match Total
     Games, Win a Set) all settle on some part of the match rather than the
     whole thing finishing normally - see settracker.py. Backed by 365scores
-    (like f5tracker.py), not ESPN - always tennis. team is either the named
-    player (set1_moneyline/win_a_set) or just one of the two matchup sides
-    used to look the match up (set1_total_games/match_total_games, no
-    specific team being graded). manual/queue_on_miss - see _auto_track's/
-    _auto_f5's own docstrings."""
+    (like f5tracker.py), not ESPN. team is either the named player
+    (set1_moneyline/win_a_set) or just one of the two matchup sides used to
+    look the match up (set1_total_games/match_total_games, no specific team
+    being graded). manual/queue_on_miss - see _auto_track's/_auto_f5's own
+    docstrings.
+
+    sport defaults to "tennis" but also covers volleyball's own
+    set1_point_handicap market (see settracker.py) - settracker's markets
+    are generic enough (sport_id already threaded through for rendering)
+    that this dispatcher didn't need a second copy for the one volleyball
+    market that also fits this "settles on part of the match" shape."""
     find_kwargs = {"days_ahead": 0, "days_back": 1, "allow_finished": True} if manual else {}
     try:
-        result = await asyncio.to_thread(scores365.find_match_for_team, team, "tennis", **find_kwargs)
+        result = await asyncio.to_thread(scores365.find_match_for_team, team, sport, **find_kwargs)
     except scores365.ScoresError as e:
         log.info("Auto-tennis-market (%s): couldn't reach 365scores for '%s': %s", market, team, e)
         botlog.event(f"❌ Not tracked ({market}): **{team}** — couldn't reach 365scores: {e}")
@@ -1209,7 +1215,7 @@ async def _auto_tennis_market(
     if not result:
         payload = {
             "channel_id": channel.id, "team": team, "market": market, "direction": direction, "line": line,
-            "section": section, "label": label, "origin_channel_id": origin_channel_id,
+            "section": section, "label": label, "origin_channel_id": origin_channel_id, "sport": sport,
         }
         if not manual and queue_on_miss and not pendingauto.is_queued("tennis_market", payload):
             pendingauto.queue("tennis_market", payload, _resolve_pending_tennis_market)
@@ -1694,6 +1700,11 @@ async def _dispatch_pick(
             return await _auto_tennis_market(
                 target_channel, pick["team"], "sets_handicap", None, pick["line"],
                 section=section, label=label, origin_channel_id=origin_channel_id, manual=manual,
+            )
+        elif pick["kind"] == "volleyball_set1_handicap":
+            return await _auto_tennis_market(
+                target_channel, pick["team"], "set1_point_handicap", None, pick["line"],
+                section=section, label=label, origin_channel_id=origin_channel_id, manual=manual, sport="volleyball",
             )
         elif pick["kind"] == "tennis_playerprops":
             return await _auto_tennis_playerprops(

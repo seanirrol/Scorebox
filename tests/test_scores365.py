@@ -246,6 +246,57 @@ class GradeSetsHandicap(unittest.TestCase):
         self.assertEqual(scores365.grade_sets_handicap(game, "Xiyu Wang", -1.5), "void")
 
 
+class VolleyballSet1Handicap(unittest.TestCase):
+    """grade_volleyball_set1_handicap backs settracker.py's volleyball-only
+    set1_point_handicap market - monkeypatches volleyball_set_scores (a live
+    365scores per-game detail fetch) so this exercises the real
+    adjust-then-compare grading logic without a network request."""
+
+    def setUp(self):
+        self._orig = scores365.volleyball_set_scores
+        self._sets = None
+        scores365.volleyball_set_scores = lambda sport_id, status, game_id: self._sets
+
+    def tearDown(self):
+        scores365.volleyball_set_scores = self._orig
+
+    def _game(self, status_group=4):
+        return {
+            "id": 1, "statusGroup": status_group,
+            "homeCompetitor": {"name": "Serbia", "score": 3.0},
+            "awayCompetitor": {"name": "Greece", "score": 1.0},
+        }
+
+    def test_set1_still_live_returns_none(self):
+        self._sets = [{"set_number": 1, "home": 15, "away": 10, "is_live": True}]
+        self.assertIsNone(scores365.volleyball_first_set_result(self._game(status_group=3)))
+
+    def test_set1_ended_returns_final_points(self):
+        self._sets = [{"set_number": 1, "home": 25, "away": 20, "is_live": False}]
+        self.assertEqual(scores365.volleyball_first_set_result(self._game()), (25, 20))
+
+    def test_favorite_covers_the_line(self):
+        self._sets = [{"set_number": 1, "home": 25, "away": 15, "is_live": False}]
+        self.assertEqual(scores365.grade_volleyball_set1_handicap(self._game(), "Serbia", -4.5), "won")
+
+    def test_favorite_fails_to_cover_the_line(self):
+        self._sets = [{"set_number": 1, "home": 25, "away": 23, "is_live": False}]
+        self.assertEqual(scores365.grade_volleyball_set1_handicap(self._game(), "Serbia", -4.5), "lost")
+
+    def test_exact_push_on_a_whole_number_line(self):
+        self._sets = [{"set_number": 1, "home": 25, "away": 20, "is_live": False}]
+        self.assertEqual(scores365.grade_volleyball_set1_handicap(self._game(), "Serbia", -5), "push")
+
+    def test_underdog_side_grades_off_the_same_set(self):
+        self._sets = [{"set_number": 1, "home": 25, "away": 20, "is_live": False}]
+        self.assertEqual(scores365.grade_volleyball_set1_handicap(self._game(), "Greece", 5.5), "won")
+        self.assertEqual(scores365.grade_volleyball_set1_handicap(self._game(), "Greece", 4.5), "lost")
+
+    def test_set1_not_ended_yet_returns_none_not_a_grade(self):
+        self._sets = None
+        self.assertIsNone(scores365.grade_volleyball_set1_handicap(self._game(status_group=3), "Serbia", -4.5))
+
+
 class GradeTennisSet(unittest.TestCase):
     def test_walkover_voids_instead_of_grading_off_zero_games(self):
         game = {
