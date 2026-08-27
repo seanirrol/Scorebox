@@ -70,6 +70,40 @@ class ExtractPicksText(unittest.TestCase):
         self.assertEqual(len(picks.parse_picks_message(result)), 2)
 
 
+class SniffMediaType(unittest.TestCase):
+    """_sniff_media_type backs extract_picks_text's own correction of
+    Discord's attachment.content_type - confirmed live, Discord reported
+    "image/jpeg" for a real .png upload (filename and all), and Anthropic's
+    API rejects that mismatch outright with a 400 on every single call, so
+    every image from that source silently failed to transcribe."""
+
+    def test_png_magic_bytes_detected_even_if_discord_claimed_jpeg(self):
+        png_bytes = b"\x89PNG\r\n\x1a\n" + b"rest of a real png file"
+        self.assertEqual(image_picks._sniff_media_type(png_bytes, "image/jpeg"), "image/png")
+
+    def test_jpeg_magic_bytes_detected_even_if_discord_claimed_png(self):
+        jpeg_bytes = b"\xff\xd8\xff" + b"rest of a real jpeg file"
+        self.assertEqual(image_picks._sniff_media_type(jpeg_bytes, "image/png"), "image/jpeg")
+
+    def test_gif_magic_bytes_detected(self):
+        gif_bytes = b"GIF89a" + b"rest of a real gif file"
+        self.assertEqual(image_picks._sniff_media_type(gif_bytes, "image/png"), "image/gif")
+
+    def test_webp_magic_bytes_detected(self):
+        webp_bytes = b"RIFF" + b"\x00\x00\x00\x00" + b"WEBP" + b"rest of a real webp file"
+        self.assertEqual(image_picks._sniff_media_type(webp_bytes, "image/png"), "image/webp")
+
+    def test_unrecognized_bytes_fall_back_to_discords_own_claim(self):
+        self.assertEqual(image_picks._sniff_media_type(b"not a real image", "image/png"), "image/png")
+
+    def test_extract_picks_text_uses_the_sniffed_type_not_discords_claim(self):
+        png_bytes = b"\x89PNG\r\n\x1a\n" + b"rest of a real png file"
+        with patch.object(image_picks, "_client", MagicMock()), \
+             patch.object(image_picks, "_extract_sync", return_value="[MLB] Cincinnati Reds F5 ML") as fake_sync:
+            _run(image_picks.extract_picks_text(png_bytes, "image/jpeg"))
+        fake_sync.assert_called_once_with(png_bytes, "image/png")
+
+
 class NormalizeLine(unittest.TestCase):
     def test_already_bracketed_line_is_unchanged(self):
         self.assertEqual(image_picks._normalize_line("[MLB] Cincinnati Reds F5 ML"), "[MLB] Cincinnati Reds F5 ML")

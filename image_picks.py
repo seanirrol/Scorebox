@@ -97,6 +97,29 @@ def _normalize_line(line: str) -> str:
     return line
 
 
+def _sniff_media_type(image_bytes: bytes, fallback: str) -> str:
+    """Anthropic's vision API validates the declared media_type against the
+    image bytes' own actual format and rejects a mismatch outright with a
+    400 - confirmed live, Discord's own attachment.content_type reported
+    "image/jpeg" for a real .png upload (filename and all), and every
+    single image from that source failed to transcribe as a result, with
+    no way to tell from the botlog alone that this was the cause rather
+    than a missing/broken API key. Trusts the bytes' own magic number over
+    whatever Discord claims; only falls back to Discord's value for a
+    format this doesn't recognize (Anthropic's API only supports jpeg/png/
+    gif/webp anyway, so an unrecognized magic number would fail either
+    way)."""
+    if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if image_bytes.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if image_bytes.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if image_bytes[:4] == b"RIFF" and image_bytes[8:12] == b"WEBP":
+        return "image/webp"
+    return fallback
+
+
 def _extract_sync(image_bytes: bytes, media_type: str) -> str:
     import base64
 
@@ -123,6 +146,7 @@ async def extract_picks_text(image_bytes: bytes, media_type: str) -> Optional[st
     parseable in the image, distinct from a failure)."""
     if _client is None:
         return None
+    media_type = _sniff_media_type(image_bytes, media_type)
     try:
         raw_text = await asyncio.to_thread(_extract_sync, image_bytes, media_type)
     except anthropic.APIError as e:
