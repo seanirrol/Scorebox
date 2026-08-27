@@ -419,6 +419,24 @@ _F5_COMBINED_TOTAL_RE = re.compile(
     re.IGNORECASE,
 )
 
+# "Los Angeles Dodgers vs Atlanta Braves - Under 4.5 1st 5 Innings Total
+# Runs" - the same combined F5 total as _F5_COMBINED_TOTAL_RE above, just
+# with the Over/Under+line coming BEFORE the "1st 5 Innings" marker instead
+# of after. Confirmed live: this word order wasn't recognized by
+# _F5_COMBINED_TOTAL_RE at all, and fell all the way through to the
+# generic (whole-game) total parser further down - which doesn't care what
+# comes after the number, so it silently graded the pick against the
+# WRONG scope (the entire game's runs, not just the first 5 innings)
+# instead of not matching at all. Checked ahead of the generic total
+# parser for exactly this reason (see _parse_f5_combined_total_pick).
+_F5_COMBINED_TOTAL_REVERSED_RE = re.compile(
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s*-\s*"
+    r"(Over|Under)\s+([\d.]+)\s*"
+    r"(?:f5|first\s+5\s+innings|first\s+five\s+innings|1st\s+5\s+innings)"
+    r"\s*(?:total\s*)?runs\b",
+    re.IGNORECASE,
+)
+
 # "NC Dinos vs Kia Tigers - F5 Kia Tigers +0.5" - an F5 run-line/handicap:
 # the named team's own 1st-5th inning runs, adjusted by the signed line,
 # compared against the other side's (see grade_f5_handicap) - distinct from
@@ -827,6 +845,17 @@ def _clean_line(line: str) -> str:
     # parser below calls first) fixes all of them at once rather than
     # special-casing each one.
     text = text.replace("–", "-").replace("—", "-")
+    # Some sources say "Lower"/"Higher" instead of "Under"/"Over" (confirmed
+    # live: "Golden State Valkyries vs New York Liberty - Lower 173.5 Total
+    # Points" silently fell all the way through to a bare moneyline on
+    # "Golden State Valkyries", the line's own total dropped entirely - no
+    # regex in this file recognized "Lower"/"Higher" at all). Normalized
+    # here (the universal entry point every parser below calls first)
+    # rather than teaching every individual Over/Under regex a second
+    # spelling. Word-boundaried so it can't clip into part of a longer
+    # word (e.g. a "Lowery"/"Higher-something" surname).
+    text = re.sub(r"\bLower\b", "Under", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bHigher\b", "Over", text, flags=re.IGNORECASE)
     text = re.sub(r"[✅❌⭐️🔥💰]+\s*$", "", text).strip()
     while True:
         stripped = _strip_trailing_parens(text)
@@ -997,8 +1026,12 @@ def _parse_team_pick(description: str) -> Optional[str]:
     # "Sets Moneyline"/"Sets ML" checked before the bare "Moneyline"/"ML"
     # cutwords - same match-winner bet, just this tipster's own wording
     # (tennis matches are decided by sets) - confirmed live. Cutting at
-    # "Moneyline" alone would leave "Sets" attached to the name.
-    for cutword in ("Sets Moneyline", "Sets ML", "Moneyline", "ML", " Over ", " Under "):
+    # "Moneyline" alone would leave "Sets" attached to the name. "To Win" is
+    # the same bet again under yet another source's own label - confirmed
+    # live, "Washington Mystics To Win" was tracked with "To Win" left
+    # attached to the team name, which no real 365scores/ESPN team ever
+    # matches, so the lookup silently found nothing.
+    for cutword in ("Sets Moneyline", "Sets ML", "Moneyline", "ML", "To Win", " Over ", " Under "):
         idx = text.find(cutword)
         if idx > 0:
             text = text[:idx].strip()
@@ -1033,7 +1066,7 @@ def _is_simple_pick_name(text: str) -> Optional[str]:
     "Moneyline"/"ML" - just this tipster's own label, since a tennis match is
     decided by sets. Stripped as one unit together with Moneyline/ML so
     "Sets" isn't left behind to trip the _PROP_REJECT_WORDS check below."""
-    stripped = re.sub(r"\b(?:Sets\s+)?(?:ML|Moneyline)\b\s*$", "", text, flags=re.IGNORECASE).strip()
+    stripped = re.sub(r"\b(?:Sets\s+)?(?:ML|Moneyline)\b\s*$|\bTo\s+Win\b\s*$", "", text, flags=re.IGNORECASE).strip()
     if not stripped or re.search(r"\d", stripped):
         return None
     if any(word.lower() in _PROP_REJECT_WORDS for word in stripped.split()):
@@ -1467,7 +1500,7 @@ def _parse_f5_total_pick(description: str, sport: str) -> Optional[dict]:
 
 def _parse_f5_combined_total_pick(description: str, sport: str) -> Optional[dict]:
     text = _clean_line(description)
-    m = _F5_COMBINED_TOTAL_RE.match(text)
+    m = _F5_COMBINED_TOTAL_RE.match(text) or _F5_COMBINED_TOTAL_REVERSED_RE.match(text)
     if not m:
         return None
     team = m.group(1).strip()  # either team - just used to look the game up

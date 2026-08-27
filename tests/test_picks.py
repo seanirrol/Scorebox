@@ -1117,5 +1117,64 @@ class VolleyballMatchPointMarkets(unittest.TestCase):
         self.assertEqual(result, {"kind": "total", "sport": "volleyball", "team": "Germany", "direction": "over", "line": 3.5})
 
 
+class LowerHigherAndToWinWording(unittest.TestCase):
+    """Some sources say "Lower"/"Higher" instead of "Under"/"Over", and "To
+    Win" instead of "ML" - neither was recognized anywhere in this file
+    before, so a pick worded this way either fell through entirely (its own
+    total/line dropped) or got tracked with the wrong-wording trailer
+    literally stuck to the team name (which no real team ever matches)."""
+
+    def test_lower_is_treated_as_under_for_a_combined_game_total(self):
+        result = picks.parse_pick_line("[WNBA] Golden State Valkyries vs New York Liberty - Lower 173.5 Total Points")
+        self.assertEqual(
+            result, {"kind": "total", "sport": "basketball", "team": "Golden State Valkyries", "direction": "under", "line": 173.5},
+        )
+
+    def test_higher_is_treated_as_over_for_a_combined_game_total(self):
+        result = picks.parse_pick_line("[NFL] New England Patriots vs Cleveland Browns - Higher 46.5 Total Points")
+        self.assertEqual(
+            result, {"kind": "total", "sport": "nfl", "team": "New England Patriots", "direction": "over", "line": 46.5},
+        )
+
+    def test_to_win_is_treated_as_a_plain_moneyline(self):
+        result = picks.parse_pick_line("[WNBA] Washington Mystics To Win")
+        self.assertEqual(result, {"kind": "track", "sport": "basketball", "team": "Washington Mystics"})
+
+    def test_lower_wording_reaches_the_f5_combined_total_not_the_generic_total(self):
+        # Confirmed live: without a dedicated reversed-order F5 regex, this
+        # fell through to the generic (whole-game) total parser, which
+        # doesn't care what comes after the number - it silently graded
+        # the pick against the WRONG scope (the entire game's runs)
+        # instead of just the first 5 innings.
+        result = picks.parse_pick_line("[MLB] Los Angeles Dodgers vs Atlanta Braves - Lower 4.5 1st 5 Innings Total Runs")
+        self.assertEqual(
+            result, {"kind": "f5_combined_total", "sport": "baseball", "team": "Los Angeles Dodgers", "direction": "under", "line": 4.5},
+        )
+
+    def test_under_before_the_f5_marker_also_reaches_f5_combined_total(self):
+        # Same reversed word order as above, but with "Under" (not
+        # "Lower") - isolates the word-order fix from the Lower/Higher
+        # normalization fix.
+        result = picks.parse_pick_line("[MLB] Los Angeles Dodgers vs Atlanta Braves - Under 4.5 1st 5 Innings Total Runs")
+        self.assertEqual(
+            result, {"kind": "f5_combined_total", "sport": "baseball", "team": "Los Angeles Dodgers", "direction": "under", "line": 4.5},
+        )
+
+    def test_f5_marker_before_over_under_still_works(self):
+        # The original, already-supported word order must be unaffected.
+        result = picks.parse_pick_line("[MLB] Los Angeles Dodgers vs Atlanta Braves - F5 Under 4.5")
+        self.assertEqual(
+            result, {"kind": "f5_combined_total", "sport": "baseball", "team": "Los Angeles Dodgers", "direction": "under", "line": 4.5},
+        )
+
+    def test_lower_does_not_clip_into_a_surname_like_lowery(self):
+        result = picks.parse_pick_line("[MLB] Nate Lowery Over 1.5 Total Bases")
+        self.assertEqual(result["player"], "Nate Lowery")
+
+    def test_plain_ml_wording_is_unaffected(self):
+        result = picks.parse_pick_line("[Tennis] Marcos Giron ML")
+        self.assertEqual(result, {"kind": "track", "sport": "tennis", "team": "Marcos Giron"})
+
+
 if __name__ == "__main__":
     unittest.main()
