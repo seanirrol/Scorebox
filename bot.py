@@ -491,7 +491,8 @@ async def _auto_f5(
         result = await asyncio.to_thread(scores365.find_match_for_team, team, sport_value, **find_kwargs)
     except scores365.ScoresError as e:
         log.info("Auto-F5: couldn't reach 365scores for '%s': %s", team, e)
-        botlog.event(f"❌ Not tracked (F5): **{team}** ({sport_value}) — couldn't reach 365scores: {e}")
+        if manual:
+            botlog.event(f"❌ Not tracked (F5): **{team}** ({sport_value}) — couldn't reach 365scores: {e}")
         return
     if not result:
         payload = {
@@ -505,7 +506,18 @@ async def _auto_f5(
             botlog.event(f"⏳ Queued (F5): **{team}** ({sport_value}) — no match found yet, will retry automatically")
             return "queued"
         log.info("Auto-F5: no match found for '%s' (%s)", team, sport_value)
-        botlog.event(f"❌ Not tracked (F5): **{team}** ({sport_value}) — no match found")
+        # Only a manual (one-shot, no retry) miss is worth posting - a
+        # non-manual miss here is either still queued (queue_on_miss=True
+        # but already queued from an earlier arrival) or is pendingauto's
+        # own retry attempt (queue_on_miss=False) failing yet again, and
+        # both of those keep trying silently in the background rather than
+        # having actually given up - confirmed live, this used to post
+        # "❌ Not tracked" to the log channel on EVERY 30-minute retry for
+        # up to 24h straight for a pick that was never going to resolve
+        # (a team name 365scores just doesn't have), spamming dozens of
+        # identical messages instead of the one at queue time.
+        if manual:
+            botlog.event(f"❌ Not tracked (F5): **{team}** ({sport_value}) — no match found")
         return
     game, sport_id = result
     game_id = game["id"]
@@ -556,7 +568,8 @@ async def _auto_1h_total(
         result = await asyncio.to_thread(scores365.find_match_for_team, team, sport_value, **find_kwargs)
     except scores365.ScoresError as e:
         log.info("Auto-1H: couldn't reach 365scores for '%s': %s", team, e)
-        botlog.event(f"❌ Not tracked (1H): **{team}** ({sport_value}) — couldn't reach 365scores: {e}")
+        if manual:
+            botlog.event(f"❌ Not tracked (1H): **{team}** ({sport_value}) — couldn't reach 365scores: {e}")
         return
     if not result:
         payload = {
@@ -570,7 +583,11 @@ async def _auto_1h_total(
             botlog.event(f"⏳ Queued (1H): **{team}** ({sport_value}) — no match found yet, will retry automatically")
             return "queued"
         log.info("Auto-1H: no match found for '%s' (%s)", team, sport_value)
-        botlog.event(f"❌ Not tracked (1H): **{team}** ({sport_value}) — no match found")
+        # Non-manual miss here is a still-silently-retrying pendingauto
+        # entry, not a real give-up - see _auto_f5's identical fix for why
+        # this matters (was spamming the log channel every 30min).
+        if manual:
+            botlog.event(f"❌ Not tracked (1H): **{team}** ({sport_value}) — no match found")
         return
     game, sport_id = result
     game_id = game["id"]
@@ -620,7 +637,8 @@ async def _auto_ht_ft(
         result = await asyncio.to_thread(scores365.find_match_for_team, ft_team, sport_value, **find_kwargs)
     except scores365.ScoresError as e:
         log.info("Auto-HT/FT: couldn't reach 365scores for '%s': %s", ft_team, e)
-        botlog.event(f"❌ Not tracked (HT/FT): **{ht_team}/{ft_team}** — couldn't reach 365scores: {e}")
+        if manual:
+            botlog.event(f"❌ Not tracked (HT/FT): **{ht_team}/{ft_team}** — couldn't reach 365scores: {e}")
         return
     if not result:
         payload = {
@@ -633,7 +651,11 @@ async def _auto_ht_ft(
             botlog.event(f"⏳ Queued (HT/FT): **{ht_team}/{ft_team}** — no match found yet, will retry automatically")
             return "queued"
         log.info("Auto-HT/FT: no match found for '%s' (%s)", ft_team, sport_value)
-        botlog.event(f"❌ Not tracked (HT/FT): **{ht_team}/{ft_team}** — no match found")
+        # Non-manual miss here is a still-silently-retrying pendingauto
+        # entry, not a real give-up - see _auto_f5's identical fix for why
+        # this matters (was spamming the log channel every 30min).
+        if manual:
+            botlog.event(f"❌ Not tracked (HT/FT): **{ht_team}/{ft_team}** — no match found")
         return
     game, sport_id = result
     game_id = game["id"]
@@ -739,7 +761,11 @@ async def _auto_playerprops(
             log.info("Auto-playerprops: no current/upcoming match found for '%s', queuing retry", player)
             botlog.event(f"⏳ Queued (prop): **{player}** {stat} — no current/upcoming match found on ESPN yet, will retry automatically")
             return "queued"
-        botlog.event(f"❌ Not tracked (prop): **{player}** {stat} — no current/upcoming match found on ESPN")
+        # Non-manual miss here is a still-silently-retrying pendingauto
+        # entry, not a real give-up - see _auto_f5's identical fix for why
+        # this matters (was spamming the log channel every 30min).
+        if manual:
+            botlog.event(f"❌ Not tracked (prop): **{player}** {stat} — no current/upcoming match found on ESPN")
         return
     event = await asyncio.to_thread(espn.get_event, sport_value, event_id)
     if not event:
@@ -801,7 +827,8 @@ async def _auto_tennis_playerprops(
         result = await asyncio.to_thread(scores365.find_match_for_team, player, "tennis", **find_kwargs)
     except scores365.ScoresError as e:
         log.info("Auto-tennis-playerprops: couldn't reach 365scores for '%s': %s", player, e)
-        botlog.event(f"❌ Not tracked (tennis prop): **{player}** {stat} — couldn't reach 365scores: {e}")
+        if manual:
+            botlog.event(f"❌ Not tracked (tennis prop): **{player}** {stat} — couldn't reach 365scores: {e}")
         return
     if not result:
         payload = {
@@ -814,7 +841,11 @@ async def _auto_tennis_playerprops(
             botlog.event(f"⏳ Queued (tennis prop): **{player}** {stat} — no match found yet, will retry automatically")
             return "queued"
         log.info("Auto-tennis-playerprops: no match found for '%s'", player)
-        botlog.event(f"❌ Not tracked (tennis prop): **{player}** {stat} — no match found")
+        # Non-manual miss here is a still-silently-retrying pendingauto
+        # entry, not a real give-up - see _auto_f5's identical fix for why
+        # this matters (was spamming the log channel every 30min).
+        if manual:
+            botlog.event(f"❌ Not tracked (tennis prop): **{player}** {stat} — no match found")
         return
     game, sport_id = result
     game_id = game["id"]
@@ -1088,7 +1119,11 @@ async def _auto_inning_runs(
             log.info("Auto-inning-runs: no match found for '%s', queuing retry", team)
             botlog.event(f"⏳ Queued ({pick_type}): **{team}** — no current/upcoming match found on ESPN yet, will retry automatically")
             return "queued"
-        botlog.event(f"❌ Not tracked ({pick_type}): **{team}** — no current/upcoming match found on ESPN")
+        # Non-manual miss here is a still-silently-retrying pendingauto
+        # entry, not a real give-up - see _auto_f5's identical fix for why
+        # this matters (was spamming the log channel every 30min).
+        if manual:
+            botlog.event(f"❌ Not tracked ({pick_type}): **{team}** — no current/upcoming match found on ESPN")
         return
     event = await asyncio.to_thread(espn.get_event, "baseball", event_id)
     if not event:
@@ -1139,7 +1174,8 @@ async def _auto_inning1_result(
         result = await asyncio.to_thread(scores365.find_match_for_team, team, "baseball", **find_kwargs)
     except scores365.ScoresError as e:
         log.info("Auto-1st-inning-result: couldn't reach 365scores for '%s': %s", team, e)
-        botlog.event(f"❌ Not tracked (1st inning result): **{team}** — couldn't reach 365scores: {e}")
+        if manual:
+            botlog.event(f"❌ Not tracked (1st inning result): **{team}** — couldn't reach 365scores: {e}")
         return
     if not result:
         payload = {
@@ -1152,7 +1188,11 @@ async def _auto_inning1_result(
             botlog.event(f"⏳ Queued (1st inning result): **{team}** — no match found yet, will retry automatically")
             return "queued"
         log.info("Auto-1st-inning-result: no match found for '%s'", team)
-        botlog.event(f"❌ Not tracked (1st inning result): **{team}** — no match found")
+        # Non-manual miss here is a still-silently-retrying pendingauto
+        # entry, not a real give-up - see _auto_f5's identical fix for why
+        # this matters (was spamming the log channel every 30min).
+        if manual:
+            botlog.event(f"❌ Not tracked (1st inning result): **{team}** — no match found")
         return
     game, sport_id = result
     game_id = game["id"]
@@ -1210,7 +1250,8 @@ async def _auto_tennis_market(
         result = await asyncio.to_thread(scores365.find_match_for_team, team, sport, **find_kwargs)
     except scores365.ScoresError as e:
         log.info("Auto-tennis-market (%s): couldn't reach 365scores for '%s': %s", market, team, e)
-        botlog.event(f"❌ Not tracked ({market}): **{team}** — couldn't reach 365scores: {e}")
+        if manual:
+            botlog.event(f"❌ Not tracked ({market}): **{team}** — couldn't reach 365scores: {e}")
         return
     if not result:
         payload = {
@@ -1223,7 +1264,12 @@ async def _auto_tennis_market(
             botlog.event(f"⏳ Queued ({market}): **{team}** — no match found yet, will retry automatically")
             return "queued"
         log.info("Auto-tennis-market (%s): no match found for '%s'", market, team)
-        botlog.event(f"❌ Not tracked ({market}): **{team}** — no match found")
+        # Non-manual miss here is a still-silently-retrying pendingauto
+        # entry, not a real give-up - see _auto_f5's identical fix for why
+        # this matters (was spamming the log channel every 30min - this is
+        # the exact call site behind the live "Puerto Rico" spam).
+        if manual:
+            botlog.event(f"❌ Not tracked ({market}): **{team}** — no match found")
         return
     game, sport_id = result
     game_id = game["id"]
