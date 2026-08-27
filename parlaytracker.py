@@ -40,6 +40,7 @@ left around as an empty shell.
 
 import asyncio
 import logging
+import time
 from collections import defaultdict
 from typing import Optional
 
@@ -349,6 +350,21 @@ def _build_summary_embed(group: dict) -> discord.Embed:
     return embed
 
 
+# Once a summary card can no longer be edited (Discord's own edit cap on a
+# message older than 1 hour - error 30046 - or it's simply gone missing,
+# error 10008), _post_or_edit_summary falls back to posting a fresh
+# replacement. That's fine as a one-off recovery, but report_leg_progress
+# calls this on EVERY poll tick from EVERY still-pending leg in the group -
+# with several legs polling independently every UPDATE_INTERVAL_SECONDS,
+# an unbounded fallback reposts a brand-new card on nearly every single
+# tick from any of them. Confirmed live: a 4-still-pending-leg parlay
+# produced a fresh repost roughly every 10-30 seconds, unbounded, for as
+# long as any leg stayed pending. This cooldown caps how often a *failure-
+# driven* repost can happen - a routine successful edit is never throttled,
+# only the "give up and post fresh" fallback path.
+_REPOST_ON_FAILURE_COOLDOWN_SECONDS = 120
+
+
 async def _post_or_edit_summary(channel: discord.abc.Messageable, channel_id: int, group: dict) -> Optional[int]:
     """Sends the one summary card the first time a group has anything to
     show, edits it in place on every later update - returns the message id
@@ -374,6 +390,15 @@ async def _post_or_edit_summary(channel: discord.abc.Messageable, channel_id: in
             return message_id
         except discord.HTTPException as e:
             log.warning("Parlay summary card message %s gone, reposting: %s", message_id, e)
+            last_attempt = group.get("last_repost_attempt", 0)
+            if time.time() - last_attempt < _REPOST_ON_FAILURE_COOLDOWN_SECONDS:
+                # Already reposted (or tried to) very recently for this
+                # exact group - skip posting yet another one this tick and
+                # just leave the still-broken message_id in place. The next
+                # leg's own poll tick (or this same one, next cycle) will
+                # try again once the cooldown's passed.
+                return message_id
+            group["last_repost_attempt"] = time.time()
     try:
         message = await throttle.run(channel_id, lambda: channel.send(embed=embed))
     except discord.HTTPException as e:

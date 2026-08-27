@@ -18,9 +18,12 @@ Run with: python -m unittest discover -s tests -t .
 import asyncio
 import os
 import sys
+import time
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import discord
 
 import boxingtracker
 import esportstracker
@@ -36,6 +39,15 @@ import soccerpropstracker
 import tennispropstracker
 import tracker
 import ufctracker
+
+
+class _FakeResponse:
+    status = 429
+    reason = "Too Many Requests"
+
+
+def _edit_cap_error() -> discord.HTTPException:
+    return discord.HTTPException(_FakeResponse(), "Maximum number of edits to messages older than 1 hour reached.")
 
 
 class ResolveLegMatchesEachModulesOwnerShape(unittest.TestCase):
@@ -250,6 +262,102 @@ class ReportLegProgressUnResolvesAStaleTerminalLeg(unittest.TestCase):
         self.assertEqual(group["resolved_legs"], 3)
         self.assertEqual(group["voided"], 1)
         self.assertEqual(group["total_legs"], 5)
+
+
+class _FakeMessage:
+    def __init__(self, message_id: int, edit_error: Exception = None):
+        self.id = message_id
+        self._edit_error = edit_error
+
+    async def edit(self, **kwargs):
+        if self._edit_error:
+            raise self._edit_error
+
+    async def delete(self):
+        pass
+
+
+class _FakeChannel:
+    """fetch_message always returns the one message currently "live" (its
+    id and whether editing it raises are swapped in per test case); send
+    creates a fresh one and records it, same shape _post_or_edit_summary
+    actually calls."""
+
+    def __init__(self, existing: _FakeMessage):
+        self.existing = existing
+        self.sent: list[_FakeMessage] = []
+        self._next_id = 9000
+
+    async def fetch_message(self, message_id):
+        if self.existing is None or self.existing.id != message_id:
+            raise discord.HTTPException(_FakeResponse(), "Unknown Message")
+        return self.existing
+
+    async def send(self, embed=None):
+        self._next_id += 1
+        msg = _FakeMessage(self._next_id)
+        self.sent.append(msg)
+        self.existing = msg
+        return msg
+
+
+class PostOrEditSummaryThrottlesFailureReposts(unittest.TestCase):
+    """_post_or_edit_summary used to fall back to posting a brand-new card
+    on EVERY single edit failure with no throttling - fine for a one-off,
+    but once a card permanently can't be edited anymore (Discord's own
+    edit-count cap on a message older than 1 hour, error 30046), every
+    still-pending leg's own independent poll tick (report_leg_progress
+    calls this on every one) each triggered their own fresh repost, over
+    and over. Confirmed live: a parlay with several legs still live
+    produced a new summary card roughly every 10-30 seconds, unbounded,
+    for as long as any leg stayed pending."""
+
+    def _base_group(self, **overrides) -> dict:
+        group = {
+            "identifier": "testparlay", "total_legs": 3, "resolved_legs": 0,
+            "won": 0, "voided": 0, "lost": False, "legs": {},
+        }
+        group.update(overrides)
+        return group
+
+    def test_first_failure_reposts_immediately(self):
+        group = self._base_group(summary_message_id=1234)
+        channel = _FakeChannel(_FakeMessage(1234, edit_error=_edit_cap_error()))
+        new_id = asyncio.run(parlaytracker._post_or_edit_summary(channel, 555, group))
+        self.assertEqual(len(channel.sent), 1)
+        self.assertEqual(new_id, channel.sent[0].id)
+        self.assertIn("last_repost_attempt", group)
+
+    def test_a_second_failure_moments_later_is_throttled_not_reposted(self):
+        group = self._base_group(summary_message_id=1234, last_repost_attempt=time.time())
+        channel = _FakeChannel(_FakeMessage(1234, edit_error=_edit_cap_error()))
+        result = asyncio.run(parlaytracker._post_or_edit_summary(channel, 555, group))
+        self.assertEqual(len(channel.sent), 0)
+        self.assertEqual(result, 1234)  # unchanged - no new card posted
+
+    def test_after_the_cooldown_elapses_it_reposts_again(self):
+        group = self._base_group(
+            summary_message_id=1234,
+            last_repost_attempt=time.time() - parlaytracker._REPOST_ON_FAILURE_COOLDOWN_SECONDS - 1,
+        )
+        channel = _FakeChannel(_FakeMessage(1234, edit_error=_edit_cap_error()))
+        new_id = asyncio.run(parlaytracker._post_or_edit_summary(channel, 555, group))
+        self.assertEqual(len(channel.sent), 1)
+        self.assertEqual(new_id, channel.sent[0].id)
+
+    def test_a_successful_edit_is_never_throttled(self):
+        group = self._base_group(summary_message_id=1234, last_repost_attempt=time.time())
+        channel = _FakeChannel(_FakeMessage(1234, edit_error=None))
+        result = asyncio.run(parlaytracker._post_or_edit_summary(channel, 555, group))
+        self.assertEqual(len(channel.sent), 0)
+        self.assertEqual(result, 1234)
+
+    def test_the_very_first_post_ever_is_never_throttled(self):
+        group = self._base_group(summary_message_id=None)
+        channel = _FakeChannel(existing=None)
+        new_id = asyncio.run(parlaytracker._post_or_edit_summary(channel, 555, group))
+        self.assertEqual(len(channel.sent), 1)
+        self.assertEqual(new_id, channel.sent[0].id)
 
 
 if __name__ == "__main__":
