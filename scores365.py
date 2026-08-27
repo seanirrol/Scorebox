@@ -309,6 +309,51 @@ def grade_volleyball_set1_handicap(game: dict, team: str, line: float) -> Option
     return "won" if adjusted > other else "lost"
 
 
+def volleyball_match_points(game: dict) -> tuple[int, int]:
+    """(home_points, away_points) - combined rally points across every set
+    played so far, NOT sets won (see main_scores, which is sets won e.g.
+    3-1) - the running/final total a "Total Points"/"Points Handicap"
+    market (distinct from "Total Sets"/"Set Handicap") grades against.
+    Includes the current in-progress set's own partial score, same live-
+    running shape as tennis_match_games. Returns (0, 0), not None, when
+    nothing's been played yet - every call site already gates on match
+    state (is_finished for final grading, status != "notstarted" for live
+    display) same as tennis_match_games does."""
+    status = map_status_type(game.get("statusGroup"))
+    sets = volleyball_set_scores(SPORT_IDS["volleyball"], status, game.get("id"))
+    if not sets:
+        return (0, 0)
+    home_total = sum(s["home"] for s in sets if s["home"] is not None)
+    away_total = sum(s["away"] for s in sets if s["away"] is not None)
+    return (home_total, away_total)
+
+
+def grade_volleyball_match_point_handicap(game: dict, team: str, line: float) -> Optional[str]:
+    """Grades a volleyball match-wide points-margin handicap pick (e.g.
+    "Poland -4.5 Points") - same adjust-then-compare shape as
+    grade_games_handicap, but against the combined rally-point total across
+    the whole match (volleyball_match_points) rather than games/sets won.
+    Only call once the match has actually finished. Voids on a walkover
+    (see is_walkover) - that check's own underlying signature (finished,
+    0-0 main_scores, exactly one side flagged isWinner) is sport-agnostic,
+    not actually tennis-specific despite its docstring's own framing."""
+    if is_walkover(game):
+        return "void"
+    home_points, away_points = volleyball_match_points(game)
+    home = (game.get("homeCompetitor") or {}).get("name", "")
+    away = (game.get("awayCompetitor") or {}).get("name", "")
+    if names_match(home, team):
+        picked, other = home_points, away_points
+    elif names_match(away, team):
+        picked, other = away_points, home_points
+    else:
+        return None
+    adjusted = picked + line
+    if adjusted == other:
+        return "push"
+    return "won" if adjusted > other else "lost"
+
+
 def tennis_current_set_score(game: dict) -> Optional[tuple[int, int]]:
     """Tennis-only current-set game score - already sitting on the bulk list's own `stages` array."""
     stages = game.get("stages") or []

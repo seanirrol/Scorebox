@@ -281,6 +281,72 @@ _SET1_POINT_HANDICAP_NOMATCHUP_RE = re.compile(
     r"^(.+?)\s+([+-]\d+(?:\.\d+)?)\s*1st\s*set\b", re.IGNORECASE,
 )
 
+# "Poland -4.5 Points" / "Poland vs Germany - Poland -4.5 Points" -
+# volleyball's own match-WIDE points-margin handicap (combined rally points
+# across every set, not sets won - see
+# scores365.grade_volleyball_match_point_handicap/volleyball_match_points).
+# Checked ahead of everything else for volleyball (see _parse_description)
+# since _TEAM_SPREAD_NOMATCHUP_RE/_TEAM_SPREAD_MATCHUP_RE would otherwise
+# swallow this first as a plain (incorrectly graded, sets-based) spread -
+# both already tolerate a trailing "Points" word for other sports' own
+# scoring unit, with no way to know volleyball's own "Points" means a
+# completely different stat than that same match's score field.
+_VOLLEYBALL_POINT_HANDICAP_NOMATCHUP_RE = re.compile(
+    r"^(.+?)\s+([+-]\d+(?:\.\d+)?)\s*(?:total\s+)?points\b", re.IGNORECASE,
+)
+_VOLLEYBALL_POINT_HANDICAP_MATCHUP_RE = re.compile(
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s*-\s*(.+?)\s*\(?([+-]\d+(?:\.\d+)?)\)?\s*(?:total\s+)?points\b",
+    re.IGNORECASE,
+)
+
+
+def _parse_volleyball_point_handicap_pick(description: str) -> Optional[dict]:
+    text = _clean_line(description)
+    m = _VOLLEYBALL_POINT_HANDICAP_MATCHUP_RE.match(text)
+    if m:
+        team_a, team_b, named_team = m.group(1).strip(), m.group(2).strip(), m.group(3).strip()
+        if not team_a or not team_b or not named_team:
+            return None
+        if scores365.names_match(named_team, team_a):
+            team = team_a
+        elif scores365.names_match(named_team, team_b):
+            team = team_b
+        else:
+            return None
+        return {"kind": "volleyball_match_point_handicap", "team": team, "line": float(m.group(4))}
+    m = _VOLLEYBALL_POINT_HANDICAP_NOMATCHUP_RE.match(text)
+    if m:
+        team = m.group(1).strip()
+        if not team:
+            return None
+        return {"kind": "volleyball_match_point_handicap", "team": team, "line": float(m.group(2))}
+    return None
+
+
+# "Netherlands vs Belgium - Over 177.5 Total Points" - volleyball's own
+# match-WIDE combined rally-point total (not "Total Sets" - see
+# scores365.volleyball_match_points). Matchup prefix is required (unlike
+# _TOTAL_LINE_RE's own team_b-optional shape) since there's no other way to
+# tell which match this total is for. Checked ahead of _parse_total_pick
+# (see _parse_description) for the identical reason as the handicap pair
+# above - "points" is the only textual signal that this is a different
+# market than the generic (sets-based) combined total.
+_VOLLEYBALL_POINT_TOTAL_RE = re.compile(
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s*(?:-\s*)?(Over|Under)\s+([\d.]+)\s*(?:total\s+)?points\b",
+    re.IGNORECASE,
+)
+
+
+def _parse_volleyball_point_total_pick(description: str) -> Optional[dict]:
+    text = _clean_line(description)
+    m = _VOLLEYBALL_POINT_TOTAL_RE.match(text)
+    if not m:
+        return None
+    team = m.group(1).strip()  # either matchup side - just used to look the game up
+    if not team:
+        return None
+    return {"kind": "volleyball_match_point_total", "team": team, "direction": m.group(3).lower(), "line": float(m.group(4))}
+
 # Every wording variant confirmed live for "wins at least one set" -
 # "a set", "at least 1 set(s)", and "1+ set(s)" (the last one fell through
 # to the simple-name fallback with no botlog trace at all, same failure
@@ -1885,6 +1951,19 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
     # comment on why a bare "at" substring check is unsafe (confirmed
     # live: "to Win at Least 1 Set" false-positived as a matchup).
     has_matchup = any(sep in description for sep in (" vs. ", " vs ", " v. ", " v ", " @ "))
+
+    if sport == "volleyball":
+        # Checked before anything else for volleyball - both of these
+        # would otherwise get swallowed by the generic spread/total
+        # parsers further down (see the regexes' own comments), which
+        # grade off the wrong stat (sets won, not rally points) entirely.
+        point_handicap = _parse_volleyball_point_handicap_pick(description)
+        if point_handicap:
+            return point_handicap
+
+        point_total = _parse_volleyball_point_total_pick(description)
+        if point_total:
+            return point_total
 
     if sport in ("dota2", "cs2"):
         # None of the generic total/player-prop/track fallback logic below

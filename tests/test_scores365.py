@@ -297,6 +297,74 @@ class VolleyballSet1Handicap(unittest.TestCase):
         self.assertIsNone(scores365.grade_volleyball_set1_handicap(self._game(status_group=3), "Serbia", -4.5))
 
 
+class VolleyballMatchPoints(unittest.TestCase):
+    """volleyball_match_points/grade_volleyball_match_point_handicap back
+    settracker.py's match_point_total/match_point_handicap markets - the
+    combined rally-point total across the WHOLE match (distinct from
+    volleyball_first_set_result's Set-1-only breakdown, and from
+    main_scores' sets-won tally). Monkeypatches volleyball_set_scores (a
+    live 365scores per-game detail fetch) so this exercises the real
+    summing/grading logic without a network request."""
+
+    def setUp(self):
+        self._orig = scores365.volleyball_set_scores
+        self._sets = None
+        scores365.volleyball_set_scores = lambda sport_id, status, game_id: self._sets
+
+    def tearDown(self):
+        scores365.volleyball_set_scores = self._orig
+
+    def _game(self, home_score=3.0, away_score=1.0, home_winner=True, away_winner=False, status_group=4):
+        return {
+            "id": 1, "statusGroup": status_group,
+            "homeCompetitor": {"name": "Poland", "score": home_score, "isWinner": home_winner},
+            "awayCompetitor": {"name": "Germany", "score": away_score, "isWinner": away_winner},
+        }
+
+    def test_sums_points_across_every_set_not_sets_won(self):
+        self._sets = [
+            {"set_number": 1, "home": 25, "away": 20, "is_live": False},
+            {"set_number": 2, "home": 20, "away": 25, "is_live": False},
+            {"set_number": 3, "home": 25, "away": 18, "is_live": False},
+            {"set_number": 4, "home": 25, "away": 22, "is_live": False},
+        ]
+        self.assertEqual(scores365.volleyball_match_points(self._game()), (95, 85))
+
+    def test_no_sets_yet_returns_zero_zero_not_none(self):
+        self._sets = None
+        self.assertEqual(scores365.volleyball_match_points(self._game(status_group=1)), (0, 0))
+
+    def test_live_in_progress_set_contributes_its_partial_score(self):
+        self._sets = [
+            {"set_number": 1, "home": 25, "away": 20, "is_live": False},
+            {"set_number": 2, "home": 10, "away": 8, "is_live": True},
+        ]
+        self.assertEqual(scores365.volleyball_match_points(self._game(status_group=3)), (35, 28))
+
+    def test_handicap_favorite_covers_the_line(self):
+        self._sets = [
+            {"set_number": 1, "home": 25, "away": 20, "is_live": False},
+            {"set_number": 2, "home": 20, "away": 25, "is_live": False},
+            {"set_number": 3, "home": 25, "away": 18, "is_live": False},
+            {"set_number": 4, "home": 25, "away": 22, "is_live": False},
+        ]
+        self.assertEqual(scores365.grade_volleyball_match_point_handicap(self._game(), "Poland", -4.5), "won")
+
+    def test_handicap_favorite_fails_to_cover_the_line(self):
+        self._sets = [
+            {"set_number": 1, "home": 25, "away": 20, "is_live": False},
+            {"set_number": 2, "home": 20, "away": 25, "is_live": False},
+            {"set_number": 3, "home": 25, "away": 18, "is_live": False},
+            {"set_number": 4, "home": 25, "away": 22, "is_live": False},
+        ]
+        self.assertEqual(scores365.grade_volleyball_match_point_handicap(self._game(), "Poland", -15.5), "lost")
+
+    def test_handicap_walkover_voids_instead_of_grading_off_zero_points(self):
+        self._sets = None
+        game = self._game(home_score=0.0, away_score=0.0, home_winner=True, away_winner=False)
+        self.assertEqual(scores365.grade_volleyball_match_point_handicap(game, "Poland", -4.5), "void")
+
+
 class GradeTennisSet(unittest.TestCase):
     def test_walkover_voids_instead_of_grading_off_zero_games(self):
         game = {

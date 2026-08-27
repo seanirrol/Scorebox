@@ -1072,5 +1072,50 @@ class VolleyballSetHandicaps(unittest.TestCase):
         self.assertEqual(result, {"kind": "ht_ft", "sport": "volleyball", "ht_team": "Puerto Rico", "ft_team": "Guatemala"})
 
 
+class VolleyballMatchPointMarkets(unittest.TestCase):
+    """Volleyball's own match-WIDE "Total Points"/"Points Handicap" markets
+    (combined rally points across every set - see
+    scores365.volleyball_match_points) - distinct from "Total Sets"/"Set
+    Handicap" (the plain sets-based spread/total in VolleyballSetHandicaps
+    above) purely by the word "Points" in the pick text, so these must win
+    priority over the generic spread/total parsers rather than get
+    swallowed by them (see _parse_description's own volleyball-first
+    ordering)."""
+
+    def test_matchup_prefixed_total_points(self):
+        result = picks.parse_pick_line("[Volleyball] Netherlands vs Belgium - Over 177.5 Total Points")
+        self.assertEqual(
+            result, {"kind": "volleyball_match_point_total", "team": "Netherlands", "direction": "over", "line": 177.5},
+        )
+
+    def test_matchup_prefixed_points_handicap(self):
+        result = picks.parse_pick_line("[Volleyball] Poland vs Germany - Poland -4.5 Points")
+        self.assertEqual(result, {"kind": "volleyball_match_point_handicap", "team": "Poland", "line": -4.5})
+
+    def test_bare_points_handicap_no_matchup(self):
+        result = picks.parse_pick_line("[Volleyball] Bulgaria +15.5 Points")
+        self.assertEqual(result, {"kind": "volleyball_match_point_handicap", "team": "Bulgaria", "line": 15.5})
+
+    def test_points_wording_does_not_get_stolen_by_the_generic_spread_parser(self):
+        # Without the volleyball-first priority ordering, this would
+        # instead match _TEAM_SPREAD_NOMATCHUP_RE (which explicitly
+        # tolerates a trailing "Points" word for other sports) and grade
+        # off sets won instead of the actual points total.
+        result = picks.parse_pick_line("[Volleyball] Bulgaria +15.5 Points")
+        self.assertNotEqual(result["kind"], "team_total")
+
+    def test_total_points_wording_does_not_get_stolen_by_the_generic_total_parser(self):
+        result = picks.parse_pick_line("[Volleyball] Netherlands vs Belgium - Over 177.5 Total Points")
+        self.assertNotEqual(result["kind"], "total")
+
+    def test_plain_set_handicap_is_unaffected_by_the_points_priority_check(self):
+        result = picks.parse_pick_line("[Volleyball] Turkey -1.5")
+        self.assertEqual(result, {"kind": "team_total", "sport": "volleyball", "team": "Turkey", "direction": "spread", "line": -1.5})
+
+    def test_total_sets_is_unaffected_by_the_points_priority_check(self):
+        result = picks.parse_pick_line("[Volleyball] Germany vs Turkey - Over 3.5 Total Sets")
+        self.assertEqual(result, {"kind": "total", "sport": "volleyball", "team": "Germany", "direction": "over", "line": 3.5})
+
+
 if __name__ == "__main__":
     unittest.main()
