@@ -15,6 +15,7 @@ halftracker was missing from this function entirely.
 Run with: python -m unittest discover -s tests -t .
 """
 
+import asyncio
 import os
 import sys
 import unittest
@@ -165,6 +166,90 @@ class ResolveLegMatchesEachModulesOwnerShape(unittest.TestCase):
 
     def test_unknown_message_id_returns_none(self):
         self.assertIsNone(parlaytracker.resolve_leg(999999))
+
+
+class ReportLegProgressUnResolvesAStaleTerminalLeg(unittest.TestCase):
+    """report_leg_progress used to blindly overwrite a leg's status back to
+    "pending" without ever touching the group's own aggregate counters -
+    fine for a leg reporting live progress for the first time, but a real
+    bug once a leg that was already counted as resolved (most commonly
+    voided by a tracker's own MAX_CONSECUTIVE_MISSES safety net after a
+    transient data-source hiccup) starts reporting live progress again
+    (e.g. manually re-/track'ed after discovering the match was still
+    live). Confirmed live: a 6-leg parlay with 4 legs genuinely still
+    pending got stuck thinking only 3 more results were needed (still
+    carrying a phantom void's +1 resolved/+1 voided/-1 total from before
+    that leg resumed), which would have finalized and deleted the group's
+    own tracking one leg early - silently dropping whichever leg finished
+    last, with no summary card ever showing its result.
+
+    Monkeypatches state.load_parlays/save_parlays (an in-memory dict
+    instead of the real JSON file) and _post_or_edit_summary (a no-op -
+    this test isn't exercising real Discord posting) so this drives the
+    real aggregate-counter logic without any network/file I/O."""
+
+    def setUp(self):
+        self._orig_load = parlaytracker.state.load_parlays
+        self._orig_save = parlaytracker.state.save_parlays
+        self._orig_post = parlaytracker._post_or_edit_summary
+        self._data: dict = {}
+        parlaytracker.state.load_parlays = lambda: self._data
+        parlaytracker.state.save_parlays = lambda data: self._data.update(data)
+        parlaytracker._post_or_edit_summary = self._fake_post
+
+    def tearDown(self):
+        parlaytracker.state.load_parlays = self._orig_load
+        parlaytracker.state.save_parlays = self._orig_save
+        parlaytracker._post_or_edit_summary = self._orig_post
+
+    async def _fake_post(self, channel, channel_id, group):
+        return 999
+
+    def _report(self, leg_id_status: str, detail: str = "LIVE, Set 3"):
+        key = "555:testparlay"
+        self._data[key] = {
+            "channel_id": 555, "identifier": "testparlay", "total_legs": 5, "resolved_legs": 3,
+            "won": 2, "voided": 1, "lost": leg_id_status == "lost", "summary_message_id": 1,
+            "legs": {
+                "tracker:555:4612254:ml:Hungary": {
+                    "label": "Latvia vs Hungary - Hungary ML", "status": leg_id_status,
+                    "detail": "VOID", "message_id": 111,
+                },
+            },
+        }
+        asyncio.run(parlaytracker.report_leg_progress(
+            None, 555, None, "tracker", "555:4612254:ml:Hungary", "Latvia vs Hungary - Hungary ML", detail, ["testparlay"],
+        ))
+        return self._data["555:testparlay"]
+
+    def test_a_voided_leg_reporting_live_again_gives_back_its_void_count(self):
+        group = self._report("void")
+        self.assertEqual(group["resolved_legs"], 2)
+        self.assertEqual(group["voided"], 0)
+        self.assertEqual(group["total_legs"], 6)
+        self.assertEqual(group["legs"]["tracker:555:4612254:ml:Hungary"]["status"], "pending")
+        self.assertEqual(group["legs"]["tracker:555:4612254:ml:Hungary"]["detail"], "LIVE, Set 3")
+
+    def test_a_won_leg_reporting_live_again_gives_back_its_win_count(self):
+        group = self._report("won")
+        self.assertEqual(group["resolved_legs"], 2)
+        self.assertEqual(group["won"], 1)
+        self.assertEqual(group["total_legs"], 5)  # unchanged - only void/push give a slot back
+
+    def test_a_lost_group_stays_lost_even_if_this_one_leg_resumes(self):
+        # Can't tell whether THIS leg or some other one is why the group
+        # is marked lost - only resolved_legs itself gets given back.
+        group = self._report("lost")
+        self.assertEqual(group["resolved_legs"], 2)
+        self.assertTrue(group["lost"])
+
+    def test_a_genuinely_still_pending_leg_is_left_alone(self):
+        # The normal, everyday case (a leg reporting its Nth live tick, not
+        # a resumed-after-terminal one) must not touch the counters at all.
+        group = self._report("pending")
+        self.assertEqual(group["resolved_legs"], 3)
+        self.assertEqual(group["voided"], 1)
+        self.assertEqual(group["total_legs"], 5)
 
 
 if __name__ == "__main__":

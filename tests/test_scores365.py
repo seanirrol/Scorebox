@@ -489,6 +489,76 @@ class GradeHtFtVolleyballDoubleResult(unittest.TestCase):
             scores365.quarters_breakdown = orig_quarters_breakdown
 
 
+class FetchGamesForSportRetriesFailedPages(unittest.TestCase):
+    """_fetch_games_for_sport's own multi-page walk used to silently
+    truncate the whole list on a single transient page failure instead of
+    retrying - confirmed live, this made a genuinely still-live volleyball
+    match (Latvia vs Hungary) appear "missing" for a poll cycle and get
+    voided by a tracker's MAX_CONSECUTIVE_MISSES safety net, despite being
+    present in the feed moments before and after. _get_retrying now retries
+    a failed page once (PAGE_FETCH_RETRIES total attempts) before giving
+    up. Monkeypatches scores365._get directly (the underlying HTTP call) so
+    this exercises the real retry/pagination logic without a network
+    request."""
+
+    def setUp(self):
+        self._orig_get = scores365._get
+        self._orig_cache = scores365._games_cache
+        scores365._games_cache = {}  # bypass GAMES_CACHE_SECONDS between test cases
+        self._calls: list = []
+
+    def tearDown(self):
+        scores365._get = self._orig_get
+        scores365._games_cache = self._orig_cache
+
+    def _install(self, responses):
+        queue = list(responses)
+
+        def fake_get(url, **params):
+            self._calls.append(url)
+            behavior = queue.pop(0)
+            if isinstance(behavior, Exception):
+                raise behavior
+            return behavior
+
+        scores365._get = fake_get
+
+    def test_a_single_transient_failure_on_a_forward_page_is_retried_and_recovered(self):
+        self._install([
+            {"games": [{"id": 1}], "paging": {"nextPage": "/page2"}},
+            scores365.ScoresError("timeout"),  # first attempt at page2 fails
+            {"games": [{"id": 2}], "paging": {}},  # retry succeeds
+        ])
+        games = scores365._fetch_games_for_sport(8)
+        self.assertEqual([g["id"] for g in games], [1, 2])
+        self.assertEqual(len(self._calls), 3)
+
+    def test_a_page_that_fails_every_retry_still_stops_the_walk_but_keeps_what_it_has(self):
+        self._install([
+            {"games": [{"id": 1}], "paging": {"nextPage": "/page2"}},
+            scores365.ScoresError("timeout"),
+            scores365.ScoresError("timeout"),
+        ])
+        games = scores365._fetch_games_for_sport(8)
+        self.assertEqual([g["id"] for g in games], [1])
+
+    def test_the_base_fetch_itself_also_gets_retried(self):
+        self._install([
+            scores365.ScoresError("timeout"),
+            {"games": [{"id": 1}], "paging": {}},
+        ])
+        games = scores365._fetch_games_for_sport(8)
+        self.assertEqual([g["id"] for g in games], [1])
+
+    def test_base_fetch_failing_every_retry_raises(self):
+        self._install([
+            scores365.ScoresError("timeout"),
+            scores365.ScoresError("timeout"),
+        ])
+        with self.assertRaises(scores365.ScoresError):
+            scores365._fetch_games_for_sport(8)
+
+
 class FindMatchForTeam(unittest.TestCase):
     """find_match_for_team backs every auto-tracked pick's match lookup -
     monkeypatches _fetch_games_for_sport so this exercises the real

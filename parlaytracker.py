@@ -490,6 +490,34 @@ async def report_leg_progress(
                 # concurrent /parlay remove could have dropped this exact
                 # leg in between. Don't resurrect it.
                 continue
+            previous_status = legs[leg_id].get("status")
+            if previous_status in ("won", "lost", "push", "void"):
+                # This leg was already counted as resolved once (most
+                # commonly voided by a tracker's own MAX_CONSECUTIVE_MISSES
+                # safety net after a transient data-source hiccup - see
+                # scores365._get_retrying's own docstring), but a fresh
+                # tracker instance is reporting live progress on the exact
+                # same pick again now (e.g. manually re-/track'ed once the
+                # match turned out to still be live) - undo whatever that
+                # earlier terminal result already did to the group's own
+                # aggregate counters before folding it back into "still
+                # pending", so handle_leg_result doesn't double-count it
+                # once it produces a real result again. Confirmed live: a
+                # 6-leg parlay with 4 legs genuinely still pending got
+                # stuck thinking only 3 more results were needed (still
+                # carrying the phantom void's +1 resolved/+1 voided/-1
+                # total from before), which would have finalized and
+                # deleted the group's own tracking one leg early, silently
+                # dropping whichever leg finished last.
+                group["resolved_legs"] = max(group["resolved_legs"] - 1, 0)
+                if previous_status == "won":
+                    group["won"] = max(group["won"] - 1, 0)
+                elif previous_status in ("push", "void"):
+                    group["voided"] = max(group["voided"] - 1, 0)
+                    group["total_legs"] += 1
+                # "lost" is deliberately left alone - some other leg
+                # entirely may be why the group is already marked lost,
+                # and there's no way to tell the two apart from here.
             # Preserve message_id across the overwrite - it's how
             # set_leg_result finds this leg again if its own tracker later
             # dies before ever reaching a real result.

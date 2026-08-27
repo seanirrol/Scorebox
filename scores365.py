@@ -168,13 +168,40 @@ def _get(url: str, **params) -> dict:
         raise ScoresError(f"365scores request failed: {e}") from e
 
 
+PAGE_FETCH_RETRIES = 2
+
+
+def _get_retrying(url: str, **params) -> Optional[dict]:
+    """Same as _get, but retries once (PAGE_FETCH_RETRIES total attempts)
+    before giving up - a single transient timeout/5xx on just ONE page of
+    _fetch_games_for_sport's own multi-page walk used to silently truncate
+    the whole list rather than retry, which could make a game that's
+    genuinely still live "vanish" for one poll cycle even though it's
+    sitting right there in the feed a moment before and after. Confirmed
+    live: a real, still-in-progress volleyball match (Latvia vs Hungary)
+    got auto-voided by a tracker's MAX_CONSECUTIVE_MISSES safety net after
+    3 such misses in a row. Returns None (not raising) on total failure -
+    every call site already treats a missing/short page the same way a
+    genuinely-empty one is treated, so a caller doesn't need a new
+    exception path here."""
+    for attempt in range(PAGE_FETCH_RETRIES):
+        try:
+            return _get(url, **params)
+        except ScoresError:
+            if attempt == PAGE_FETCH_RETRIES - 1:
+                return None
+    return None
+
+
 def _fetch_games_for_sport(sport_id: int) -> list[dict]:
     """Current games for a sport (live + today's schedule), lightly cached."""
     cached = _games_cache.get(sport_id)
     if cached and time.monotonic() - cached["fetched_at"] < GAMES_CACHE_SECONDS:
         return cached["games"]
 
-    data = _get(f"{BASE_URL}/games/current/", langId=1, timezoneName="UTC", userCountryId=1, sports=sport_id)
+    data = _get_retrying(f"{BASE_URL}/games/current/", langId=1, timezoneName="UTC", userCountryId=1, sports=sport_id)
+    if data is None:
+        raise ScoresError("365scores request failed after retries")
     games = list(data.get("games") or [])
 
     paging = data.get("paging") or {}
@@ -185,9 +212,8 @@ def _fetch_games_for_sport(sport_id: int) -> list[dict]:
     for _ in range(EXTRA_PAGES):
         if not next_page:
             break
-        try:
-            page = _get(f"https://webws.365scores.com{next_page}", sports=sport_id)
-        except ScoresError:
+        page = _get_retrying(f"https://webws.365scores.com{next_page}", sports=sport_id)
+        if page is None:
             break
         games.extend(page.get("games") or [])
         next_page = (page.get("paging") or {}).get("nextPage")
@@ -197,9 +223,8 @@ def _fetch_games_for_sport(sport_id: int) -> list[dict]:
     for _ in range(EXTRA_PAGES_BACK):
         if not previous_page:
             break
-        try:
-            page = _get(f"https://webws.365scores.com{previous_page}", sports=sport_id)
-        except ScoresError:
+        page = _get_retrying(f"https://webws.365scores.com{previous_page}", sports=sport_id)
+        if page is None:
             break
         games.extend(page.get("games") or [])
         previous_page = (page.get("paging") or {}).get("previousPage")
