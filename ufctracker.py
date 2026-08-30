@@ -38,7 +38,7 @@ import throttle
 
 log = logging.getLogger("scorebox.ufctracker")
 
-MAX_CONSECUTIVE_MISSES = 3
+MAX_CONSECUTIVE_MISSES = 6  # raised from 3 - see tracker.py's own comment
 
 MAX_CONSECUTIVE_RATE_LIMIT_FAILURES = 20  # separate, more generous threshold for a 429 on the edit itself - see tracker.py
 TRASH_EMOJI = "🗑️"

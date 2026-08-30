@@ -43,8 +43,9 @@ _LINEUP_CHECK_INTERVAL_SECONDS = 30 * 60
 
 # Tolerate this many consecutive "event not found"/edit-failure polls before
 # giving up - guards against a transient ESPN or Discord hiccup silently
-# killing tracking for something that's still very much alive.
-MAX_CONSECUTIVE_MISSES = 3
+# killing tracking for something that's still very much alive. Raised from
+# 3 to 6 - see tracker.py's own comment for why.
+MAX_CONSECUTIVE_MISSES = 6
 
 MAX_CONSECUTIVE_RATE_LIMIT_FAILURES = 20  # separate, more generous threshold for a 429 on the edit itself - see tracker.py
 

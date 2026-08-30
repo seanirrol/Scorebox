@@ -45,7 +45,7 @@ import throttle
 
 log = logging.getLogger("scorebox.htfttracker")
 
-MAX_CONSECUTIVE_MISSES = 3
+MAX_CONSECUTIVE_MISSES = 6  # raised from 3 - see tracker.py's own comment
 
 MAX_CONSECUTIVE_RATE_LIMIT_FAILURES = 20  # see tracker.py for why this is a separate, more generous threshold
 TRASH_EMOJI = "🗑️"

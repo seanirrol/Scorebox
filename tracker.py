@@ -27,8 +27,15 @@ TRASH_EMOJI = "🗑️"
 # Tolerate this many consecutive "game not found" polls before giving up -
 # 365scores' pagination can transiently return an incomplete list (e.g. a
 # mid-fetch network hiccup), which would otherwise silently kill tracking
-# for a game that's still very much alive.
-MAX_CONSECUTIVE_MISSES = 3
+# for a game that's still very much alive. Raised from 3 to 6 - confirmed
+# live, a real match (still hibernating right up to kickoff) went missing
+# from the feed intermittently for close to 15 minutes right around its
+# own not-started-to-live transition, with 3 genuinely consecutive misses
+# landing right in the middle of that window despite scores365's own
+# per-page retry (see scores365._get_retrying) already covering single-
+# request blips - this is a longer, sustained rough patch, not just one
+# bad request.
+MAX_CONSECUTIVE_MISSES = 6
 
 # Separate, much more generous threshold specifically for a 429 on the
 # message edit itself - confirmed live, Discord's own server-wide "message
