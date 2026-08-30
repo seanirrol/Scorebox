@@ -250,6 +250,23 @@ _PLAYER_TOTAL_GAMES_NOMATCHUP_AFTER_RE = re.compile(
     r"^(.+?)\s*(?:-\s*)?(Over|Under)\s+([\d.]+)\s*(?:total\s+)?games\b", re.IGNORECASE,
 )
 
+# "Denis Shapovalov Over 3.5 Sets" / "... Over 3.5 Sets Played" - the same
+# combined "Total Sets Played" market the matchup form of the generic total
+# already handles (see _TOTAL_LINE_RE/_parse_total_pick, and volleyball's
+# own identically-shaped "Total Sets") - just with no opponent named at
+# all. Reuses that exact same "total" kind/grading (main_scores sum, not a
+# dedicated settracker market) rather than treating this like
+# _PLAYER_TOTAL_GAMES_NOMATCHUP_*_RE above - unlike Games (which genuinely
+# differs per player), the number of SETS played in a completed match is
+# identical for both players by definition, so there's no real "this
+# player's own sets" to distinguish from the match's combined total.
+# Confirmed live: a real picks source consistently drops the opponent's
+# name for this market, likely because it's often unclear/truncated in the
+# source screenshot this gets manually retyped from.
+_TENNIS_SETS_TOTAL_NOMATCHUP_RE = re.compile(
+    r"^(.+?)\s*(?:-\s*)?(Over|Under)\s+([\d.]+)\s*(?:total\s+)?sets(?:\s+played)?\b", re.IGNORECASE,
+)
+
 # "Brandon Nakashima -2.5 Games" - a games-margin HANDICAP (spread), not an
 # Over/Under total - confirmed live, a real pick worded this way (no
 # opponent named at all, same no-matchup shape as
@@ -1366,6 +1383,21 @@ def _parse_player_total_games_nomatchup_pick(description: str) -> Optional[dict]
     return {"kind": "tennis_player_total_games", "team": player, "direction": m.group(2).lower(), "line": float(m.group(3))}
 
 
+def _parse_tennis_sets_total_nomatchup_pick(description: str) -> Optional[dict]:
+    """"Denis Shapovalov Over 3.5 Sets" - the combined Total Sets Played
+    market, no opponent named at all (see _TENNIS_SETS_TOTAL_NOMATCHUP_RE).
+    Returns the same "total" kind the matchup form already uses - see that
+    regex's own comment for why this doesn't need a dedicated market."""
+    text = _clean_line(description)
+    m = _TENNIS_SETS_TOTAL_NOMATCHUP_RE.match(text)
+    if not m:
+        return None
+    player = m.group(1).strip()
+    if not player:
+        return None
+    return {"kind": "total", "sport": "tennis", "team": player, "direction": m.group(2).lower(), "line": float(m.group(3))}
+
+
 def _parse_games_handicap_nomatchup_pick(description: str) -> Optional[dict]:
     """"Player -2.5 Games" - a games-margin handicap, no opponent named at
     all (see _GAMES_HANDICAP_NOMATCHUP_RE)."""
@@ -2192,6 +2224,10 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
             player_total_games_nomatchup = _parse_player_total_games_nomatchup_pick(description)
             if player_total_games_nomatchup:
                 return player_total_games_nomatchup
+
+            sets_total_nomatchup = _parse_tennis_sets_total_nomatchup_pick(description)
+            if sets_total_nomatchup:
+                return sets_total_nomatchup
 
             games_handicap_nomatchup = _parse_games_handicap_nomatchup_pick(description)
             if games_handicap_nomatchup:

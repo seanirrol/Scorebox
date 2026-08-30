@@ -1176,5 +1176,47 @@ class LowerHigherAndToWinWording(unittest.TestCase):
         self.assertEqual(result, {"kind": "track", "sport": "tennis", "team": "Marcos Giron"})
 
 
+class TennisSetsTotalNoMatchup(unittest.TestCase):
+    """"Total Sets Played" (combined match total, not a player's own stat -
+    every set played involves both players equally, so there's no "own"
+    total distinct from the match's combined one) with no opponent named -
+    confirmed live, a real bare "Tennis" header slate (no bracket tags, no
+    "vs Opponent") dropped these lines entirely, only the plain ML line on
+    the same slate got tracked."""
+
+    def test_dash_separated_no_matchup(self):
+        result = picks.parse_pick_line("[Tennis] Denis Shapovalov - Over 3.5 Sets")
+        self.assertEqual(result, {"kind": "total", "sport": "tennis", "team": "Denis Shapovalov", "direction": "over", "line": 3.5})
+
+    def test_no_dash_no_matchup(self):
+        result = picks.parse_pick_line("[Tennis] Martin Landaluce Under 3.5 Sets")
+        self.assertEqual(result, {"kind": "total", "sport": "tennis", "team": "Martin Landaluce", "direction": "under", "line": 3.5})
+
+    def test_sets_played_wording(self):
+        result = picks.parse_pick_line("[Tennis] Denis Shapovalov Over 3.5 Sets Played")
+        self.assertEqual(result, {"kind": "total", "sport": "tennis", "team": "Denis Shapovalov", "direction": "over", "line": 3.5})
+
+    def test_reaches_this_parser_through_the_bare_header_bullet_list_too(self):
+        # The exact real-world shape this was confirmed live against - a
+        # bare "Tennis" header (no bracket tags at all) followed by
+        # untagged lines.
+        results = picks.parse_picks_message(
+            "Tennis\nAlexander Zverev ML\nDenis Shapovalov - Over 3.5 Sets\nMartin Landaluce - Over 3.5 Sets"
+        )
+        self.assertEqual(len(results), 3)
+        kinds = {r["raw"]: r["kind"] for r in results}
+        self.assertEqual(kinds["Alexander Zverev ML"], "track")
+        self.assertEqual(kinds["Denis Shapovalov - Over 3.5 Sets"], "total")
+        self.assertEqual(kinds["Martin Landaluce - Over 3.5 Sets"], "total")
+
+    def test_games_wording_still_reaches_the_player_total_games_market_not_this_one(self):
+        result = picks.parse_pick_line("[Tennis] Felix Auger-Aliassime Under 21.5 Total Games")
+        self.assertEqual(result, {"kind": "tennis_player_total_games", "team": "Felix Auger-Aliassime", "direction": "under", "line": 21.5})
+
+    def test_signed_sets_handicap_still_reaches_the_handicap_market_not_this_one(self):
+        result = picks.parse_pick_line("[Tennis] Wang Xiyu +1.5 Sets")
+        self.assertEqual(result, {"kind": "tennis_sets_handicap", "team": "Wang Xiyu", "line": 1.5})
+
+
 if __name__ == "__main__":
     unittest.main()
