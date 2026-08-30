@@ -1485,18 +1485,39 @@ async def _auto_esports(
     return message.id
 
 
-async def _extract_image_picks_text(message: discord.Message) -> str:
-    """Reads every image attachment on a picks-channel message via
-    image_picks (Claude vision) and joins their transcribed pick lines
-    together - None/empty results (no ANTHROPIC_API_KEY configured, no
-    image attachments, or the model found nothing readable) all collapse
-    to "" so callers can just treat this as an optional text suffix,
-    never an error to handle specially. Multiple images (confirmed
-    GreenFox posts these as a single slate graphic, but nothing stops a
-    multi-image message) are each read independently and combined - a
-    line from one image ending up on the same message as a line from
-    another is no different from two lines in the same block of text."""
-    images = [a for a in message.attachments if (a.content_type or "").startswith("image/")]
+def _forwarded_content_and_attachments(message: discord.Message) -> tuple[str, list[discord.Attachment]]:
+    """Discord's own "Forward" message feature carries the original
+    message's text/images in message.message_snapshots, NOT
+    message.content/message.attachments on the forwarding message itself
+    (both empty there) - confirmed live, a forwarded GreenFox picks image
+    was completely invisible to this whole pipeline, logged as "parsed
+    0/0 line(s)" with no error at all, since nothing ever even looked at
+    the snapshot. Combines the forwarding message's own content/
+    attachments (a caption or extra image the forwarder personally added,
+    if any - rare, but not prevented) with every snapshot's own."""
+    content = message.content
+    attachments = list(message.attachments)
+    for snapshot in message.message_snapshots:
+        if snapshot.content:
+            content = f"{content}\n{snapshot.content}" if content else snapshot.content
+        attachments.extend(snapshot.attachments)
+    return content, attachments
+
+
+async def _extract_image_picks_text(message: discord.Message, attachments: list[discord.Attachment]) -> str:
+    """Reads every image attachment via image_picks (Claude vision) and
+    joins their transcribed pick lines together - None/empty results (no
+    ANTHROPIC_API_KEY configured, no image attachments, or the model
+    found nothing readable) all collapse to "" so callers can just treat
+    this as an optional text suffix, never an error to handle specially.
+    Multiple images (confirmed GreenFox posts these as a single slate
+    graphic, but nothing stops a multi-image message) are each read
+    independently and combined - a line from one image ending up on the
+    same message as a line from another is no different from two lines
+    in the same block of text. attachments comes from
+    _forwarded_content_and_attachments, not message.attachments directly
+    - see that function's own docstring for why."""
+    images = [a for a in attachments if (a.content_type or "").startswith("image/")]
     if not images:
         return ""
     texts = []
@@ -1541,8 +1562,8 @@ async def on_message(message: discord.Message):
         return
     _processed_message_ids.add(message.id)
 
-    content = message.content
-    image_text = await _extract_image_picks_text(message)
+    content, attachments = _forwarded_content_and_attachments(message)
+    image_text = await _extract_image_picks_text(message, attachments)
     if image_text:
         content = f"{content}\n{image_text}" if content else image_text
 
