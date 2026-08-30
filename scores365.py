@@ -1091,6 +1091,42 @@ def grade_moneyline(game: dict, picked_team: str) -> Optional[str]:
     return "won" if picked_score > other_score else "lost"
 
 
+def grade_double_chance(game: dict, covered: tuple[str, str]) -> Optional[str]:
+    """Grades a soccer Double Chance pick - covers two of the three
+    possible full-time outcomes (home win/draw/away win) in one pick, e.g.
+    ("Paris FC", "DRAW") for "Paris FC or Draw" ("1X"), ("DRAW", "Nice")
+    for "Draw or Nice" ("X2"), or (home, away) for "Paris FC or Nice"
+    ("12" - anyone but a draw). Wins if the match's actual full-time result
+    matches EITHER covered outcome, otherwise loses - never a push, unlike
+    a plain moneyline (that's the whole point of covering two outcomes at
+    once). Graded off main_scores directly rather than isWinner (unlike
+    grade_moneyline) so a cup match decided by extra time/penalties still
+    settles on the scoreboard result - Double Chance is a full-time-only
+    market at every real sportsbook, same convention as grade_ht_ft's own
+    fulltime leg."""
+    if not is_finished(game):
+        return None
+    scores = main_scores(game)
+    if not scores:
+        return None
+    home = (game.get("homeCompetitor") or {}).get("name", "")
+    away = (game.get("awayCompetitor") or {}).get("name", "")
+    home_score, away_score = scores
+    if home_score > away_score:
+        actual = home
+    elif away_score > home_score:
+        actual = away
+    else:
+        actual = "DRAW"
+    for side in covered:
+        if side == "DRAW":
+            if actual == "DRAW":
+                return "won"
+        elif names_match(side, actual):
+            return "won"
+    return "lost"
+
+
 _INNING_STAGE_NAMES = {
     1: "1st Inning", 2: "2nd Inning", 3: "3rd Inning", 4: "4th Inning", 5: "5th Inning",
     6: "6th Inning", 7: "7th Inning", 8: "8th Inning", 9: "9th Inning",

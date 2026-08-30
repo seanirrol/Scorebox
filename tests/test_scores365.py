@@ -375,6 +375,66 @@ class GradeTennisSet(unittest.TestCase):
         self.assertEqual(scores365.grade_tennis_set(game, 0, 0, "Xiyu Wang"), "void")
 
 
+class GradeDoubleChance(unittest.TestCase):
+    """grade_double_chance backs doublechancetracker.py - a soccer market
+    covering two of the three possible full-time outcomes (home win/draw/
+    away win) in one pick. No network mocking needed - grades purely off
+    the game dict's own is_finished/main_scores."""
+
+    def _game(self, home_score=0.0, away_score=0.0, status_group=4):
+        return {
+            "id": 1, "statusGroup": status_group,
+            "homeCompetitor": {"name": "Paris FC", "score": home_score},
+            "awayCompetitor": {"name": "Nice", "score": away_score},
+        }
+
+    def test_not_finished_returns_none(self):
+        game = self._game(status_group=3)
+        self.assertIsNone(scores365.grade_double_chance(game, ("Paris FC", "DRAW")))
+
+    def test_1x_wins_on_home_win(self):
+        game = self._game(home_score=2.0, away_score=1.0)
+        self.assertEqual(scores365.grade_double_chance(game, ("Paris FC", "DRAW")), "won")
+
+    def test_1x_wins_on_draw(self):
+        game = self._game(home_score=1.0, away_score=1.0)
+        self.assertEqual(scores365.grade_double_chance(game, ("Paris FC", "DRAW")), "won")
+
+    def test_1x_loses_on_away_win(self):
+        game = self._game(home_score=0.0, away_score=2.0)
+        self.assertEqual(scores365.grade_double_chance(game, ("Paris FC", "DRAW")), "lost")
+
+    def test_x2_wins_on_draw(self):
+        game = self._game(home_score=1.0, away_score=1.0)
+        self.assertEqual(scores365.grade_double_chance(game, ("DRAW", "Nice")), "won")
+
+    def test_x2_wins_on_away_win(self):
+        game = self._game(home_score=0.0, away_score=2.0)
+        self.assertEqual(scores365.grade_double_chance(game, ("DRAW", "Nice")), "won")
+
+    def test_x2_loses_on_home_win(self):
+        game = self._game(home_score=2.0, away_score=0.0)
+        self.assertEqual(scores365.grade_double_chance(game, ("DRAW", "Nice")), "lost")
+
+    def test_12_wins_on_either_team_winning(self):
+        home_win = self._game(home_score=2.0, away_score=0.0)
+        away_win = self._game(home_score=0.0, away_score=2.0)
+        self.assertEqual(scores365.grade_double_chance(home_win, ("Paris FC", "Nice")), "won")
+        self.assertEqual(scores365.grade_double_chance(away_win, ("Paris FC", "Nice")), "won")
+
+    def test_12_loses_on_a_draw(self):
+        game = self._game(home_score=1.0, away_score=1.0)
+        self.assertEqual(scores365.grade_double_chance(game, ("Paris FC", "Nice")), "lost")
+
+    def test_never_a_push_unlike_a_plain_moneyline(self):
+        # The whole point of covering two outcomes is that it's always
+        # exactly won or lost, never voided as a tie the way a plain
+        # moneyline pick would be.
+        for home, away in ((1.0, 1.0), (2.0, 0.0), (0.0, 2.0)):
+            result = scores365.grade_double_chance(self._game(home, away), ("Paris FC", "DRAW"))
+            self.assertIn(result, ("won", "lost"))
+
+
 class GradeHtFt(unittest.TestCase):
     """grade_ht_ft backs htfttracker.py - monkeypatches quarters_breakdown
     (a live 365scores fetch) so this exercises the real compound-bet logic

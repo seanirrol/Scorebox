@@ -364,6 +364,45 @@ def _parse_volleyball_point_total_pick(description: str) -> Optional[dict]:
         return None
     return {"kind": "volleyball_match_point_total", "team": team, "direction": m.group(3).lower(), "line": float(m.group(4))}
 
+
+# "Paris FC vs Nice - Paris FC or Draw" (Double Chance "1X") / "... - Draw
+# or Nice" ("X2") / "... - Paris FC or Nice" ("12", anyone but a draw) -
+# soccer's own Double Chance market, covering two of the three possible
+# full-time outcomes in one pick (see scores365.grade_double_chance/
+# doublechancetracker.py). Checked ahead of everything else for soccer,
+# same reasoning as volleyball's own points markets above - the generic
+# spread/total parsers have no "or" concept at all and would otherwise
+# just fail to match, but there's no reason to risk it once soccer grows
+# any other "-word-" shaped market later.
+_DOUBLE_CHANCE_RE = re.compile(
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s*-\s*(.+?)\s+or\s+(.+?)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _parse_double_chance_pick(description: str) -> Optional[dict]:
+    text = _clean_line(description)
+    m = _DOUBLE_CHANCE_RE.match(text)
+    if not m:
+        return None
+    team_a, team_b, side1, side2 = (g.strip() for g in m.groups())
+    if not team_a or not team_b:
+        return None
+
+    def _resolve_side(side: str) -> Optional[str]:
+        if side.lower() == "draw":
+            return "DRAW"
+        if scores365.names_match(side, team_a):
+            return team_a
+        if scores365.names_match(side, team_b):
+            return team_b
+        return None
+
+    resolved1, resolved2 = _resolve_side(side1), _resolve_side(side2)
+    if not resolved1 or not resolved2 or resolved1 == resolved2:
+        return None  # doesn't look like a real double-chance pair - don't guess
+    return {"kind": "double_chance", "sport": "soccer", "team": team_a, "covered": (resolved1, resolved2)}
+
 # Every wording variant confirmed live for "wins at least one set" -
 # "a set", "at least 1 set(s)", and "1+ set(s)" (the last one fell through
 # to the simple-name fallback with no botlog trace at all, same failure
@@ -2029,6 +2068,11 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
         point_total = _parse_volleyball_point_total_pick(description)
         if point_total:
             return point_total
+
+    if sport == "soccer":
+        double_chance = _parse_double_chance_pick(description)
+        if double_chance:
+            return double_chance
 
     if sport in ("dota2", "cs2"):
         # None of the generic total/player-prop/track fallback logic below

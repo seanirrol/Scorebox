@@ -1218,5 +1218,40 @@ class TennisSetsTotalNoMatchup(unittest.TestCase):
         self.assertEqual(result, {"kind": "tennis_sets_handicap", "team": "Wang Xiyu", "line": 1.5})
 
 
+class DoubleChance(unittest.TestCase):
+    """Soccer's Double Chance market - covers two of the three possible
+    full-time outcomes (home win/draw/away win) in one pick. See
+    scores365.grade_double_chance/doublechancetracker.py."""
+
+    def test_1x_home_or_draw(self):
+        result = picks.parse_pick_line("[Soccer] Paris FC vs Nice - Paris FC or Draw")
+        self.assertEqual(result, {"kind": "double_chance", "sport": "soccer", "team": "Paris FC", "covered": ("Paris FC", "DRAW")})
+
+    def test_x2_draw_or_away(self):
+        result = picks.parse_pick_line("[Soccer] Paris FC vs Nice - Draw or Nice")
+        self.assertEqual(result, {"kind": "double_chance", "sport": "soccer", "team": "Paris FC", "covered": ("DRAW", "Nice")})
+
+    def test_12_home_or_away_no_draw(self):
+        result = picks.parse_pick_line("[Soccer] Paris FC vs Nice - Paris FC or Nice")
+        self.assertEqual(result, {"kind": "double_chance", "sport": "soccer", "team": "Paris FC", "covered": ("Paris FC", "Nice")})
+
+    def test_side_that_matches_neither_team_nor_draw_is_not_treated_as_double_chance(self):
+        # Don't guess a double-chance pair when a side doesn't match either
+        # matchup team or "Draw" - falls through to whatever the generic
+        # matchup/ML fallback makes of it instead of a nonsense pair.
+        result = picks.parse_pick_line("[Soccer] Paris FC vs Nice - Lyon or Draw")
+        self.assertNotEqual(result["kind"], "double_chance")
+
+    def test_only_checked_for_soccer(self):
+        # The "or" shape is soccer-specific wording - must not accidentally
+        # fire for another sport that happens to phrase something with "or".
+        result = picks.parse_pick_line("[NFL] New England Patriots vs Cleveland Browns - Patriots or Draw")
+        self.assertNotEqual(result, {"kind": "double_chance", "sport": "nfl", "team": "New England Patriots", "covered": ("New England Patriots", "DRAW")})
+
+    def test_regular_soccer_total_is_unaffected(self):
+        result = picks.parse_pick_line("[Soccer] Real Madrid vs Barcelona - Over 2.5 Goals")
+        self.assertEqual(result, {"kind": "total", "sport": "soccer", "team": "Real Madrid", "direction": "over", "line": 2.5})
+
+
 if __name__ == "__main__":
     unittest.main()

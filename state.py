@@ -37,6 +37,7 @@ LAST_PERFORMANCE_POST_FILE = os.path.join(_DIR, "last_performance_post_state.jso
 WINLOSSGRAPH_OVERRIDES_FILE = os.path.join(_DIR, "winlossgraph_overrides_state.json")
 BOXING_FILE = os.path.join(_DIR, "boxing_state.json")
 KBO_PROPS_FILE = os.path.join(_DIR, "kbo_props_state.json")
+DOUBLE_CHANCE_FILE = os.path.join(_DIR, "double_chance_state.json")
 
 
 def _load(path: str) -> dict[str, Any]:
@@ -196,6 +197,14 @@ def load_htft() -> dict[str, Any]:
 
 def save_htft(data: dict[str, Any]):
     _save(HTFT_FILE, data)
+
+
+def load_double_chance() -> dict[str, Any]:
+    return _load(DOUBLE_CHANCE_FILE)
+
+
+def save_double_chance(data: dict[str, Any]):
+    _save(DOUBLE_CHANCE_FILE, data)
 
 
 def load_pending_track() -> dict[str, Any]:

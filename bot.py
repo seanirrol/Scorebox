@@ -28,6 +28,7 @@ import boxing
 import boxingtracker
 import config
 import dailylog
+import doublechancetracker
 import espn
 import espn_ufc
 import esports
@@ -205,6 +206,7 @@ async def on_ready():
     await _safe_resume("f5tracker", f5tracker.resume_all(client))
     await _safe_resume("halftracker", halftracker.resume_all(client))
     await _safe_resume("htfttracker", htfttracker.resume_all(client))
+    await _safe_resume("doublechancetracker", doublechancetracker.resume_all(client))
     await _safe_resume("inning1tracker", inning1tracker.resume_all(client))
     await _safe_resume("settracker", settracker.resume_all(client))
     await _safe_resume("tennispropstracker", tennispropstracker.resume_all(client))
@@ -221,6 +223,7 @@ async def on_ready():
         "f5": _resolve_pending_f5,
         "1h": _resolve_pending_1h,
         "ht_ft": _resolve_pending_ht_ft,
+        "double_chance": _resolve_pending_double_chance,
         "tennis_market": _resolve_pending_tennis_market,
         "tennis_playerprops": _resolve_pending_tennis_playerprops,
         "inning_runs": _resolve_pending_inning_runs,
@@ -256,6 +259,7 @@ def _find_message_owner(card_message_id: int) -> Optional[tuple[str, tuple]]:
         ("soccer_prop", soccerpropstracker.get_message_owner),
         ("esports", esportstracker.get_message_owner),
         ("htft", htfttracker.get_message_owner),
+        ("double_chance", doublechancetracker.get_message_owner),
     ):
         info = getter(card_message_id)
         if info:
@@ -308,6 +312,9 @@ def _stop_tracking_by_card_message(card_message_id: int) -> Optional[str]:
     elif kind == "htft":
         channel_id, game_id, ht_team, ft_team, _ = info
         htfttracker.stop_tracking(channel_id, game_id, ht_team, ft_team)
+    elif kind == "double_chance":
+        channel_id, game_id, _ = info
+        doublechancetracker.stop_tracking(channel_id, game_id)
     else:
         channel_id, game_id, member_id, stat_name, direction, line, _ = info
         soccerpropstracker.stop_tracking(channel_id, game_id, member_id, stat_name, direction, line)
@@ -673,6 +680,72 @@ async def _auto_ht_ft(
     htfttracker.start_tracking(message, sport_id, game, channel.id, None, ht_team, ft_team, section, label, origin_channel_id)
     log.info("Auto-tracked HT/FT pick '%s/%s' -> game %s", ht_team, ft_team, game_id)
     botlog.event(f"✅ Tracked (HT/FT): **{ht_team}/{ft_team}** ({sport_value}) — game `{game_id}` in <#{channel.id}>")
+    return message.id
+
+
+async def _resolve_pending_double_chance(payload: dict) -> bool:
+    try:
+        channel = client.get_channel(payload["channel_id"]) or await client.fetch_channel(payload["channel_id"])
+    except discord.HTTPException as e:
+        log.warning("Pending double chance: couldn't resolve channel %s: %s", payload["channel_id"], e)
+        return False
+    result = await _auto_double_chance(channel, **{k: v for k, v in payload.items() if k != "channel_id"}, queue_on_miss=False)
+    return result is not None
+
+
+async def _auto_double_chance(
+    channel: discord.abc.Messageable, team: str, covered: tuple,
+    section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
+    manual: bool = False, queue_on_miss: bool = True,
+):
+    """Soccer Double Chance picks - covers two of the three possible
+    full-time outcomes (home win/draw/away win) in one pick - see
+    doublechancetracker.py/scores365.grade_double_chance. team is used to
+    find the match (either matchup side works, find_match_for_team just
+    needs one valid name). manual/queue_on_miss - see _auto_track's/
+    _auto_f5's own docstrings."""
+    find_kwargs = {"days_ahead": 0, "days_back": 1, "allow_finished": True} if manual else {}
+    try:
+        result = await asyncio.to_thread(scores365.find_match_for_team, team, "soccer", **find_kwargs)
+    except scores365.ScoresError as e:
+        log.info("Auto-double-chance: couldn't reach 365scores for '%s': %s", team, e)
+        if manual:
+            botlog.event(f"❌ Not tracked (double chance): **{team}** — couldn't reach 365scores: {e}")
+        return
+    pick_label = doublechancetracker.pick_label(covered)
+    if not result:
+        payload = {
+            "channel_id": channel.id, "team": team, "covered": list(covered),
+            "section": section, "label": label, "origin_channel_id": origin_channel_id,
+        }
+        if not manual and queue_on_miss and not pendingauto.is_queued("double_chance", payload):
+            pendingauto.queue("double_chance", payload, _resolve_pending_double_chance)
+            log.info("Auto-double-chance: no match found for '%s', queuing retry", team)
+            botlog.event(f"⏳ Queued (double chance): **{pick_label}** — no match found yet, will retry automatically")
+            return "queued"
+        log.info("Auto-double-chance: no match found for '%s'", team)
+        # Non-manual miss here is a still-silently-retrying pendingauto
+        # entry, not a real give-up - see _auto_f5's identical fix for why
+        # this matters (was spamming the log channel every 30min).
+        if manual:
+            botlog.event(f"❌ Not tracked (double chance): **{pick_label}** — no match found")
+        return
+    game, sport_id = result
+    game_id = game["id"]
+    if doublechancetracker.is_tracked(channel.id, game_id):
+        botlog.event(f"⏭️ Skipped (double chance): **{pick_label}** — game `{game_id}` already being tracked in <#{channel.id}>")
+        return "skipped"
+
+    embed, file = await doublechancetracker.build_embed(game, sport_id, team, covered)
+    message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
+    embed.set_footer(text=doublechancetracker._footer_text(message.id))
+    await throttle.run(channel.id, lambda: message.edit(embed=embed))
+    doublechancetracker.register_message(message.id, channel.id, game_id, None)
+    await _safe_add_trash_reaction(message)
+
+    doublechancetracker.start_tracking(message, sport_id, game, channel.id, None, team, covered, section, label, origin_channel_id)
+    log.info("Auto-tracked double-chance pick '%s' -> game %s", pick_label, game_id)
+    botlog.event(f"✅ Tracked (double chance): **{pick_label}** — game `{game_id}` in <#{channel.id}>")
     return message.id
 
 
@@ -1730,6 +1803,11 @@ async def _dispatch_pick(
                 target_channel, pick["sport"], pick["ht_team"], pick["ft_team"],
                 section=section, label=label, origin_channel_id=origin_channel_id, manual=manual,
             )
+        elif pick["kind"] == "double_chance":
+            return await _auto_double_chance(
+                target_channel, pick["team"], pick["covered"],
+                section=section, label=label, origin_channel_id=origin_channel_id, manual=manual,
+            )
         elif pick["kind"] == "inning_runs":
             return await _auto_inning_runs(
                 target_channel, pick["team"], pick["pick_type"], line=pick.get("line"),
@@ -2345,6 +2423,9 @@ def _untrack_one(channel_id: int, game_id: str, player: Optional[str]) -> list[s
     if inning1tracker.stop_tracking(channel_id, game_id):
         stopped.append("1st inning result pick")
 
+    if doublechancetracker.stop_tracking(channel_id, game_id):
+        stopped.append("double chance pick")
+
     for entry in settracker.list_tracked_details(channel_id):
         if str(entry["game_id"]) != str(game_id):
             continue
@@ -2545,6 +2626,13 @@ async def _gather_tracked_items(channel_id: int) -> list[dict]:
             "kind": "inning1", "label": f"1st Inning: {pick_label}", "id_label": entry["game_id"],
             "message_id": entry["message_id"],
             "stop": lambda cid=channel_id, gid=entry["game_id"]: inning1tracker.stop_tracking(cid, gid),
+        })
+
+    for entry in doublechancetracker.list_tracked_details(channel_id):
+        items.append({
+            "kind": "double_chance", "label": f"Double Chance: {doublechancetracker.pick_label(tuple(entry['covered']))}",
+            "id_label": entry["game_id"], "message_id": entry["message_id"],
+            "stop": lambda cid=channel_id, gid=entry["game_id"]: doublechancetracker.stop_tracking(cid, gid),
         })
 
     for entry in settracker.list_tracked_details(channel_id):
