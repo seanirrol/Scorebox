@@ -1283,5 +1283,49 @@ class DoubleChance(unittest.TestCase):
         self.assertNotEqual(result["kind"] if result else None, "double_chance")
 
 
+class TennisHandicapWithMatchup(unittest.TestCase):
+    """Games/sets handicap picks used to only be recognized with no
+    opponent named at all - confirmed live, a real matchup-included "Alex
+    Michelsen vs Federico Cina - Alex Michelsen -1.5 Sets"/"Mariano Navone
+    vs Novak Djokovic - Novak Djokovic -2.5 Sets" pair both silently fell
+    through to a bare moneyline on the named player, with the handicap
+    line dropped entirely (has_matchup being True skipped the whole tennis
+    no-matchup block these lived in)."""
+
+    def test_sets_handicap_with_matchup(self):
+        result = picks.parse_pick_line("[Tennis] Alex Michelsen vs Federico Cina - Alex Michelsen -1.5 Sets")
+        self.assertEqual(result, {"kind": "tennis_sets_handicap", "team": "Alex Michelsen", "line": -1.5})
+
+    def test_sets_handicap_with_matchup_positive_line(self):
+        result = picks.parse_pick_line("[Tennis] Mariano Navone vs Novak Djokovic - Novak Djokovic -2.5 Sets")
+        self.assertEqual(result, {"kind": "tennis_sets_handicap", "team": "Novak Djokovic", "line": -2.5})
+
+    def test_games_handicap_with_matchup(self):
+        result = picks.parse_pick_line("[Tennis] Felix Auger-Aliassime vs Ben Shelton - Felix Auger-Aliassime -3.5 Games")
+        self.assertEqual(result, {"kind": "tennis_games_handicap", "team": "Felix Auger-Aliassime", "line": -3.5})
+
+    def test_sets_handicap_named_side_must_match_a_real_matchup_side(self):
+        # Don't guess - a named player who isn't part of the stated
+        # matchup shouldn't silently track anyway.
+        result = picks.parse_pick_line("[Tennis] Alex Michelsen vs Federico Cina - Someone Else -1.5 Sets")
+        self.assertNotEqual(result["kind"] if result else None, "tennis_sets_handicap")
+
+    def test_sets_handicap_without_matchup_still_works(self):
+        result = picks.parse_pick_line("[Tennis] Wang Xiyu +1.5 Sets")
+        self.assertEqual(result, {"kind": "tennis_sets_handicap", "team": "Wang Xiyu", "line": 1.5})
+
+    def test_games_handicap_without_matchup_still_works(self):
+        result = picks.parse_pick_line("[Tennis] Brandon Nakashima -2.5 Games")
+        self.assertEqual(result, {"kind": "tennis_games_handicap", "team": "Brandon Nakashima", "line": -2.5})
+
+    def test_set1_total_games_still_works_alongside_the_new_priority_ordering(self):
+        result = picks.parse_pick_line("[Tennis] Martin Landaluce vs Jacob Fearnley - Over 9.5 1st Set Total Games")
+        self.assertEqual(result, {"kind": "tennis_set1_total_games", "team": "Martin Landaluce", "direction": "over", "line": 9.5})
+
+    def test_win_a_set_still_works_alongside_the_new_priority_ordering(self):
+        result = picks.parse_pick_line("[Tennis] Jeffrey John Wolf to Win a Set")
+        self.assertEqual(result, {"kind": "tennis_win_a_set", "team": "Jeffrey John Wolf", "direction": "yes"})
+
+
 if __name__ == "__main__":
     unittest.main()

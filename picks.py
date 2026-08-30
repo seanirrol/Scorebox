@@ -280,6 +280,18 @@ _GAMES_HANDICAP_NOMATCHUP_RE = re.compile(
     r"^(.+?)\s+([+-]\d+(?:\.\d+)?)\s*(?:total\s+)?games\b", re.IGNORECASE,
 )
 
+# "Alex Michelsen vs Federico Cina - Alex Michelsen -1.5 Games" - the same
+# games-margin handicap as _GAMES_HANDICAP_NOMATCHUP_RE above, just with the
+# opponent named too - confirmed live, a real pick worded this way (matchup
+# included) fell all the way through to a bare moneyline on the named
+# player, with the handicap line silently dropped entirely - only the no-
+# opponent form was ever recognized. The named player is validated against
+# a matchup side the same way _VOLLEYBALL_POINT_HANDICAP_MATCHUP_RE is.
+_GAMES_HANDICAP_MATCHUP_RE = re.compile(
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s*-\s*(.+?)\s+([+-]\d+(?:\.\d+)?)\s*(?:total\s+)?games\b",
+    re.IGNORECASE,
+)
+
 # "Wang Xiyu +1.5 Sets" - a sets-margin HANDICAP, same no-matchup shape as
 # _GAMES_HANDICAP_NOMATCHUP_RE above but against sets won instead of games
 # won - confirmed live, a real pick worded this way went completely
@@ -287,6 +299,16 @@ _GAMES_HANDICAP_NOMATCHUP_RE = re.compile(
 # vanishing from the picks count with no botlog trace whatsoever.
 _SETS_HANDICAP_NOMATCHUP_RE = re.compile(
     r"^(.+?)\s+([+-]\d+(?:\.\d+)?)\s*sets\b", re.IGNORECASE,
+)
+
+# Matchup-included counterpart to _SETS_HANDICAP_NOMATCHUP_RE, same reasoning
+# as _GAMES_HANDICAP_MATCHUP_RE above - confirmed live, a real "Alex
+# Michelsen vs Federico Cina - Alex Michelsen -1.5 Sets"/"Mariano Navone vs
+# Novak Djokovic - Novak Djokovic -2.5 Sets" pair both silently dropped
+# their handicap line the same way.
+_SETS_HANDICAP_MATCHUP_RE = re.compile(
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s*-\s*(.+?)\s+([+-]\d+(?:\.\d+)?)\s*sets\b",
+    re.IGNORECASE,
 )
 
 # "Serbia -4.5 1st Set" - volleyball's own Set 1 point-margin handicap, same
@@ -1471,9 +1493,21 @@ def _parse_tennis_sets_total_nomatchup_pick(description: str) -> Optional[dict]:
 
 
 def _parse_games_handicap_nomatchup_pick(description: str) -> Optional[dict]:
-    """"Player -2.5 Games" - a games-margin handicap, no opponent named at
-    all (see _GAMES_HANDICAP_NOMATCHUP_RE)."""
+    """"Player -2.5 Games", with or without the opponent named (see
+    _GAMES_HANDICAP_MATCHUP_RE/_GAMES_HANDICAP_NOMATCHUP_RE)."""
     text = _clean_line(description)
+    m = _GAMES_HANDICAP_MATCHUP_RE.match(text)
+    if m:
+        team_a, team_b, named, line = m.group(1).strip(), m.group(2).strip(), m.group(3).strip(), m.group(4)
+        if not team_a or not team_b or not named:
+            return None
+        if scores365.names_match(named, team_a):
+            player = team_a
+        elif scores365.names_match(named, team_b):
+            player = team_b
+        else:
+            return None  # doesn't look like either matchup side - don't guess
+        return {"kind": "tennis_games_handicap", "team": player, "line": float(line)}
     m = _GAMES_HANDICAP_NOMATCHUP_RE.match(text)
     if not m:
         return None
@@ -1484,9 +1518,21 @@ def _parse_games_handicap_nomatchup_pick(description: str) -> Optional[dict]:
 
 
 def _parse_sets_handicap_nomatchup_pick(description: str) -> Optional[dict]:
-    """"Player +1.5 Sets" - a sets-margin handicap, no opponent named at
-    all (see _SETS_HANDICAP_NOMATCHUP_RE)."""
+    """"Player +1.5 Sets", with or without the opponent named (see
+    _SETS_HANDICAP_MATCHUP_RE/_SETS_HANDICAP_NOMATCHUP_RE)."""
     text = _clean_line(description)
+    m = _SETS_HANDICAP_MATCHUP_RE.match(text)
+    if m:
+        team_a, team_b, named, line = m.group(1).strip(), m.group(2).strip(), m.group(3).strip(), m.group(4)
+        if not team_a or not team_b or not named:
+            return None
+        if scores365.names_match(named, team_a):
+            player = team_a
+        elif scores365.names_match(named, team_b):
+            player = team_b
+        else:
+            return None  # doesn't look like either matchup side - don't guess
+        return {"kind": "tennis_sets_handicap", "team": player, "line": float(line)}
     m = _SETS_HANDICAP_NOMATCHUP_RE.match(text)
     if not m:
         return None
@@ -2111,6 +2157,23 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
             if double_chance_nomatchup:
                 return double_chance_nomatchup
 
+    if sport == "tennis":
+        # Checked before anything else for tennis, matchup or not - both
+        # already try the matchup-included form first internally (see
+        # _GAMES_HANDICAP_MATCHUP_RE/_SETS_HANDICAP_MATCHUP_RE), so this
+        # can't be left inside the "if not has_matchup" block further down
+        # the way it used to be - confirmed live, a real matchup-included
+        # "Alex Michelsen vs Federico Cina - Alex Michelsen -1.5 Sets" pick
+        # never even reached that block at all (has_matchup was True),
+        # silently dropping the handicap line to a bare moneyline instead.
+        games_handicap = _parse_games_handicap_nomatchup_pick(description)
+        if games_handicap:
+            return games_handicap
+
+        sets_handicap = _parse_sets_handicap_nomatchup_pick(description)
+        if sets_handicap:
+            return sets_handicap
+
     if sport in ("dota2", "cs2"):
         # None of the generic total/player-prop/track fallback logic below
         # applies to esports at all (see _parse_esports_pick's own
@@ -2309,14 +2372,6 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
             sets_total_nomatchup = _parse_tennis_sets_total_nomatchup_pick(description)
             if sets_total_nomatchup:
                 return sets_total_nomatchup
-
-            games_handicap_nomatchup = _parse_games_handicap_nomatchup_pick(description)
-            if games_handicap_nomatchup:
-                return games_handicap_nomatchup
-
-            sets_handicap_nomatchup = _parse_sets_handicap_nomatchup_pick(description)
-            if sets_handicap_nomatchup:
-                return sets_handicap_nomatchup
 
             win_a_set_nomatchup = _parse_win_a_set_nomatchup_pick(description)
             if win_a_set_nomatchup:
