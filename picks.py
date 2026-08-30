@@ -373,10 +373,27 @@ def _parse_volleyball_point_total_pick(description: str) -> Optional[dict]:
 # same reasoning as volleyball's own points markets above - the generic
 # spread/total parsers have no "or" concept at all and would otherwise
 # just fail to match, but there's no reason to risk it once soccer grows
-# any other "-word-" shaped market later.
+# any other "-word-" shaped market later. A trailing " ML" is tolerated
+# (dropped, not captured) - confirmed live, "Paris FC or Draw ML" is a
+# real wording (this tipster's own habit of tacking "ML" onto every pick
+# regardless of market) that would otherwise make the second side capture
+# "Draw ML" instead of "Draw", fail to resolve against either matchup side
+# or "Draw", and silently fall through to the generic moneyline fallback -
+# which tracked the entire garbled "Paris FC or Draw" string as a literal
+# (nonsense) team name instead of either rejecting it or resolving the
+# real double-chance pick.
 _DOUBLE_CHANCE_RE = re.compile(
-    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s*-\s*(.+?)\s+or\s+(.+?)\s*$",
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s*-\s*(.+?)\s+or\s+(.+?)(?:\s+ML)?\s*$",
     re.IGNORECASE,
+)
+
+# Same market, no matchup at all - just "Paris FC or Draw"/"Paris FC or
+# Draw ML" (confirmed live: a real pick was worded exactly this way, with
+# no opponent named). Whichever side isn't "Draw" is used to look the
+# match up, same "either team - just used to look the game up" reasoning
+# as every other no-matchup parser in this file.
+_DOUBLE_CHANCE_NOMATCHUP_RE = re.compile(
+    r"^(.+?)\s+or\s+(.+?)(?:\s+ML)?\s*$", re.IGNORECASE,
 )
 
 
@@ -402,6 +419,22 @@ def _parse_double_chance_pick(description: str) -> Optional[dict]:
     if not resolved1 or not resolved2 or resolved1 == resolved2:
         return None  # doesn't look like a real double-chance pair - don't guess
     return {"kind": "double_chance", "sport": "soccer", "team": team_a, "covered": (resolved1, resolved2)}
+
+
+def _parse_double_chance_nomatchup_pick(description: str) -> Optional[dict]:
+    text = _clean_line(description)
+    m = _DOUBLE_CHANCE_NOMATCHUP_RE.match(text)
+    if not m:
+        return None
+    side1, side2 = m.group(1).strip(), m.group(2).strip()
+    if not side1 or not side2:
+        return None
+    resolved1 = "DRAW" if side1.lower() == "draw" else side1
+    resolved2 = "DRAW" if side2.lower() == "draw" else side2
+    if resolved1 == resolved2:
+        return None  # both "Draw", or the same team twice - nonsense
+    lookup_team = side1 if resolved1 != "DRAW" else side2
+    return {"kind": "double_chance", "sport": "soccer", "team": lookup_team, "covered": (resolved1, resolved2)}
 
 # Every wording variant confirmed live for "wins at least one set" -
 # "a set", "at least 1 set(s)", and "1+ set(s)" (the last one fell through
@@ -2073,6 +2106,10 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
         double_chance = _parse_double_chance_pick(description)
         if double_chance:
             return double_chance
+        if not has_matchup:
+            double_chance_nomatchup = _parse_double_chance_nomatchup_pick(description)
+            if double_chance_nomatchup:
+                return double_chance_nomatchup
 
     if sport in ("dota2", "cs2"):
         # None of the generic total/player-prop/track fallback logic below

@@ -1252,6 +1252,36 @@ class DoubleChance(unittest.TestCase):
         result = picks.parse_pick_line("[Soccer] Real Madrid vs Barcelona - Over 2.5 Goals")
         self.assertEqual(result, {"kind": "total", "sport": "soccer", "team": "Real Madrid", "direction": "over", "line": 2.5})
 
+    def test_no_matchup_1x(self):
+        # Confirmed live: a real pick worded exactly this way ("Paris FC or
+        # Draw ML", no opponent named) silently fell through to the generic
+        # moneyline fallback, which tracked the entire garbled "Paris FC or
+        # Draw" string as a literal (nonsense) team name instead of the
+        # real double-chance pick - it eventually auto-voided (game not
+        # found), but would have graded unpredictably had it not.
+        result = picks.parse_pick_line("[Soccer] Paris FC or Draw ML")
+        self.assertEqual(result, {"kind": "double_chance", "sport": "soccer", "team": "Paris FC", "covered": ("Paris FC", "DRAW")})
+
+    def test_no_matchup_1x_without_trailing_ml(self):
+        result = picks.parse_pick_line("[Soccer] Paris FC or Draw")
+        self.assertEqual(result, {"kind": "double_chance", "sport": "soccer", "team": "Paris FC", "covered": ("Paris FC", "DRAW")})
+
+    def test_no_matchup_x2(self):
+        result = picks.parse_pick_line("[Soccer] Draw or Nice ML")
+        self.assertEqual(result, {"kind": "double_chance", "sport": "soccer", "team": "Nice", "covered": ("DRAW", "Nice")})
+
+    def test_no_matchup_12(self):
+        result = picks.parse_pick_line("[Soccer] Paris FC or Nice ML")
+        self.assertEqual(result, {"kind": "double_chance", "sport": "soccer", "team": "Paris FC", "covered": ("Paris FC", "Nice")})
+
+    def test_matchup_form_tolerates_trailing_ml_too(self):
+        result = picks.parse_pick_line("[Soccer] Paris FC vs Nice - Paris FC or Draw ML")
+        self.assertEqual(result, {"kind": "double_chance", "sport": "soccer", "team": "Paris FC", "covered": ("Paris FC", "DRAW")})
+
+    def test_no_matchup_both_sides_draw_is_rejected(self):
+        result = picks.parse_pick_line("[Soccer] Draw or Draw ML")
+        self.assertNotEqual(result["kind"] if result else None, "double_chance")
+
 
 if __name__ == "__main__":
     unittest.main()
