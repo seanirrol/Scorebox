@@ -1059,6 +1059,19 @@ class VolleyballSetHandicaps(unittest.TestCase):
         result = picks.parse_pick_line("[Volleyball] Greece +4.5 1st Set")
         self.assertEqual(result, {"kind": "volleyball_set1_handicap", "team": "Greece", "line": 4.5})
 
+    def test_set1_point_handicap_with_matchup(self):
+        # Confirmed live: "Netherlands vs Slovenia - Netherlands -2.5 1st
+        # Set" fell all the way through to a bare moneyline on Netherlands,
+        # the handicap line silently dropped - only the no-opponent form
+        # was ever recognized (same class of bug as tennis's own games/sets
+        # handicap fix).
+        result = picks.parse_pick_line("[Volleyball] Netherlands vs Slovenia - Netherlands -2.5 1st Set")
+        self.assertEqual(result, {"kind": "volleyball_set1_handicap", "team": "Netherlands", "line": -2.5})
+
+    def test_set1_point_handicap_named_side_must_match_a_real_matchup_side(self):
+        result = picks.parse_pick_line("[Volleyball] Netherlands vs Slovenia - Someone Else -2.5 1st Set")
+        self.assertNotEqual(result["kind"] if result else None, "volleyball_set1_handicap")
+
     def test_double_result_same_team_shorthand(self):
         result = picks.parse_pick_line("[Volleyball] Puerto Rico Double Result (1st Set/Match)")
         self.assertEqual(result, {"kind": "ht_ft", "sport": "volleyball", "ht_team": "Puerto Rico", "ft_team": "Puerto Rico"})

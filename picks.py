@@ -320,6 +320,19 @@ _SET1_POINT_HANDICAP_NOMATCHUP_RE = re.compile(
     r"^(.+?)\s+([+-]\d+(?:\.\d+)?)\s*1st\s*set\b", re.IGNORECASE,
 )
 
+# "Netherlands vs Slovenia - Netherlands -2.5 1st Set" - the same Set 1
+# point-margin handicap as _SET1_POINT_HANDICAP_NOMATCHUP_RE above, just
+# with the opponent named too - confirmed live, a real pick worded this way
+# (matchup included) fell all the way through to a bare moneyline on the
+# named team, silently dropping the handicap line - only the no-opponent
+# form was ever recognized (same class of bug as tennis's own games/sets
+# handicap, see _GAMES_HANDICAP_MATCHUP_RE's own comment). The named team
+# is validated against a matchup side the same way that fix is.
+_SET1_POINT_HANDICAP_MATCHUP_RE = re.compile(
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s*-\s*(.+?)\s+([+-]\d+(?:\.\d+)?)\s*1st\s*set\b",
+    re.IGNORECASE,
+)
+
 # "Poland -4.5 Points" / "Poland vs Germany - Poland -4.5 Points" -
 # volleyball's own match-WIDE points-margin handicap (combined rally points
 # across every set, not sets won - see
@@ -1543,9 +1556,21 @@ def _parse_sets_handicap_nomatchup_pick(description: str) -> Optional[dict]:
 
 
 def _parse_volleyball_set1_handicap_nomatchup_pick(description: str) -> Optional[dict]:
-    """"Serbia -4.5 1st Set" - a volleyball Set 1 point-margin handicap, no
-    opponent named at all (see _SET1_POINT_HANDICAP_NOMATCHUP_RE)."""
+    """"Serbia -4.5 1st Set", with or without the opponent named (see
+    _SET1_POINT_HANDICAP_MATCHUP_RE/_SET1_POINT_HANDICAP_NOMATCHUP_RE)."""
     text = _clean_line(description)
+    m = _SET1_POINT_HANDICAP_MATCHUP_RE.match(text)
+    if m:
+        team_a, team_b, named, line = m.group(1).strip(), m.group(2).strip(), m.group(3).strip(), m.group(4)
+        if not team_a or not team_b or not named:
+            return None
+        if scores365.names_match(named, team_a):
+            team = team_a
+        elif scores365.names_match(named, team_b):
+            team = team_b
+        else:
+            return None  # doesn't look like either matchup side - don't guess
+        return {"kind": "volleyball_set1_handicap", "team": team, "line": float(line)}
     m = _SET1_POINT_HANDICAP_NOMATCHUP_RE.match(text)
     if not m:
         return None
@@ -2148,6 +2173,14 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
         if point_total:
             return point_total
 
+        # Also unconditional (matchup or not) - same reasoning as tennis's
+        # own games/sets handicap fix, see _GAMES_HANDICAP_MATCHUP_RE's own
+        # comment. Used to live inside the "if not has_matchup" block
+        # further down, which a real matchup-included pick never reached.
+        set1_handicap = _parse_volleyball_set1_handicap_nomatchup_pick(description)
+        if set1_handicap:
+            return set1_handicap
+
     if sport == "soccer":
         double_chance = _parse_double_chance_pick(description)
         if double_chance:
@@ -2354,11 +2387,6 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
             inning1_team = _parse_inning1_team_pick(description)
             if inning1_team:
                 return {"kind": "inning1_result", "sport": sport, "team": inning1_team, "pick": inning1_team}
-
-        if sport == "volleyball":
-            set1_handicap_nomatchup = _parse_volleyball_set1_handicap_nomatchup_pick(description)
-            if set1_handicap_nomatchup:
-                return set1_handicap_nomatchup
 
         if sport == "tennis":
             set1_team = _parse_set1_pick(description)
