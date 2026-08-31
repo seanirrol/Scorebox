@@ -94,6 +94,7 @@ STAT_CATALOG = {
         "Strikeouts (Batting)": ("K", "AB"),
         "Strikeouts (Pitching)": ("K", "IP"),
         "Walks (Pitching)": ("BB", "IP"),
+        "Hits Allowed": ("H", "IP"),
         "Earned Runs": ("ER", "IP"),
         "Innings Pitched": ("IP", "IP"),
         "Pitching Outs": PITCHING_OUTS_KEY,
