@@ -865,7 +865,31 @@ def _fuzzy_word_match(a: str, b: str) -> bool:
     return _levenshtein(a, b) <= 2
 
 
+_RESERVE_QUALIFIER_RE = re.compile(
+    r"\b(u1[4-9]|u2[0-3]|ii|iii|reserves?|youth|academy|womens?|ladies|girls|juniors?|b)\b"
+)
+
+
+def _reserve_qualifiers(name: str) -> frozenset[str]:
+    """Youth/reserve/women's-team qualifier tokens found in a raw team
+    name (e.g. "u21", "b", "women") - kept separate from
+    _meaningful_words()'s normal word set because that set can't see
+    them: _normalize() fuses "U21" into "arsenalu21" as one
+    substring-matchable blob, and _meaningful_words() filters out
+    single-char tokens like "B". Both behaviors are correct for their
+    own purpose but would otherwise let e.g. "Arsenal" match "Arsenal
+    U21" or "Real Madrid" match "Real Madrid B" - two different teams
+    that happen to share a name (confirmed live: a plain "Arsenal ML"
+    pick auto-tracked against a same-day Arsenal U21 fixture instead of
+    the actual first-team match, since 365scores lists both under the
+    same club name)."""
+    lowered = _strip_accents(name or "").lower()
+    return frozenset(_RESERVE_QUALIFIER_RE.findall(lowered))
+
+
 def names_match(a: str, b: str) -> bool:
+    if _reserve_qualifiers(a) != _reserve_qualifiers(b):
+        return False
     na, nb = _normalize(a), _normalize(b)
     if not na or not nb:
         return False
