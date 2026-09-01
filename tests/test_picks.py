@@ -895,6 +895,29 @@ class WinASetNoMatchup(unittest.TestCase):
         self.assertEqual(len(results), 8)
 
 
+class HyphenatedNameNotMistakenForSeparator(unittest.TestCase):
+    """The matchup-then-pick separator ("Team A vs Team B - <pick>") used
+    to allow a bare hyphen with no surrounding whitespace, which a
+    hyphenated player name (e.g. "Jan-Lennard Struff") satisfies on its
+    own - the regex's non-greedy team_b capture stopped at the FIRST
+    hyphen it found, splitting mid-name instead of at the real separator.
+    Confirmed live: a real "Camilo Ugo Carabelli vs Jan-Lennard Struff -
+    Camilo Ugo Carabelli to Win a Set" pick parsed team_b as just "Jan",
+    and the actual pick's "named player" as the garbled leftover
+    "Lennard Struff - Camilo Ugo Carabelli" - which still matched via
+    names_match's substring check, silently tracking a mangled name."""
+
+    def test_win_a_set_with_hyphenated_opponent_name(self):
+        pick = picks.parse_pick_line(
+            "[Tennis] Camilo Ugo Carabelli vs Jan-Lennard Struff - Camilo Ugo Carabelli to Win a Set"
+        )
+        self.assertEqual(pick, {"kind": "tennis_win_a_set", "team": "Camilo Ugo Carabelli", "direction": "yes"})
+
+    def test_moneyline_with_hyphenated_picked_side(self):
+        pick = picks.parse_pick_line("[Tennis] Daniil Medvedev vs Jan-Lennard Struff - Jan-Lennard Struff ML")
+        self.assertEqual(pick, {"kind": "track", "sport": "tennis", "team": "Jan-Lennard Struff"})
+
+
 class YrfiNrfiSeparators(unittest.TestCase):
     """The matchup separator regex only recognized "vs"/"vs." - a real
     source used "@" (the away-@-home convention) and those lines silently
