@@ -202,6 +202,26 @@ def _fetch_games_for_sport(sport_id: int) -> list[dict]:
     data = _get_retrying(f"{BASE_URL}/games/current/", langId=1, timezoneName="UTC", userCountryId=1, sports=sport_id)
     if data is None:
         raise ScoresError("365scores request failed after retries")
+
+    # A base page can come back HTTP 200 with a technically-valid but empty
+    # games list AND no paging object at all - not an exception _get_retrying
+    # would ever catch, but just as transient (confirmed live: back-to-back
+    # calls for the same sport/params flipped between 100 games and 0 games
+    # with nothing else changing). A sport covering many leagues, several
+    # pages forward/back, essentially never has zero real games - that
+    # combination is the signal something's actually wrong, so retry the
+    # base call a couple more times before trusting it, the same tolerance
+    # PAGE_FETCH_RETRIES already gives an outright exception. Confirmed
+    # live: this exact gap auto-voided a real in-progress volleyball pick,
+    # after all 6 poll cycles in a row hit this empty response.
+    if not data.get("games") and not data.get("paging"):
+        for _ in range(PAGE_FETCH_RETRIES):
+            data = _get_retrying(f"{BASE_URL}/games/current/", langId=1, timezoneName="UTC", userCountryId=1, sports=sport_id)
+            if data and (data.get("games") or data.get("paging")):
+                break
+
+    if data is None:
+        raise ScoresError("365scores request failed after retries")
     games = list(data.get("games") or [])
 
     paging = data.get("paging") or {}
