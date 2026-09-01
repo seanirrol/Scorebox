@@ -30,6 +30,7 @@ _SPORT_MAP = {
     "mlb": "baseball",
     "mbl": "baseball",  # confirmed live - a real header typo'd this way twice
     "kbo": "baseball",
+    "npb": "baseball",
     "nba": "basketball",
     "wnba": "basketball",
     "nfl": "nfl",
