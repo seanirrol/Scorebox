@@ -1036,15 +1036,25 @@ def find_match_for_team(
 
 
 def get_live_update(sport_id: int, game_id) -> Optional[dict]:
-    """Re-fetch a specific game's current state from the (cached) bulk list."""
+    """Re-fetch a specific game's current state from the (cached) bulk list,
+    falling back to the per-game detail call (_get_game_detail) if the game
+    isn't there. The two endpoints have failed independently of each other
+    live: a real in-progress volleyball match sat completely absent from
+    the bulk list for several minutes straight (empty games array, no
+    paging - see _fetch_games_for_sport's own comment) while its own
+    per-game detail call kept returning the correct, live score the whole
+    time. _get_game_detail's response carries the same top-level shape
+    (homeCompetitor/awayCompetitor/statusGroup/statusText/startTime/...)
+    every caller here already relies on, so this is a safe drop-in when
+    the bulk list comes up empty for a game that's actually still live."""
     try:
         games = _fetch_games_for_sport(sport_id)
     except ScoresError:
-        return None
+        games = []
     for g in games:
         if g.get("id") == game_id:
             return g
-    return None
+    return _get_game_detail(game_id)
 
 
 # --- formatting --------------------------------------------------------
