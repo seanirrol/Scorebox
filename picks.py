@@ -1506,9 +1506,22 @@ def _parse_player_total_games_nomatchup_pick(description: str) -> Optional[dict]
 
 def _parse_tennis_sets_total_nomatchup_pick(description: str) -> Optional[dict]:
     """"Denis Shapovalov Over 3.5 Sets" - the combined Total Sets Played
-    market, no opponent named at all (see _TENNIS_SETS_TOTAL_NOMATCHUP_RE).
-    Returns the same "total" kind the matchup form already uses - see that
-    regex's own comment for why this doesn't need a dedicated market."""
+    market, no opponent named at all (see _TENNIS_SETS_TOTAL_NOMATCHUP_RE's
+    own comment for why a plain "total" is normally right here: both
+    players play the same number of sets, so there's no separate "this
+    player's own" total to distinguish).
+
+    That reasoning breaks down for a line under 2 though - the combined
+    total sets played in ANY completed match is always at least 2 (the
+    minimum is a straight-sets 2-0 best-of-3), so "Under 1.5 Sets"/"Over
+    0.5 Sets" etc. can never be the match's combined total at all. Wording
+    that low can only mean the named player's OWN sets-won count instead
+    (a real, separate market - "will this player win at most 1 set" -
+    confirmed live: a real "Dane Sweeny - Under 1.5 Sets" pick against a
+    best-of-5 US Open match, where the match total can't possibly be under
+    2, only makes sense as Sweeny's own count). Routed to "team_total"
+    instead - already generically backed by main_scores (sets won per
+    side for tennis), the exact number this needs."""
     text = _clean_line(description)
     m = _TENNIS_SETS_TOTAL_NOMATCHUP_RE.match(text)
     if not m:
@@ -1516,7 +1529,9 @@ def _parse_tennis_sets_total_nomatchup_pick(description: str) -> Optional[dict]:
     player = m.group(1).strip()
     if not player:
         return None
-    return {"kind": "total", "sport": "tennis", "team": player, "direction": m.group(2).lower(), "line": float(m.group(3))}
+    line = float(m.group(3))
+    kind = "team_total" if line < 2 else "total"
+    return {"kind": kind, "sport": "tennis", "team": player, "direction": m.group(2).lower(), "line": line}
 
 
 def _parse_games_handicap_nomatchup_pick(description: str) -> Optional[dict]:

@@ -1259,6 +1259,18 @@ class TennisSetsTotalNoMatchup(unittest.TestCase):
         result = picks.parse_pick_line("[Tennis] Denis Shapovalov Over 3.5 Sets Played")
         self.assertEqual(result, {"kind": "total", "sport": "tennis", "team": "Denis Shapovalov", "direction": "over", "line": 3.5})
 
+    def test_line_under_two_is_the_players_own_total_not_the_match_combined(self):
+        # A completed match's COMBINED sets total is always at least 2 (a
+        # straight-sets best-of-3 win) - a line under 2 can only mean the
+        # named player's own sets-won count instead (confirmed live: "Dane
+        # Sweeny - Under 1.5 Sets" against a best-of-5 US Open match).
+        result = picks.parse_pick_line("[Tennis] Dane Sweeny - Under 1.5 Sets")
+        self.assertEqual(result, {"kind": "team_total", "sport": "tennis", "team": "Dane Sweeny", "direction": "under", "line": 1.5})
+
+    def test_half_line_over_still_routes_to_players_own_total(self):
+        result = picks.parse_pick_line("[Tennis] Dane Sweeny Over 0.5 Sets")
+        self.assertEqual(result, {"kind": "team_total", "sport": "tennis", "team": "Dane Sweeny", "direction": "over", "line": 0.5})
+
     def test_reaches_this_parser_through_the_bare_header_bullet_list_too(self):
         # The exact real-world shape this was confirmed live against - a
         # bare "Tennis" header (no bracket tags at all) followed by
