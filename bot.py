@@ -426,7 +426,7 @@ async def _auto_track(
     channel: discord.abc.Messageable, sport_value: str, team: str,
     total_direction: Optional[str] = None, total_line: Optional[float] = None,
     team_total: Optional[str] = None, section: Optional[str] = None, label: Optional[str] = None,
-    origin_channel_id: Optional[int] = None, manual: bool = False,
+    origin_channel_id: Optional[int] = None, manual: bool = False, game_id: Optional[str] = None,
 ):
     """Mirrors /track's core logic for an auto-detected pick - posts via
     channel.send() since there's no interaction to reply to, and has no
@@ -443,10 +443,29 @@ async def _auto_track(
     opposite bounds from auto-track's own "never finished" default - see
     that function's docstring), and reports a miss immediately instead of
     queuing a 24h retry, since a manual command has an interaction to reply
-    to right away rather than a silent channel.send()."""
+    to right away rather than a silent channel.send().
+
+    game_id (also /tracktoday-only) bypasses find_match_for_team's own
+    bulk-list team search entirely, going straight to the per-game detail
+    call instead - confirmed live: 365scores' bulk games/current list can
+    have its own multi-minute outage (empty response, no paging - see
+    _fetch_games_for_sport's own comment) while the exact same game's
+    per-game detail page keeps working fine, both on their site and via
+    _get_game_detail. Lets a user who already has the game id from
+    365scores' own match URL (the #id=... suffix) track it immediately
+    instead of waiting out the bulk list's outage."""
     if not manual and pendingtrack.is_queued(channel.id, sport_value, team, total_direction, total_line, team_total):
         botlog.event(f"⏭️ Skipped: **{team}** ({sport_value}) — already queued, waiting for its match to be found")
         return "skipped"
+    if game_id is not None:
+        game = await asyncio.to_thread(scores365._get_game_detail, game_id)
+        if not game:
+            botlog.event(f"❌ Not tracked: **{team}** ({sport_value}) — game `{game_id}` not found on 365scores")
+            return
+        result = (game, game.get("sportId"))
+        return await _complete_track(
+            channel, sport_value, team, result, total_direction, total_line, team_total, section, label, origin_channel_id,
+        )
     find_kwargs = {"days_ahead": 0, "days_back": 1, "allow_finished": True} if manual else {}
     try:
         result = await asyncio.to_thread(scores365.find_match_for_team, team, sport_value, **find_kwargs)
@@ -1778,6 +1797,7 @@ async def _report_not_tracked_lines(message: discord.Message, raw_lines: list[st
 async def _dispatch_pick(
     target_channel: discord.abc.Messageable, pick: dict,
     section: Optional[str], label: Optional[str], origin_channel_id: Optional[int], manual: bool = False,
+    game_id: Optional[str] = None,
 ) -> Optional[int | str]:
     """Routes one already-parsed pick to its tracker, mirroring exactly
     which _auto_* function on_message would have called - shared with
@@ -1799,19 +1819,22 @@ async def _dispatch_pick(
     docstring for what that changes. Not accepted for soccer_playerprops
     (see _auto_soccer_playerprops' own narrower live+imminent-only
     architecture) - /tracktoday rejects that combination before ever
-    reaching here."""
+    reaching here.
+
+    game_id (also /tracktoday-only, and only wired to the three "track"-
+    family kinds below) - see _auto_track's own docstring."""
     try:
         if pick["kind"] == "track":
-            return await _auto_track(target_channel, pick["sport"], pick["team"], section=section, label=label, origin_channel_id=origin_channel_id, manual=manual)
+            return await _auto_track(target_channel, pick["sport"], pick["team"], section=section, label=label, origin_channel_id=origin_channel_id, manual=manual, game_id=game_id)
         elif pick["kind"] == "total":
             return await _auto_track(
                 target_channel, pick["sport"], pick["team"], pick["direction"], pick["line"],
-                section=section, label=label, origin_channel_id=origin_channel_id, manual=manual,
+                section=section, label=label, origin_channel_id=origin_channel_id, manual=manual, game_id=game_id,
             )
         elif pick["kind"] == "team_total":
             return await _auto_track(
                 target_channel, pick["sport"], pick["team"], pick["direction"], pick["line"], pick["team"],
-                section=section, label=label, origin_channel_id=origin_channel_id, manual=manual,
+                section=section, label=label, origin_channel_id=origin_channel_id, manual=manual, game_id=game_id,
             )
         elif pick["kind"] == "f5_moneyline":
             return await _auto_f5(target_channel, pick["sport"], pick["team"], section=section, label=label, origin_channel_id=origin_channel_id, manual=manual)
@@ -2199,20 +2222,27 @@ _TRACKTODAY_SPORT_CHOICES = [
 @app_commands.describe(
     sport="Sport/league the pick is for",
     pick='The pick itself, e.g. "Los Angeles ML" or "Fernando Tatis Jr. Over 0.5 Total Bases"',
+    game_id='Optional: 365scores game id (from the match URL\'s "#id=...") to track directly, '
+            "bypassing team-name search - only used for a plain ML/Total/Team Total pick",
 )
 @app_commands.choices(sport=_TRACKTODAY_SPORT_CHOICES)
-async def tracktoday(interaction: discord.Interaction, sport: app_commands.Choice[str], pick: str):
+async def tracktoday(interaction: discord.Interaction, sport: app_commands.Choice[str], pick: str, game_id: Optional[str] = None):
     """Unlike every _auto_* pick this bot detects on its own (which only
     ever attach to a live or not-yet-started match - see find_match_for_
     team/find_current_event_id's own docstrings), this deliberately also
     accepts an already-finished match from today or yesterday, for a pick
     the user wants tracked/graded after the fact. Reuses picks.py's exact
     parser by reconstructing the same "[Category] description" line format
-    every picks-channel message already uses - see picks.parse_pick_line."""
+    every picks-channel message already uses - see picks.parse_pick_line.
+
+    game_id is the escape hatch for 365scores' own bulk-list outages (see
+    _auto_track's own docstring) - team-name search is unusable while that
+    list is broken, but a game id copied from 365scores' own match page
+    still resolves fine via the per-game detail call."""
     if not _channel_allowed(interaction):
         await _reject_wrong_channel(interaction)
         return
-    _log_command(interaction, sport=sport.name, pick=pick)
+    _log_command(interaction, sport=sport.name, pick=pick, game_id=game_id)
 
     parsed = picks.parse_pick_line(f"[{sport.value}] {pick.strip()}")
     if not parsed:
@@ -2229,10 +2259,16 @@ async def tracktoday(interaction: discord.Interaction, sport: app_commands.Choic
             ephemeral=True,
         )
         return
+    if game_id is not None and parsed["kind"] not in ("track", "total", "team_total"):
+        await interaction.response.send_message(
+            "game_id is only supported for a plain ML/Total/Team Total pick right now.", ephemeral=True,
+        )
+        return
 
     await interaction.response.defer(ephemeral=True)
     result = await _dispatch_pick(
         interaction.channel, parsed, section=None, label=picks.clean_label(pick.strip()), origin_channel_id=interaction.channel_id, manual=True,
+        game_id=game_id,
     )
     if result is None:
         await interaction.followup.send(
