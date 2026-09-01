@@ -947,6 +947,33 @@ class InningOneTotalRuns(unittest.TestCase):
         })
 
 
+class InningOneTotalRunsNonMlbLeague(unittest.TestCase):
+    """A plain [MLB]/[Baseball] header stays "baseball" (ESPN-backed
+    inningtracker.py); [KBO]/[NPB] instead route "sport" to the matching
+    key so bot.py sends it to inningtotaltracker.py's 365scores-backed
+    grading instead - ESPN has no non-MLB baseball league at all, so a
+    KBO/NPB pick silently failed to find its team there (confirmed live:
+    "team not found on ESPN" for a real Chiba Lotte Marines NRFI pick)."""
+
+    def test_kbo_header_tags_sport_kbo(self):
+        pick = picks.parse_pick_line("[KBO] Doosan Bears vs LG Twins - NRFI - No Runs 1st Inning")
+        self.assertEqual(pick["sport"], "kbo")
+
+    def test_npb_header_tags_sport_npb(self):
+        pick = picks.parse_pick_line("[NPB] Chiba Lotte Marines vs Saitama Seibu Lions - Under 0.5 1st Inning Total")
+        self.assertEqual(pick["sport"], "npb")
+        self.assertEqual(pick["pick_type"], "NRFI")
+
+    def test_npb_header_tags_sport_npb_for_the_general_total_market(self):
+        pick = picks.parse_pick_line("[NPB] Chiba Lotte Marines vs Saitama Seibu Lions - Over 1.5 1st Inning")
+        self.assertEqual(pick["sport"], "npb")
+        self.assertEqual(pick["pick_type"], "INNING1_TOTAL_OVER")
+
+    def test_mlb_header_still_tags_sport_baseball(self):
+        pick = picks.parse_pick_line("[MLB] Philadelphia Phillies vs Miami Marlins - NRFI - No Runs 1st Inning")
+        self.assertEqual(pick["sport"], "baseball")
+
+
 class NamedTeamTotalCanonicalName(unittest.TestCase):
     """The named-team-total regex's capture can pull in trailing wording
     along with the real team name - names_match still validated it

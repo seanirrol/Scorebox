@@ -938,6 +938,17 @@ _PROP_SPORT_OVERRIDE = {
     "kbo": "kbo",
 }
 
+# 1st-inning markets (YRFI/NRFI, "1st Inning Total Runs") are backed by
+# ESPN for plain "baseball"/"mlb" (inningtracker.py), which has no non-MLB
+# league at all - a KBO/NPB pick needs to route to inningtotaltracker.py's
+# 365scores-backed grading instead (see that module's own docstring).
+# Distinct from _PROP_SPORT_OVERRIDE above since this only ever affects
+# inning_runs picks, never player props.
+_INNING1_SPORT_OVERRIDE = {
+    "kbo": "kbo",
+    "npb": "npb",
+}
+
 
 def _strip_trailing_parens(text: str) -> str:
     """Strips one balanced trailing "(...)" group - scans backward from
@@ -1393,7 +1404,7 @@ def _is_yrfi_header(text: str) -> bool:
     return "yrfi" in lowered and "nrfi" in lowered
 
 
-def _parse_yrfi_line(text: str) -> Optional[dict]:
+def _parse_yrfi_line(text: str, sport_key: Optional[str] = None) -> Optional[dict]:
     cleaned = _clean_line(text)
     m = _YRFI_LINE_RE.match(cleaned)
     if not m:
@@ -1401,10 +1412,11 @@ def _parse_yrfi_line(text: str) -> Optional[dict]:
     team = m.group(1).strip()
     if not team:
         return None
-    return {"kind": "inning_runs", "sport": "baseball", "team": team, "pick_type": m.group(2).upper()}
+    sport = _INNING1_SPORT_OVERRIDE.get(sport_key, "baseball")
+    return {"kind": "inning_runs", "sport": sport, "team": team, "pick_type": m.group(2).upper()}
 
 
-def _parse_inning_run_total(description: str) -> Optional[dict]:
+def _parse_inning_run_total(description: str, sport_key: Optional[str] = None) -> Optional[dict]:
     text = _clean_line(description)
     m = _INNING_RUN_TOTAL_RE.match(text)
     if not m:
@@ -1412,6 +1424,7 @@ def _parse_inning_run_total(description: str) -> Optional[dict]:
     team = m.group(1).strip()
     if not team:
         return None
+    sport = _INNING1_SPORT_OVERRIDE.get(sport_key, "baseball")
     direction = m.group(3).lower()
     line = float(m.group(4))
     if line == 0.5:
@@ -1419,9 +1432,9 @@ def _parse_inning_run_total(description: str) -> Optional[dict]:
         # route through the same pick_type so it dedupes against/matches an
         # explicit "NRFI"/"YRFI" line for the same event (see _YRFI_LINE_RE).
         pick_type = "YRFI" if direction == "over" else "NRFI"
-        return {"kind": "inning_runs", "sport": "baseball", "team": team, "pick_type": pick_type}
+        return {"kind": "inning_runs", "sport": sport, "team": team, "pick_type": pick_type}
     pick_type = "INNING1_TOTAL_OVER" if direction == "over" else "INNING1_TOTAL_UNDER"
-    return {"kind": "inning_runs", "sport": "baseball", "team": team, "pick_type": pick_type, "line": line}
+    return {"kind": "inning_runs", "sport": sport, "team": team, "pick_type": pick_type, "line": line}
 
 
 def _parse_inning1_team_pick(description: str) -> Optional[str]:
@@ -2216,7 +2229,7 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
         return _parse_esports_pick(description, sport)
 
     if sport == "baseball":
-        inning_total = _parse_inning_run_total(description)
+        inning_total = _parse_inning_run_total(description, sport_key)
         if inning_total:
             return inning_total
 
@@ -2228,7 +2241,7 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
         # by _is_simple_pick_name for containing a digit ("1st") - confirmed
         # live, a real "New York Mets vs Miami Marlins - NRFI - No Runs 1st
         # Inning" pick silently never posted.
-        yrfi_inline = _parse_yrfi_line(description)
+        yrfi_inline = _parse_yrfi_line(description, sport_key)
         if yrfi_inline:
             return yrfi_inline
 

@@ -20,6 +20,7 @@ PROPS_FILE = os.path.join(_DIR, "props_state.json")
 INNINGS_FILE = os.path.join(_DIR, "innings_state.json")
 F5_FILE = os.path.join(_DIR, "f5_state.json")
 INNING1_FILE = os.path.join(_DIR, "inning1_state.json")
+INNING_TOTAL_FILE = os.path.join(_DIR, "inning_total_state.json")
 SET1_FILE = os.path.join(_DIR, "set1_state.json")
 TENNIS_PROPS_FILE = os.path.join(_DIR, "tennis_props_state.json")
 PENDING_DELETE_FILE = os.path.join(_DIR, "pending_delete_state.json")
@@ -93,6 +94,14 @@ def load_inning1() -> dict[str, Any]:
 
 def save_inning1(data: dict[str, Any]):
     _save(INNING1_FILE, data)
+
+
+def load_inning_total() -> dict[str, Any]:
+    return _load(INNING_TOTAL_FILE)
+
+
+def save_inning_total(data: dict[str, Any]):
+    _save(INNING_TOTAL_FILE, data)
 
 
 def load_set1() -> dict[str, Any]:
