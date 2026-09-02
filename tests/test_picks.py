@@ -997,6 +997,27 @@ class InningOneTotalRunsNonMlbLeague(unittest.TestCase):
         self.assertEqual(pick["sport"], "baseball")
 
 
+class BaseballRunLineSpread(unittest.TestCase):
+    """Full-game run-line/handicap picks weren't recognized for baseball at
+    all - _TEAM_SPREAD_NOMATCHUP_RE/_TEAM_SPREAD_MATCHUP_RE were only wired
+    for nfl/basketball/volleyball (see _parse_description), so a real
+    "Washington Nationals vs Atlanta Braves - Atlanta Braves +1.5 Handicap"
+    pick fell all the way through to a bare moneyline on Washington
+    Nationals - the WRONG team, with the handicap dropped entirely."""
+
+    def test_matchup_with_handicap_wording(self):
+        pick = picks.parse_pick_line("[MLB] Washington Nationals vs Atlanta Braves - Atlanta Braves +1.5 Handicap")
+        self.assertEqual(pick, {"kind": "team_total", "sport": "baseball", "team": "Atlanta Braves", "direction": "spread", "line": 1.5})
+
+    def test_matchup_without_trailing_word(self):
+        pick = picks.parse_pick_line("[MLB] Washington Nationals vs Atlanta Braves - Atlanta Braves +1.5")
+        self.assertEqual(pick, {"kind": "team_total", "sport": "baseball", "team": "Atlanta Braves", "direction": "spread", "line": 1.5})
+
+    def test_no_matchup_with_handicap_wording(self):
+        pick = picks.parse_pick_line("[MLB] Atlanta Braves +1.5 Handicap")
+        self.assertEqual(pick, {"kind": "team_total", "sport": "baseball", "team": "Atlanta Braves", "direction": "spread", "line": 1.5})
+
+
 class NamedTeamTotalCanonicalName(unittest.TestCase):
     """The named-team-total regex's capture can pull in trailing wording
     along with the real team name - names_match still validated it

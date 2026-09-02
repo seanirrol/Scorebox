@@ -671,14 +671,19 @@ _DOUBLE_RESULT_SAME_TEAM_RE = re.compile(
 # Still scoped narrowly rather than opened to every sport - not yet
 # confirmed live anywhere else.
 #
-# An optional trailing "Points"/"Pts"/"Runs"/"Goals" is allowed after the
-# number - confirmed live, "Las Vegas Aces -1.5 Points" silently swallowed
-# the whole line (including the spread number) as a literal team name,
-# since that's just this sport's own scoring unit decorating a plain
-# full-game spread, not a different market. Deliberately NOT a bare \w+
-# (which would also match "1st"/"Half"/"Q1"-style period-market suffixes
-# and misfile a half/quarter spread as a full-game one).
-_TEAM_SPREAD_NOMATCHUP_RE = re.compile(r"^(.+?)\s+([+-]\d+(?:\.\d+)?)(?:\s+(?:Points|Pts|Runs|Goals))?\s*$", re.IGNORECASE)
+# An optional trailing "Points"/"Pts"/"Runs"/"Goals"/"Handicap" is allowed
+# after the number - confirmed live, "Las Vegas Aces -1.5 Points" silently
+# swallowed the whole line (including the spread number) as a literal team
+# name, since that's just this sport's own scoring unit decorating a plain
+# full-game spread, not a different market. "Handicap" is the same idea
+# for baseball's own run-line wording (confirmed live: "Washington
+# Nationals vs Atlanta Braves - Atlanta Braves +1.5 Handicap" fell through
+# to a bare moneyline on Washington Nationals - the wrong team, spread
+# dropped entirely - since baseball wasn't even in this parser's own sport
+# list; see _parse_description). Deliberately NOT a bare \w+ (which would
+# also match "1st"/"Half"/"Q1"-style period-market suffixes and misfile a
+# half/quarter spread as a full-game one).
+_TEAM_SPREAD_NOMATCHUP_RE = re.compile(r"^(.+?)\s+([+-]\d+(?:\.\d+)?)(?:\s+(?:Points|Pts|Runs|Goals|Handicap))?\s*$", re.IGNORECASE)
 
 
 def _parse_team_spread_nomatchup_pick(sport: str, description: str) -> Optional[dict]:
@@ -713,7 +718,7 @@ def _parse_team_spread_nomatchup_pick(sport: str, description: str) -> Optional[
 # optional trailing scoring-unit word as the no-matchup version above, for
 # the same reason ("Broncos -3.5 Points").
 _TEAM_SPREAD_MATCHUP_RE = re.compile(
-    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s+-\s+(.+?)\s*\(?([+-]\d+(?:\.\d+)?)\)?(?:\s+(?:Points|Pts|Runs|Goals))?\s*$",
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s+-\s+(.+?)\s*\(?([+-]\d+(?:\.\d+)?)\)?(?:\s+(?:Points|Pts|Runs|Goals|Handicap))?\s*$",
     re.IGNORECASE,
 )
 
@@ -2277,13 +2282,17 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
         if ht_ft:
             return ht_ft
 
-    if sport in ("nfl", "basketball", "volleyball"):
+    if sport in ("nfl", "basketball", "volleyball", "baseball"):
         # Volleyball's own "Set Handicap" (e.g. "Turkey -1.5") is just a
         # plain full-game spread as far as grading goes - 365scores' own
         # "score" field for a volleyball match already IS sets won (see
         # scores365.grade_spread/main_scores), so it needs no dedicated
         # volleyball parser here, just the same shape already confirmed
-        # live for NFL/WNBA.
+        # live for NFL/WNBA. Baseball's own full-game run-line is the same
+        # story again - main_scores is already runs, so grade_spread just
+        # works (confirmed live: "Atlanta Braves +1.5 Handicap" fell all
+        # the way through to a bare wrong-team moneyline before baseball
+        # was added here - see this regex's own comment).
         spread = _parse_team_spread_nomatchup_pick(sport, description)
         if spread:
             return spread
