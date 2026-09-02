@@ -682,8 +682,20 @@ _DOUBLE_RESULT_SAME_TEAM_RE = re.compile(
 # dropped entirely - since baseball wasn't even in this parser's own sport
 # list; see _parse_description). Deliberately NOT a bare \w+ (which would
 # also match "1st"/"Half"/"Q1"-style period-market suffixes and misfile a
-# half/quarter spread as a full-game one).
-_TEAM_SPREAD_NOMATCHUP_RE = re.compile(r"^(.+?)\s+([+-]\d+(?:\.\d+)?)(?:\s+(?:Points|Pts|Runs|Goals|Handicap))?\s*$", re.IGNORECASE)
+# half/quarter spread as a full-game one) - unlike _TOTAL_LINE_RE's fully
+# generic trailing text, this needs to stay an enumerated allowlist so it
+# doesn't also swallow those period markers.
+#
+# "Incl. Extra Innings" (optionally parenthesized) is a further optional
+# tail after that - baseball's own qualifier for "the run-line/total
+# already covers extra innings, not just 9" - confirmed live, "Atlanta
+# Braves +1.5 Handicap Incl. Extra Innings" fell through the very same way
+# once "Handicap" alone was recognized but this trailing qualifier wasn't.
+_INCL_EXTRA_INNINGS_RE = r"(?:\s*\(?Incl\.?\s+Extra\s+Innings\)?)?"
+_TEAM_SPREAD_NOMATCHUP_RE = re.compile(
+    rf"^(.+?)\s+([+-]\d+(?:\.\d+)?)(?:\s+(?:Points|Pts|Runs|Goals|Handicap))?{_INCL_EXTRA_INNINGS_RE}\s*$",
+    re.IGNORECASE,
+)
 
 
 def _parse_team_spread_nomatchup_pick(sport: str, description: str) -> Optional[dict]:
@@ -718,7 +730,8 @@ def _parse_team_spread_nomatchup_pick(sport: str, description: str) -> Optional[
 # optional trailing scoring-unit word as the no-matchup version above, for
 # the same reason ("Broncos -3.5 Points").
 _TEAM_SPREAD_MATCHUP_RE = re.compile(
-    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s+-\s+(.+?)\s*\(?([+-]\d+(?:\.\d+)?)\)?(?:\s+(?:Points|Pts|Runs|Goals|Handicap))?\s*$",
+    rf"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s+-\s+(.+?)\s*\(?([+-]\d+(?:\.\d+)?)\)?"
+    rf"(?:\s+(?:Points|Pts|Runs|Goals|Handicap))?{_INCL_EXTRA_INNINGS_RE}\s*$",
     re.IGNORECASE,
 )
 

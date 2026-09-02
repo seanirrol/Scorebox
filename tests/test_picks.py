@@ -1017,6 +1017,24 @@ class BaseballRunLineSpread(unittest.TestCase):
         pick = picks.parse_pick_line("[MLB] Atlanta Braves +1.5 Handicap")
         self.assertEqual(pick, {"kind": "team_total", "sport": "baseball", "team": "Atlanta Braves", "direction": "spread", "line": 1.5})
 
+    def test_matchup_with_handicap_and_incl_extra_innings(self):
+        # Confirmed live: "Handicap" alone was recognized, but the further
+        # "Incl. Extra Innings" trailing qualifier wasn't, so this fell
+        # through the exact same way "Handicap" on its own used to.
+        pick = picks.parse_pick_line("[MLB] Washington Nationals vs Atlanta Braves - Atlanta Braves +1.5 Handicap Incl. Extra Innings")
+        self.assertEqual(pick, {"kind": "team_total", "sport": "baseball", "team": "Atlanta Braves", "direction": "spread", "line": 1.5})
+
+    def test_no_matchup_with_incl_extra_innings_and_no_unit_word(self):
+        pick = picks.parse_pick_line("[MLB] Atlanta Braves +1.5 Incl. Extra Innings")
+        self.assertEqual(pick, {"kind": "team_total", "sport": "baseball", "team": "Atlanta Braves", "direction": "spread", "line": 1.5})
+
+    def test_half_spread_still_not_misfiled_as_full_game(self):
+        # Not actually supported at all yet (pre-existing, unrelated gap) -
+        # this just confirms the new Incl.-Extra-Innings tail didn't loosen
+        # the trailing match enough to start swallowing a genuinely
+        # different period-scoped market as if it were a full-game spread.
+        self.assertIsNone(picks.parse_pick_line("[NFL] Denver Broncos -3.5 1st Half"))
+
 
 class NamedTeamTotalCanonicalName(unittest.TestCase):
     """The named-team-total regex's capture can pull in trailing wording
