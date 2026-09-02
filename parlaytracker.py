@@ -78,6 +78,11 @@ _LEG_SQUARES = {"won": "🟩", "lost": "🟥", "push": "⬜", "void": "⬜"}
 
 MAX_IDENTIFIER_LENGTH = 14
 
+# How many consecutive polls a resolved leg must report "actually still
+# pending" before report_leg_progress acts on it - see that function's own
+# comment for why a single poll isn't trusted on its own.
+_RESUME_CONFIRMATION_POLLS = 2
+
 
 def _key(channel_id: int, identifier: str) -> str:
     return f"{channel_id}:{identifier}"
@@ -573,6 +578,24 @@ async def report_leg_progress(
                 # total from before), which would have finalized and
                 # deleted the group's own tracking one leg early, silently
                 # dropping whichever leg finished last.
+                #
+                # Only act on this once the SAME leg has reported "actually
+                # still pending" on _RESUME_CONFIRMATION_POLLS consecutive
+                # calls, not the first one - confirmed live, a genuinely-
+                # WON prop leg (ESPN itself confirmed Final moments later)
+                # flapped back to pending for exactly one poll, undoing its
+                # counters and forcing a fresh repost (the card was already
+                # past Discord's 1h edit cap) that read as spam for a leg
+                # that was never really unresolved at all. A single-poll
+                # blip like that gets silently absorbed here instead - the
+                # card keeps showing the old (correct) terminal result
+                # until a second consecutive poll actually confirms it.
+                flap_count = legs[leg_id].get("_flap_count", 0) + 1
+                if flap_count < _RESUME_CONFIRMATION_POLLS:
+                    legs[leg_id]["_flap_count"] = flap_count
+                    data[key] = group
+                    state.save_parlays(data)
+                    continue
                 group["resolved_legs"] = max(group["resolved_legs"] - 1, 0)
                 if previous_status == "won":
                     group["won"] = max(group["won"] - 1, 0)

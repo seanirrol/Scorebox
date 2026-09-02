@@ -217,7 +217,13 @@ class ReportLegProgressUnResolvesAStaleTerminalLeg(unittest.TestCase):
     async def _fake_post(self, channel, channel_id, group):
         return 999
 
-    def _report(self, leg_id_status: str, detail: str = "LIVE, Set 3"):
+    def _report(self, leg_id_status: str, detail: str = "LIVE, Set 3", calls: int = 2):
+        # calls=2 (the default) matches real usage - report_leg_progress
+        # now requires _RESUME_CONFIRMATION_POLLS consecutive "still
+        # pending" reports before it actually gives back a resolved leg's
+        # counters (see that function's own comment for why a single call
+        # isn't trusted). Pass calls=1 to exercise the single-poll,
+        # not-yet-confirmed case instead.
         key = "555:testparlay"
         self._data[key] = {
             "channel_id": 555, "identifier": "testparlay", "total_legs": 5, "resolved_legs": 3,
@@ -229,10 +235,19 @@ class ReportLegProgressUnResolvesAStaleTerminalLeg(unittest.TestCase):
                 },
             },
         }
-        asyncio.run(parlaytracker.report_leg_progress(
-            None, 555, None, "tracker", "555:4612254:ml:Hungary", "Latvia vs Hungary - Hungary ML", detail, ["testparlay"],
-        ))
+        for _ in range(calls):
+            asyncio.run(parlaytracker.report_leg_progress(
+                None, 555, None, "tracker", "555:4612254:ml:Hungary", "Latvia vs Hungary - Hungary ML", detail, ["testparlay"],
+            ))
         return self._data["555:testparlay"]
+
+    def test_a_single_poll_does_not_yet_give_back_the_counters(self):
+        # The debounce itself - a lone transient blip must not visibly
+        # touch the group at all, only a confirmed second poll should.
+        group = self._report("won", calls=1)
+        self.assertEqual(group["resolved_legs"], 3)
+        self.assertEqual(group["won"], 2)
+        self.assertEqual(group["legs"]["tracker:555:4612254:ml:Hungary"]["status"], "won")
 
     def test_a_voided_leg_reporting_live_again_gives_back_its_void_count(self):
         group = self._report("void")
