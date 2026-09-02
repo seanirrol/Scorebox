@@ -2861,20 +2861,37 @@ async def _gather_tracked_items(channel_id: int) -> list[dict]:
 @tree.command(name="untrack", description="Stop auto-updating one or more tracked matches/player props in this channel")
 @app_commands.describe(
     game_id="Game ID(s) shown by /tracked - separate multiple with commas or spaces",
-    player="Player name, to target one specific player prop if a game has more than one tracked (optional)",
+    player="Player/team name - disambiguates among active trackers under game_id, "
+           "or (with game_id omitted) cancels a still-QUEUED pick that hasn't found its match yet",
 )
-async def untrack(interaction: discord.Interaction, game_id: str, player: Optional[str] = None):
+async def untrack(interaction: discord.Interaction, game_id: Optional[str] = None, player: Optional[str] = None):
     if not _channel_allowed(interaction):
         await _reject_wrong_channel(interaction)
         return
     _log_command(interaction, game_id=game_id, player=player)
 
-    game_ids = [gid for gid in re.split(r"[,\s]+", game_id.strip()) if gid]
-    if not game_ids:
-        await interaction.response.send_message("No game ID given.", ephemeral=True)
+    if not game_id and not player:
+        await interaction.response.send_message("Provide a game ID, a player/team name, or both.", ephemeral=True)
         return
 
     lines = []
+    if not game_id:
+        # No game_id at all - nothing actively tracked to look up, so
+        # player is instead a filter over pendingauto's still-queued picks
+        # (never found a match yet, so they have no game_id to give).
+        matches = pendingauto.find_matching(interaction.channel_id, player)
+        if not matches:
+            await interaction.response.send_message(f"No queued pick matching **{player}** in this channel.", ephemeral=True)
+            return
+        cancelled = []
+        for entry_id, entry in matches:
+            if pendingauto.cancel(entry_id):
+                cancelled.append(pendingauto.display_name(entry["payload"]))
+        botlog.event(f"🗑️ Cancelled {len(cancelled)} queued pick(s) (manual /untrack): {', '.join(cancelled)} — by **{interaction.user}**")
+        await interaction.response.send_message(f"Cancelled {len(cancelled)} queued pick(s): {', '.join(cancelled)}", ephemeral=True)
+        return
+
+    game_ids = [gid for gid in re.split(r"[,\s]+", game_id.strip()) if gid]
     for gid in game_ids:
         stopped = _untrack_one(interaction.channel_id, gid, player)
         if stopped:

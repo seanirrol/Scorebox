@@ -137,5 +137,57 @@ class ResumeAll(PendingAutoTestCase):
         self.assertEqual(len(pendingauto.list_pending()), 1)
 
 
+class FindMatchingAndCancel(PendingAutoTestCase):
+    """The /untrack no-game_id branch cancels a still-queued pick this way -
+    it never has a game_id to look up by (that's exactly why it's queued),
+    so player/team name is the only handle available."""
+
+    def test_find_matching_scopes_to_the_given_channel(self):
+        self._queue("playerprops", {"channel_id": 1, "player": "Fernando Tatis Jr."})
+        self._queue("playerprops", {"channel_id": 2, "player": "Fernando Tatis Jr."})
+        matches = pendingauto.find_matching(1)
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0][1]["payload"]["channel_id"], 1)
+
+    def test_find_matching_filters_by_name_case_insensitively(self):
+        self._queue("playerprops", {"channel_id": 1, "player": "Fernando Tatis Jr."})
+        self._queue("playerprops", {"channel_id": 1, "player": "Casey Mize"})
+        matches = pendingauto.find_matching(1, "tatis")
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0][1]["payload"]["player"], "Fernando Tatis Jr.")
+
+    def test_find_matching_falls_back_to_team_for_non_prop_kinds(self):
+        self._queue("f5", {"channel_id": 1, "team": "Denver Broncos"})
+        matches = pendingauto.find_matching(1, "broncos")
+        self.assertEqual(len(matches), 1)
+
+    def test_no_name_filter_returns_every_entry_in_the_channel(self):
+        self._queue("playerprops", {"channel_id": 1, "player": "Fernando Tatis Jr."})
+        self._queue("f5", {"channel_id": 1, "team": "Denver Broncos"})
+        self.assertEqual(len(pendingauto.find_matching(1)), 2)
+
+    def test_cancel_removes_the_entry_and_stops_its_task(self):
+        self._queue("playerprops", {"channel_id": 1, "player": "Fernando Tatis Jr."})
+        entry_id = next(iter(state.load_pending_auto()))
+        self.assertIn(entry_id, pendingauto._active_tasks)
+        self.assertTrue(pendingauto.cancel(entry_id))
+        self.assertNotIn(entry_id, pendingauto._active_tasks)
+        self.assertEqual(pendingauto.list_pending(), [])
+
+    def test_cancel_on_an_unknown_entry_id_returns_false(self):
+        self.assertFalse(pendingauto.cancel("not-a-real-id"))
+
+
+class DisplayName(unittest.TestCase):
+    def test_prefers_player(self):
+        self.assertEqual(pendingauto.display_name({"player": "Fernando Tatis Jr.", "team": "San Diego Padres"}), "Fernando Tatis Jr.")
+
+    def test_falls_back_to_team(self):
+        self.assertEqual(pendingauto.display_name({"team": "Denver Broncos"}), "Denver Broncos")
+
+    def test_falls_back_to_unknown(self):
+        self.assertEqual(pendingauto.display_name({}), "?")
+
+
 if __name__ == "__main__":
     unittest.main()
