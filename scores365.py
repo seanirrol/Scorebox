@@ -1016,7 +1016,13 @@ def find_match_for_team(
         except ScoresError:
             continue
         for game in _candidates_for_team(games, team):
-            status = map_status_type(game.get("statusGroup"))
+            # statusText matters here, not just statusGroup - confirmed
+            # live: a rain-delayed tennis match ("Interrupted") reads as
+            # "finished" without it (map_status_type's own ambiguous-group
+            # default), silently excluding a genuinely still-live match
+            # from every auto-track search - it never surfaced as "found
+            # but rejected", just "no match found" with no way to tell why.
+            status = map_status_type(game.get("statusGroup"), game.get("statusText"))
             date = eastern_date(start_epoch(game))
             if status == "finished":
                 if not allow_finished or date < earliest_finished_date or date > today:

@@ -632,17 +632,20 @@ class FindMatchForTeam(unittest.TestCase):
     def tearDown(self):
         scores365._fetch_games_for_sport = self._orig_fetch
 
-    def _game(self, home, away, status_group, days_offset, hour=18):
+    def _game(self, home, away, status_group, days_offset, hour=18, status_text=None):
         # A KST/Eastern-agnostic "days from today, at a fixed local hour"
         # anchor - avoids the test being sensitive to what time it's
         # actually run at, the same reasoning as koreabaseball.py's own
         # 2 PM KST anchor.
         now = datetime.datetime.now(tz=scores365.EASTERN)
         start = (now + datetime.timedelta(days=days_offset)).replace(hour=hour, minute=0, second=0, microsecond=0)
-        return {
+        game = {
             "homeCompetitor": {"name": home}, "awayCompetitor": {"name": away},
             "statusGroup": status_group, "startTime": start.astimezone(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
         }
+        if status_text is not None:
+            game["statusText"] = status_text
+        return game
 
     def test_default_never_returns_an_already_finished_game(self):
         # The exact bug this was built to stop: confirmed live, a team
@@ -707,6 +710,19 @@ class FindMatchForTeam(unittest.TestCase):
             "Milwaukee Brewers", "baseball", days_ahead=0, days_back=1, allow_finished=True,
         )
         self.assertIsNone(result)
+
+    def test_interrupted_match_is_found_as_still_in_progress(self):
+        # statusGroup alone maps an "Interrupted" (rain delay) match to
+        # "finished" - map_status_type needs the statusText hint too, or a
+        # genuinely still-live match (default allow_finished=False) is
+        # silently excluded, indistinguishable from a real finished game.
+        # Confirmed live: a real "Fabian Marozsan vs Michael Zheng" US Open
+        # match, actually mid-rain-delay, came back "no match found" this
+        # exact way.
+        self._games = [self._game("Fabian Marozsan", "Michael Zheng", status_group=4, days_offset=0, status_text="Interrupted")]
+        result = scores365.find_match_for_team("Fabian Marozsan", "tennis")
+        self.assertIsNotNone(result)
+        self.assertEqual(result[0]["homeCompetitor"]["name"], "Fabian Marozsan")
 
     def test_live_game_always_wins_regardless_of_bounds(self):
         self._games = [

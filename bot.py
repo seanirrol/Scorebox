@@ -1394,7 +1394,7 @@ async def _auto_tennis_market(
     channel: discord.abc.Messageable, team: str, market: str,
     direction: Optional[str] = None, line: Optional[float] = None,
     section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
-    manual: bool = False, queue_on_miss: bool = True, sport: str = "tennis",
+    manual: bool = False, queue_on_miss: bool = True, sport: str = "tennis", game_id: Optional[str] = None,
 ):
     """Tennis "extra market" picks (1st Set ML/Total Games, Match Total
     Games, Win a Set) all settle on some part of the match rather than the
@@ -1409,15 +1409,29 @@ async def _auto_tennis_market(
     set1_point_handicap market (see settracker.py) - settracker's markets
     are generic enough (sport_id already threaded through for rendering)
     that this dispatcher didn't need a second copy for the one volleyball
-    market that also fits this "settles on part of the match" shape."""
-    find_kwargs = {"days_ahead": 0, "days_back": 1, "allow_finished": True} if manual else {}
-    try:
-        result = await asyncio.to_thread(scores365.find_match_for_team, team, sport, **find_kwargs)
-    except scores365.ScoresError as e:
-        log.info("Auto-tennis-market (%s): couldn't reach 365scores for '%s': %s", market, team, e)
-        if manual:
-            botlog.event(f"❌ Not tracked ({market}): **{team}** — couldn't reach 365scores: {e}")
-        return
+    market that also fits this "settles on part of the match" shape.
+
+    game_id (also /tracktoday-only) - see _auto_track's own docstring for
+    why this exists. Confirmed live: a real "Interrupted" (rain delay)
+    tennis match sat unfindable by team-name search even though
+    map_status_type already reads it as "inprogress" - some other filter
+    in find_match_for_team's own candidate scoring still excluded it, and
+    the per-game detail call resolved it immediately."""
+    if game_id is not None:
+        game = await asyncio.to_thread(scores365._get_game_detail, game_id)
+        if not game:
+            botlog.event(f"❌ Not tracked ({market}): **{team}** — game `{game_id}` not found on 365scores")
+            return
+        result = (game, game.get("sportId"))
+    else:
+        find_kwargs = {"days_ahead": 0, "days_back": 1, "allow_finished": True} if manual else {}
+        try:
+            result = await asyncio.to_thread(scores365.find_match_for_team, team, sport, **find_kwargs)
+        except scores365.ScoresError as e:
+            log.info("Auto-tennis-market (%s): couldn't reach 365scores for '%s': %s", market, team, e)
+            if manual:
+                botlog.event(f"❌ Not tracked ({market}): **{team}** — couldn't reach 365scores: {e}")
+            return
     if not result:
         payload = {
             "channel_id": channel.id, "team": team, "market": market, "direction": direction, "line": line,
@@ -1913,50 +1927,50 @@ async def _dispatch_pick(
         elif pick["kind"] == "inning1_result":
             return await _auto_inning1_result(target_channel, pick["team"], pick["pick"], section=section, label=label, origin_channel_id=origin_channel_id, manual=manual)
         elif pick["kind"] == "set1_moneyline":
-            return await _auto_tennis_market(target_channel, pick["team"], "set1_moneyline", section=section, label=label, origin_channel_id=origin_channel_id, manual=manual)
+            return await _auto_tennis_market(target_channel, pick["team"], "set1_moneyline", section=section, label=label, origin_channel_id=origin_channel_id, manual=manual, game_id=game_id)
         elif pick["kind"] == "tennis_set1_total_games":
             return await _auto_tennis_market(
                 target_channel, pick["team"], "set1_total_games", pick["direction"], pick["line"],
-                section=section, label=label, origin_channel_id=origin_channel_id, manual=manual,
+                section=section, label=label, origin_channel_id=origin_channel_id, manual=manual, game_id=game_id,
             )
         elif pick["kind"] == "tennis_match_total_games":
             return await _auto_tennis_market(
                 target_channel, pick["team"], "match_total_games", pick["direction"], pick["line"],
-                section=section, label=label, origin_channel_id=origin_channel_id, manual=manual,
+                section=section, label=label, origin_channel_id=origin_channel_id, manual=manual, game_id=game_id,
             )
         elif pick["kind"] == "tennis_player_total_games":
             return await _auto_tennis_market(
                 target_channel, pick["team"], "player_total_games", pick["direction"], pick["line"],
-                section=section, label=label, origin_channel_id=origin_channel_id, manual=manual,
+                section=section, label=label, origin_channel_id=origin_channel_id, manual=manual, game_id=game_id,
             )
         elif pick["kind"] == "tennis_win_a_set":
             return await _auto_tennis_market(
-                target_channel, pick["team"], "win_a_set", pick["direction"], section=section, label=label, origin_channel_id=origin_channel_id, manual=manual,
+                target_channel, pick["team"], "win_a_set", pick["direction"], section=section, label=label, origin_channel_id=origin_channel_id, manual=manual, game_id=game_id,
             )
         elif pick["kind"] == "tennis_games_handicap":
             return await _auto_tennis_market(
                 target_channel, pick["team"], "games_handicap", None, pick["line"],
-                section=section, label=label, origin_channel_id=origin_channel_id, manual=manual,
+                section=section, label=label, origin_channel_id=origin_channel_id, manual=manual, game_id=game_id,
             )
         elif pick["kind"] == "tennis_sets_handicap":
             return await _auto_tennis_market(
                 target_channel, pick["team"], "sets_handicap", None, pick["line"],
-                section=section, label=label, origin_channel_id=origin_channel_id, manual=manual,
+                section=section, label=label, origin_channel_id=origin_channel_id, manual=manual, game_id=game_id,
             )
         elif pick["kind"] == "volleyball_set1_handicap":
             return await _auto_tennis_market(
                 target_channel, pick["team"], "set1_point_handicap", None, pick["line"],
-                section=section, label=label, origin_channel_id=origin_channel_id, manual=manual, sport="volleyball",
+                section=section, label=label, origin_channel_id=origin_channel_id, manual=manual, sport="volleyball", game_id=game_id,
             )
         elif pick["kind"] == "volleyball_match_point_handicap":
             return await _auto_tennis_market(
                 target_channel, pick["team"], "match_point_handicap", None, pick["line"],
-                section=section, label=label, origin_channel_id=origin_channel_id, manual=manual, sport="volleyball",
+                section=section, label=label, origin_channel_id=origin_channel_id, manual=manual, sport="volleyball", game_id=game_id,
             )
         elif pick["kind"] == "volleyball_match_point_total":
             return await _auto_tennis_market(
                 target_channel, pick["team"], "match_point_total", pick["direction"], pick["line"],
-                section=section, label=label, origin_channel_id=origin_channel_id, manual=manual, sport="volleyball",
+                section=section, label=label, origin_channel_id=origin_channel_id, manual=manual, sport="volleyball", game_id=game_id,
             )
         elif pick["kind"] == "tennis_playerprops":
             return await _auto_tennis_playerprops(
@@ -2254,7 +2268,7 @@ _TRACKTODAY_SPORT_CHOICES = [
     sport="Sport/league the pick is for",
     pick='The pick itself, e.g. "Los Angeles ML" or "Fernando Tatis Jr. Over 0.5 Total Bases"',
     game_id='Optional: 365scores game id (from the match URL\'s "#id=...") to track directly, '
-            "bypassing team-name search - only used for a plain ML/Total/Team Total pick",
+            "bypassing team-name search - not supported for player props or ESPN-backed markets",
 )
 @app_commands.choices(sport=_TRACKTODAY_SPORT_CHOICES)
 async def tracktoday(interaction: discord.Interaction, sport: app_commands.Choice[str], pick: str, game_id: Optional[str] = None):
@@ -2290,9 +2304,14 @@ async def tracktoday(interaction: discord.Interaction, sport: app_commands.Choic
             ephemeral=True,
         )
         return
-    if game_id is not None and parsed["kind"] not in ("track", "total", "team_total"):
+    _GAME_ID_SUPPORTED_KINDS = (
+        "track", "total", "team_total", "set1_moneyline", "tennis_set1_total_games", "tennis_match_total_games",
+        "tennis_player_total_games", "tennis_win_a_set", "tennis_games_handicap", "tennis_sets_handicap",
+        "volleyball_set1_handicap", "volleyball_match_point_handicap", "volleyball_match_point_total",
+    )
+    if game_id is not None and parsed["kind"] not in _GAME_ID_SUPPORTED_KINDS:
         await interaction.response.send_message(
-            "game_id is only supported for a plain ML/Total/Team Total pick right now.", ephemeral=True,
+            "game_id isn't supported for this pick type yet.", ephemeral=True,
         )
         return
 
