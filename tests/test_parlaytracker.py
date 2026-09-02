@@ -360,5 +360,59 @@ class PostOrEditSummaryThrottlesFailureReposts(unittest.TestCase):
         self.assertEqual(new_id, channel.sent[0].id)
 
 
+class AutoDeleteOldGroups(unittest.TestCase):
+    """auto_delete_old_groups sweeps every channel's /parlay groups for ones
+    at least AUTO_DELETE_AGE_SECONDS old - regardless of resolution status
+    (a still-active group just stops aggregating; its legs' own trackers
+    keep running independently). A group with no "created_at" at all (from
+    before this field existed) is treated as age 0/the epoch, not skipped,
+    so the pre-existing backlog gets swept on the first pass too."""
+
+    def setUp(self):
+        self._orig_load = parlaytracker.state.load_parlays
+        self._orig_save = parlaytracker.state.save_parlays
+        self._data: dict = {}
+        parlaytracker.state.load_parlays = lambda: self._data
+        parlaytracker.state.save_parlays = lambda data: self._data.update(data)
+
+    def tearDown(self):
+        parlaytracker.state.load_parlays = self._orig_load
+        parlaytracker.state.save_parlays = self._orig_save
+
+    def _group(self, channel_id, identifier, created_at=None):
+        entry = {
+            "channel_id": channel_id, "identifier": identifier, "total_legs": 1,
+            "resolved_legs": 0, "won": 0, "voided": 0, "lost": False,
+            "summary_message_id": 1, "legs": {},
+        }
+        if created_at is not None:
+            entry["created_at"] = created_at
+        self._data[f"{channel_id}:{identifier}"] = entry
+
+    def test_old_group_gets_deleted(self):
+        self._group(555, "old", created_at=time.time() - parlaytracker.AUTO_DELETE_AGE_SECONDS - 1)
+        deleted = asyncio.run(parlaytracker.auto_delete_old_groups())
+        self.assertEqual(deleted, [(555, "old")])
+        self.assertNotIn("555:old", self._data)
+
+    def test_recent_group_is_left_alone(self):
+        self._group(555, "fresh", created_at=time.time())
+        deleted = asyncio.run(parlaytracker.auto_delete_old_groups())
+        self.assertEqual(deleted, [])
+        self.assertIn("555:fresh", self._data)
+
+    def test_group_missing_created_at_is_treated_as_old(self):
+        self._group(555, "legacy", created_at=None)
+        deleted = asyncio.run(parlaytracker.auto_delete_old_groups())
+        self.assertEqual(deleted, [(555, "legacy")])
+
+    def test_active_group_is_deleted_too_regardless_of_pending_legs(self):
+        self._group(555, "stillgoing", created_at=time.time() - parlaytracker.AUTO_DELETE_AGE_SECONDS - 1)
+        self._data["555:stillgoing"]["resolved_legs"] = 0
+        self._data["555:stillgoing"]["total_legs"] = 3
+        deleted = asyncio.run(parlaytracker.auto_delete_old_groups())
+        self.assertEqual(deleted, [(555, "stillgoing")])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -18,6 +18,7 @@ import io
 import logging
 import re
 import time
+from collections import defaultdict
 from typing import NamedTuple, Optional
 
 import discord
@@ -171,6 +172,31 @@ async def _masterparlay_auto_archive_loop():
         await asyncio.sleep(masterparlay.seconds_until_next_parlay_day_cutoff(time.time()))
 
 
+_parlay_auto_delete_started = False
+_PARLAY_AUTO_DELETE_CHECK_INTERVAL_SECONDS = 6 * 3600  # 6 hours - plenty granular against a 2-day age threshold
+
+
+async def _parlay_auto_delete_loop():
+    """Runs forever, sweeping every channel's /parlay groups every 6h for
+    ones at least parlaytracker.AUTO_DELETE_AGE_SECONDS old (see that
+    function's own docstring for why this exists and why age, not
+    resolution status, is what triggers it)."""
+    await client.wait_until_ready()
+    while True:
+        try:
+            deleted = await parlaytracker.auto_delete_old_groups()
+            if deleted:
+                by_channel: dict[int, list[str]] = defaultdict(list)
+                for channel_id, identifier in deleted:
+                    by_channel[channel_id].append(identifier)
+                for channel_id, identifiers in by_channel.items():
+                    botlog.event(f"🎟️ Auto-deleted {len(identifiers)} stale parlay(s) in <#{channel_id}>: {', '.join(identifiers)}")
+        except Exception:
+            log.exception("Parlay auto-delete sweep failed")
+            botlog.event("⚠️ Parlay auto-delete sweep failed (see server logs)")
+        await asyncio.sleep(_PARLAY_AUTO_DELETE_CHECK_INTERVAL_SECONDS)
+
+
 async def _safe_resume(name: str, coro):
     """Isolates one module's resume_all() from every other - previously a
     single exception (e.g. a KeyError from an old persisted-state schema)
@@ -240,6 +266,11 @@ async def on_ready():
         # duplicate forever-loop each time.
         _masterparlay_auto_archive_started = True
         asyncio.create_task(_masterparlay_auto_archive_loop())
+
+    global _parlay_auto_delete_started
+    if not _parlay_auto_delete_started:
+        _parlay_auto_delete_started = True
+        asyncio.create_task(_parlay_auto_delete_loop())
 
 
 def _find_message_owner(card_message_id: int) -> Optional[tuple[str, tuple]]:

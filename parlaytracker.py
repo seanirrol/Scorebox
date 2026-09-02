@@ -275,7 +275,7 @@ async def create_group(channel_id: int, identifier: str) -> Optional[str]:
         data[key] = {
             "channel_id": channel_id, "identifier": identifier, "total_legs": 0,
             "resolved_legs": 0, "won": 0, "voided": 0, "lost": False,
-            "summary_message_id": None, "legs": {},
+            "summary_message_id": None, "legs": {}, "created_at": time.time(),
         }
         state.save_parlays(data)
     return None
@@ -296,6 +296,38 @@ async def delete_group(channel_id: int, identifier: str) -> str:
         data.pop(key, None)
         state.save_parlays(data)
     return f"Deleted parlay **{identifier}**."
+
+
+AUTO_DELETE_AGE_SECONDS = 2 * 24 * 3600  # 2 days
+
+
+async def auto_delete_old_groups() -> list[tuple[int, str]]:
+    """Drops every group at least AUTO_DELETE_AGE_SECONDS old, regardless of
+    whether its legs have all resolved yet - a manual /parlay group is a
+    scratch list the user builds up over a day's picks, not meant to
+    accumulate indefinitely (confirmed live: 14+ groups, some untouched for
+    days, cluttering /parlay action:List). A still-active group's own
+    trackers keep running and posting their own standalone cards regardless
+    - only this group's aggregation of them goes away, same as a manual
+    /parlay action:Delete on an active group already does.
+
+    A group created before this field existed has no "created_at" at all -
+    treated as age 0 (the epoch) rather than skipped, so the existing
+    backlog gets swept on the very first pass instead of silently never
+    aging out. Returns the (channel_id, identifier) pairs actually
+    deleted, for the caller to log."""
+    now = time.time()
+    deleted = []
+    data = state.load_parlays()
+    for key, group in list(data.items()):
+        if "identifier" not in group:
+            continue
+        if now - group.get("created_at", 0) < AUTO_DELETE_AGE_SECONDS:
+            continue
+        deleted.append((group["channel_id"], group["identifier"]))
+    for channel_id, identifier in deleted:
+        await delete_group(channel_id, identifier)
+    return deleted
 
 
 def _leg_square(leg: dict) -> str:
