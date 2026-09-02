@@ -2969,6 +2969,16 @@ async def parlay(
     if not _channel_allowed(interaction):
         await _reject_wrong_channel(interaction)
         return
+    # Every group lookup is an exact-match dict key (_key(channel_id,
+    # identifier) in parlaytracker.py) - untrimmed, incidental leading/
+    # trailing whitespace (easy to introduce copy-pasting an identifier
+    # from a prior reply, or just a stray space while typing) would
+    # silently create/look up a DIFFERENT group than the one intended,
+    # with no error to explain why. Stripped once here so every downstream
+    # action (create/add/remove/resolve/delete/list) sees the same
+    # normalized identifier.
+    if identifier is not None:
+        identifier = identifier.strip()
     _log_command(interaction, action=action.name, identifier=identifier, ids=ids, result=result.name if result else None)
     await interaction.response.defer(ephemeral=True)
 
