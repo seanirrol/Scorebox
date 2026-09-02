@@ -30,21 +30,28 @@ from typing import Awaitable, Callable, TypeVar
 
 T = TypeVar("T")
 
-# How many writes to the same channel are allowed in flight at once. Keeping
-# this low means a call stuck retrying a 429 blocks new attempts from piling
-# on top of it, instead of every tracker hammering the same saturated bucket.
-_MAX_CONCURRENT_WRITES_PER_CHANNEL = 2
+# How many writes to the same channel are allowed in flight at once. 1 (not
+# 2) - a call whose OWN request already got a 429 keeps retrying it
+# internally inside discord.py, invisible to _wait_for_rate_slot below (that
+# only gates when a NEW call is dispatched, not how many times discord.py
+# retries one already in flight) - with 2 concurrent slots, a second call
+# could still get dispatched (and 429'd) while the first is mid-retry,
+# adding to an already-saturated bucket instead of waiting it out. At 1, a
+# stuck retry fully blocks every other write to this channel until it
+# resolves, which is exactly the backpressure needed to let the bucket
+# drain instead of compounding it further.
+_MAX_CONCURRENT_WRITES_PER_CHANNEL = 1
 
 _semaphores: dict[int, asyncio.Semaphore] = defaultdict(
     lambda: asyncio.Semaphore(_MAX_CONCURRENT_WRITES_PER_CHANNEL)
 )
 
-# Conservatively under Discord's actual ~5-per-5s channel-scoped write bucket
-# (a handful of headroom for whatever else - reactions, other commands -
-# might also be spending from the same bucket outside this module's own
-# accounting).
-_MAX_REQUESTS_PER_WINDOW = 3
-_WINDOW_SECONDS = 5.0
+# Well under Discord's real channel-scoped write bucket - confirmed live
+# that 3-per-5s (the first, more optimistic budget tried here) still let a
+# 12-tracker channel produce dozens of 429s within minutes, so this errs a
+# lot more conservative rather than guessing again.
+_MAX_REQUESTS_PER_WINDOW = 1
+_WINDOW_SECONDS = 3.0
 
 _recent_requests: dict[int, deque] = defaultdict(deque)
 _rate_locks: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
