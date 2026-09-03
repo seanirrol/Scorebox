@@ -651,6 +651,22 @@ _F5_HANDICAP_RE = re.compile(
     re.IGNORECASE,
 )
 
+# "Houston Astros vs Chicago White Sox - Over 1.5 Home Runs" - the combined
+# home run total for the WHOLE match (both teams), not a single player's
+# own count (see espn.get_match_home_runs/matchhrtracker.py) - a distinct
+# market from the per-player "Home Runs" prop (espn.STAT_CATALOG), and NOT
+# gradable via the generic combined total either (main_scores is runs, not
+# home runs - confirmed live, "Houston Astros vs Chicago White Sox - Over
+# 1.5 Home Runs" silently fell through to the generic total parser and
+# would have graded off runs scored instead). Checked ahead of that
+# generic parser for exactly this reason. Requires the matchup - there's
+# no player identity in this wording to look the game up by without it,
+# same as _MATCH_TOTAL_GAMES_*_RE's own no-no-matchup-form reasoning.
+_MATCH_HOME_RUNS_RE = re.compile(
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s+-\s+(Over|Under)\s+([\d.]+)\s*(?:total\s+)?home\s*runs\b",
+    re.IGNORECASE,
+)
+
 # "1H"/"1st Half"/"First Half" team total OR combined total for football -
 # settle once the 2nd quarter is fully complete, not the whole game, so
 # they're routed to halftracker.py rather than /track's kind="track" (see
@@ -1860,6 +1876,17 @@ def _parse_f5_handicap_pick(description: str, sport: str) -> Optional[dict]:
     }
 
 
+def _parse_match_home_runs_pick(description: str) -> Optional[dict]:
+    text = _clean_line(description)
+    m = _MATCH_HOME_RUNS_RE.match(text)
+    if not m:
+        return None
+    team = m.group(1).strip()  # either side - just used to look the match up
+    if not team:
+        return None
+    return {"kind": "match_hr", "team": team, "direction": m.group(3).lower(), "line": float(m.group(4))}
+
+
 def _parse_1h_total_pick(description: str, sport: str) -> Optional[dict]:
     text = _clean_line(description)
     m = _1H_TOTAL_RE.match(text)
@@ -2421,6 +2448,10 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
         f5_handicap = _parse_f5_handicap_pick(description, sport)
         if f5_handicap:
             return f5_handicap
+
+        match_home_runs = _parse_match_home_runs_pick(description)
+        if match_home_runs:
+            return match_home_runs
 
     if sport in ("nfl", "basketball", "volleyball"):
         ht_ft = _parse_ht_ft_pick(description, sport)

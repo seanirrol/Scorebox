@@ -18,6 +18,7 @@ _DIR = os.path.dirname(os.path.abspath(__file__))
 TRACKS_FILE = os.path.join(_DIR, "tracks_state.json")
 PROPS_FILE = os.path.join(_DIR, "props_state.json")
 INNINGS_FILE = os.path.join(_DIR, "innings_state.json")
+MATCH_HR_FILE = os.path.join(_DIR, "match_hr_state.json")
 F5_FILE = os.path.join(_DIR, "f5_state.json")
 INNING1_FILE = os.path.join(_DIR, "inning1_state.json")
 INNING_TOTAL_FILE = os.path.join(_DIR, "inning_total_state.json")
@@ -78,6 +79,14 @@ def load_innings() -> dict[str, Any]:
 
 def save_innings(data: dict[str, Any]):
     _save(INNINGS_FILE, data)
+
+
+def load_match_hr() -> dict[str, Any]:
+    return _load(MATCH_HR_FILE)
+
+
+def save_match_hr(data: dict[str, Any]):
+    _save(MATCH_HR_FILE, data)
 
 
 def load_f5() -> dict[str, Any]:

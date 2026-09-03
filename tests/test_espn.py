@@ -65,6 +65,40 @@ class PitchingOutsConversion(unittest.TestCase):
         self.assertEqual(espn.grade_over_under(value, "over", 16.5), "won")
 
 
+def _play_by_play_event(state: str, play_types: list[str]):
+    return {
+        "header": {"competitions": [{"status": {"type": {"state": state}}}]},
+        "plays": [{"type": {"type": t}} for t in play_types],
+    }
+
+
+class GetMatchHomeRuns(unittest.TestCase):
+    """get_match_home_runs backs matchhrtracker.py's Match Home Runs
+    market - counts "home-run" play-by-play events directly (ESPN's
+    boxscore has no match-wide HR total field, see the function's own
+    docstring), so this exercises the counting logic without a real
+    play-by-play fetch."""
+
+    def test_not_started_returns_none(self):
+        event = _play_by_play_event("pre", [])
+        self.assertIsNone(espn.get_match_home_runs(event))
+
+    def test_counts_home_run_plays_regardless_of_team(self):
+        event = _play_by_play_event("in", ["single", "home-run", "strikeout", "home-run", "double", "home-run"])
+        self.assertEqual(espn.get_match_home_runs(event), 3)
+
+    def test_zero_is_a_real_answer_not_none(self):
+        event = _play_by_play_event("post", ["single", "strikeout", "ground-out"])
+        self.assertEqual(espn.get_match_home_runs(event), 0)
+
+    def test_grades_correctly_against_a_line(self):
+        event = _play_by_play_event("post", ["home-run", "home-run"])
+        hr = espn.get_match_home_runs(event)
+        self.assertEqual(espn.grade_over_under(hr, "over", 1.5), "won")
+        self.assertEqual(espn.grade_over_under(hr, "under", 1.5), "lost")
+        self.assertEqual(espn.grade_over_under(hr, "over", 2.5), "lost")
+
+
 class FindCurrentEventId(unittest.TestCase):
     """find_current_event_id backs every auto-tracked player prop's event
     lookup - monkeypatches _get so this exercises the real date/status

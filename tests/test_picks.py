@@ -1447,6 +1447,31 @@ class SoccerAsianHandicap(unittest.TestCase):
         self.assertEqual(result["kind"], "double_chance")
 
 
+class MatchHomeRuns(unittest.TestCase):
+    """Baseball's "Match Home Runs" - combined total for the WHOLE game
+    (both teams), not gradable via the generic combined total (main_scores
+    is runs, not home runs) or the per-player Home Runs prop. Confirmed
+    live: "Houston Astros vs Chicago White Sox - Over 1.5 Home Runs" fell
+    through to the generic total parser and would have graded off runs
+    scored instead."""
+
+    def test_over(self):
+        result = picks.parse_pick_line("[MLB] Houston Astros vs Chicago White Sox - Over 1.5 Home Runs")
+        self.assertEqual(result, {"kind": "match_hr", "team": "Houston Astros", "direction": "over", "line": 1.5})
+
+    def test_under(self):
+        result = picks.parse_pick_line("[MLB] Houston Astros vs Chicago White Sox - Under 3.5 Home Runs")
+        self.assertEqual(result, {"kind": "match_hr", "team": "Houston Astros", "direction": "under", "line": 3.5})
+
+    def test_does_not_shadow_the_per_player_home_runs_prop(self):
+        result = picks.parse_pick_line("[MLB] Aaron Judge Over 0.5 Home Runs")
+        self.assertEqual(result, {"kind": "playerprops", "sport": "baseball", "player": "Aaron Judge", "stat": "Home Runs", "direction": "over", "line": 0.5})
+
+    def test_does_not_shadow_the_generic_total(self):
+        result = picks.parse_pick_line("[MLB] Houston Astros vs Chicago White Sox - Over 8.5 Total Runs")
+        self.assertEqual(result["kind"], "total")
+
+
 class TennisHandicapWithMatchup(unittest.TestCase):
     """Games/sets handicap picks used to only be recognized with no
     opponent named at all - confirmed live, a real matchup-included "Alex

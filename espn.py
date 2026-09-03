@@ -389,6 +389,18 @@ def _compute_total_bases(event: dict, entity_id: str) -> int:
     return total
 
 
+def get_match_home_runs(event: dict) -> Optional[int]:
+    """Total home runs by both teams combined, counted directly from the
+    event's own play-by-play (same source/reasoning as _compute_total_
+    bases - ESPN's boxscore has no direct match-wide HR total field).
+    None before the game has actually started (no plays exist yet to
+    count at all) - 0 is a real, valid answer once it has, not "unknown"."""
+    comp = (event.get("header", {}).get("competitions") or [{}])[0]
+    if comp.get("status", {}).get("type", {}).get("state") == "pre":
+        return None
+    return sum(1 for p in event.get("plays", []) if (p.get("type") or {}).get("type") == "home-run")
+
+
 def get_stat_value(event: dict, entity_id: str, stat_key: tuple) -> tuple[Optional[str], Optional[bool], Optional[dict]]:
     """Returns (value, is_home, team). team/is_home are set whenever the
     player appears anywhere in the boxscore; value is None if they don't

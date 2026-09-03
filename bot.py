@@ -44,6 +44,7 @@ import inningtracker
 import kboproptracker
 import koreabaseball
 import masterparlay
+import matchhrtracker
 import parlaytracker
 import pendingdelete
 import pendingauto
@@ -231,6 +232,7 @@ async def on_ready():
     await _safe_resume("proptracker", proptracker.resume_all(client))
     await _safe_resume("inningtracker", inningtracker.resume_all(client))
     await _safe_resume("inningtotaltracker", inningtotaltracker.resume_all(client))
+    await _safe_resume("matchhrtracker", matchhrtracker.resume_all(client))
     await _safe_resume("f5tracker", f5tracker.resume_all(client))
     await _safe_resume("halftracker", halftracker.resume_all(client))
     await _safe_resume("htfttracker", htfttracker.resume_all(client))
@@ -256,6 +258,7 @@ async def on_ready():
         "tennis_playerprops": _resolve_pending_tennis_playerprops,
         "inning_runs": _resolve_pending_inning_runs,
         "inning1_result": _resolve_pending_inning1_result,
+        "match_hr": _resolve_pending_match_hr,
         "playerprops": _resolve_pending_playerprops,
     }))
 
@@ -283,6 +286,7 @@ def _find_message_owner(card_message_id: int) -> Optional[tuple[str, tuple]]:
         ("prop", proptracker.get_message_owner),
         ("inning", inningtracker.get_message_owner),
         ("inning_total", inningtotaltracker.get_message_owner),
+        ("match_hr", matchhrtracker.get_message_owner),
         ("f5", f5tracker.get_message_owner),
         ("inning1", inning1tracker.get_message_owner),
         ("set1", settracker.get_message_owner),
@@ -322,6 +326,9 @@ def _stop_tracking_by_card_message(card_message_id: int) -> Optional[str]:
     elif kind == "inning_total":
         channel_id, game_id, pick_type, line, _ = info
         inningtotaltracker.stop_tracking(channel_id, game_id, pick_type, line)
+    elif kind == "match_hr":
+        channel_id, event_id, direction, line, _ = info
+        matchhrtracker.stop_tracking(channel_id, event_id, direction, line)
     elif kind == "f5":
         channel_id, game_id, picked_team, total_direction, total_line, handicap_line, _ = info
         f5tracker.stop_tracking(channel_id, game_id, picked_team, total_direction, total_line, handicap_line)
@@ -1315,6 +1322,79 @@ async def _auto_inning_runs(
     return message.id
 
 
+async def _resolve_pending_match_hr(payload: dict) -> bool:
+    try:
+        channel = client.get_channel(payload["channel_id"]) or await client.fetch_channel(payload["channel_id"])
+    except discord.HTTPException as e:
+        log.warning("Pending match-HR: couldn't resolve channel %s: %s", payload["channel_id"], e)
+        return False
+    result = await _auto_match_hr(channel, **{k: v for k, v in payload.items() if k != "channel_id"}, queue_on_miss=False)
+    return result is not None
+
+
+async def _auto_match_hr(
+    channel: discord.abc.Messageable, team: str, direction: str, line: float,
+    section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
+    manual: bool = False, queue_on_miss: bool = True,
+):
+    """"Match Home Runs" picks (combined total across the whole game) -
+    ESPN-backed (see matchhrtracker.py), MLB only. team is only used to
+    look the match up. manual/queue_on_miss - see _auto_track's/_auto_f5's
+    own docstrings."""
+    try:
+        entity = await asyncio.to_thread(espn.find_team, team, "baseball")
+    except espn.EspnError as e:
+        log.info("Auto-match-HR: couldn't reach ESPN for '%s': %s", team, e)
+        botlog.event(f"❌ Not tracked (Match HR): **{team}** — couldn't reach ESPN: {e}")
+        return
+    if not entity:
+        log.info("Auto-match-HR: no team found for '%s'", team)
+        botlog.event(f"❌ Not tracked (Match HR): **{team}** — team not found on ESPN")
+        return
+
+    find_kwargs = {"days_ahead": 0, "days_back": 1, "allow_finished": True} if manual else {}
+    event_id = await asyncio.to_thread(espn.find_current_event_id, "baseball", entity["id"], **find_kwargs)
+    if not event_id:
+        payload = {
+            "channel_id": channel.id, "team": team, "direction": direction, "line": line,
+            "section": section, "label": label, "origin_channel_id": origin_channel_id,
+        }
+        if not manual and queue_on_miss and not pendingauto.is_queued("match_hr", payload):
+            pendingauto.queue("match_hr", payload, _resolve_pending_match_hr)
+            log.info("Auto-match-HR: no match found for '%s', queuing retry", team)
+            botlog.event(f"⏳ Queued (Match HR): **{team}** — no current/upcoming match found on ESPN yet, will retry automatically")
+            return "queued"
+        # Non-manual miss here is a still-silently-retrying pendingauto
+        # entry, not a real give-up - see _auto_f5's identical fix for why
+        # this matters (was spamming the log channel every 30min).
+        if manual:
+            botlog.event(f"❌ Not tracked (Match HR): **{team}** — no current/upcoming match found on ESPN")
+        return
+    event = await asyncio.to_thread(espn.get_event, "baseball", event_id)
+    if not event:
+        botlog.event(f"❌ Not tracked (Match HR): **{team}** — couldn't fetch match data from ESPN")
+        return
+    if matchhrtracker.is_tracked(channel.id, event_id, direction, line):
+        botlog.event(f"⏭️ Skipped (Match HR): **{team}** — already being tracked in <#{channel.id}>")
+        return "skipped"
+
+    embed, file = await matchhrtracker.build_embed(event, direction, line)
+    message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
+    embed.set_footer(text=matchhrtracker._footer_text(message.id))
+    await throttle.run(channel.id, lambda: message.edit(embed=embed))
+    matchhrtracker.register_message(message.id, channel.id, event_id, direction, line, None)
+    await _safe_add_trash_reaction(message)
+
+    matchhrtracker.start_tracking(
+        message, channel.id, event_id, direction, line, entity["id"], None,
+        section=section, label=label, origin_channel_id=origin_channel_id,
+        game_date=espn.eastern_date_str(event),
+    )
+    log.info("Auto-tracked match-HR pick '%s' (%s %g) -> event %s", team, direction, line, event_id)
+    botlog.event(f"✅ Tracked (Match HR): **{team}** — event `{event_id}` in <#{channel.id}>")
+    return message.id
+
+
 async def _resolve_pending_inning1_result(payload: dict) -> bool:
     try:
         channel = client.get_channel(payload["channel_id"]) or await client.fetch_channel(payload["channel_id"])
@@ -1902,6 +1982,11 @@ async def _dispatch_pick(
         elif pick["kind"] == "f5_handicap":
             return await _auto_f5(
                 target_channel, pick["sport"], pick["team"], handicap_line=pick["line"],
+                section=section, label=label, origin_channel_id=origin_channel_id, manual=manual,
+            )
+        elif pick["kind"] == "match_hr":
+            return await _auto_match_hr(
+                target_channel, pick["team"], pick["direction"], pick["line"],
                 section=section, label=label, origin_channel_id=origin_channel_id, manual=manual,
             )
         elif pick["kind"] == "1h_total":
@@ -2618,6 +2703,12 @@ def _untrack_one(channel_id: int, game_id: str, player: Optional[str]) -> list[s
         if inningtotaltracker.stop_tracking(channel_id, entry["game_id"], entry["pick_type"], entry.get("line")):
             stopped.append(entry["pick_type"])
 
+    for entry in matchhrtracker.list_tracked_details(channel_id):
+        if str(entry["event_id"]) != str(game_id):
+            continue
+        if matchhrtracker.stop_tracking(channel_id, entry["event_id"], entry["direction"], entry["line"]):
+            stopped.append(f"Match HR {entry['direction'].title()} {entry['line']:g}")
+
     for entry in tennispropstracker.list_tracked_details(channel_id):
         if str(entry["game_id"]) != str(game_id):
             continue
@@ -2762,6 +2853,14 @@ async def _gather_tracked_items(channel_id: int) -> list[dict]:
             "message_id": entry["message_id"],
             "stop": lambda cid=channel_id, gid=entry["game_id"], pt=entry["pick_type"], ln=entry.get("line"):
                 inningtotaltracker.stop_tracking(cid, gid, pt, ln),
+        })
+
+    for entry in matchhrtracker.list_tracked_details(channel_id):
+        items.append({
+            "kind": "match_hr", "label": matchhrtracker._pick_label(entry["direction"], entry["line"]), "id_label": entry["event_id"],
+            "message_id": entry["message_id"],
+            "stop": lambda cid=channel_id, eid=entry["event_id"], d=entry["direction"], ln=entry["line"]:
+                matchhrtracker.stop_tracking(cid, eid, d, ln),
         })
 
     for entry in f5tracker.list_tracked_details(channel_id):
@@ -2924,6 +3023,7 @@ _SECTION_TITLES = {
     "match": "Tracked matches",
     "prop": "Tracked player props",
     "inning": "Tracked 1st-inning picks",
+    "match_hr": "Tracked Match Home Runs picks",
     "f5": "Tracked F5 (1st 5 innings) picks",
     "inning1": "Tracked 1st inning result picks",
     "set1": "Tracked tennis extra-market picks",
