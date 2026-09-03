@@ -82,6 +82,11 @@ def _grade(
         return scores365.grade_spread(game, team_total, total_line)
     if team_total and total_direction and total_line is not None:
         return scores365.grade_team_total(game, team_total, total_direction, total_line)
+    if total_direction in ("yes", "no") and total_line is None:
+        # Both Teams to Score (soccer only) - no numeric line at all, so
+        # total_line staying None is what distinguishes this from a real
+        # Over/Under total rather than colliding with the branch below.
+        return scores365.grade_btts(game, total_direction)
     if total_direction and total_line is not None:
         return scores365.grade_total(game, total_direction, total_line)
     return None
@@ -114,7 +119,7 @@ async def build_embed(
     status = scores365.map_status_type(game.get("statusGroup"), game.get("statusText"))
 
     result = _grade(game, picked_team, team_total, total_direction, total_line) if status == "finished" else None
-    has_pick = picked_team or (total_direction and total_line is not None)
+    has_pick = picked_team or (total_direction and total_line is not None) or total_direction in ("yes", "no")
     if not result and has_pick and scores365.is_cancelled(game):
         result = "void"
 
@@ -184,6 +189,8 @@ async def build_embed(
         description_lines = [f"{team_total} {total_direction.title()} {total_line:g}{total_suffix}"]
     elif total_direction and total_line is not None:
         description_lines = [f"{total_direction.title()} {total_line:g}{total_suffix}"]
+    elif total_direction in ("yes", "no"):
+        description_lines = [f"Both Teams to Score: {'Yes' if total_direction == 'yes' else 'No'}"]
     else:
         description_lines = []
     if status == "notstarted":
@@ -264,6 +271,8 @@ def track_key(
         market = f"ml:{picked_team}"
     elif team_total and total_direction and total_line is not None:
         market = f"tt:{team_total}:{total_direction}:{total_line:g}"
+    elif total_direction in ("yes", "no") and total_line is None:
+        market = f"btts:{total_direction}"
     elif total_direction and total_line is not None:
         market = f"total:{total_direction}:{total_line:g}"
     else:

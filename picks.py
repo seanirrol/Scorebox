@@ -493,6 +493,48 @@ def _parse_double_chance_nomatchup_pick(description: str) -> Optional[dict]:
     lookup_team = side1 if resolved1 != "DRAW" else side2
     return {"kind": "double_chance", "sport": "soccer", "team": lookup_team, "covered": (resolved1, resolved2)}
 
+
+# "Copenhagen vs Nordsjaelland - Both Teams to Score Yes" - soccer's own
+# BTTS market (see scores365.grade_btts) - both sides need to score at
+# least once for "Yes" to win, at least one side shut out for "No". "BTTS"
+# itself (the sportsbook's own common abbreviation) is tolerated as an
+# alternative to the full phrase, and an optional ":"/"-" is tolerated
+# right before Yes/No (e.g. "Both Teams to Score: Yes").
+_BTTS_RE = re.compile(
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s+-\s+(?:both\s+teams\s+to\s+score|btts)\s*[:\-]?\s*(yes|no)\b",
+    re.IGNORECASE,
+)
+
+# Same market, no matchup at all - just "Copenhagen Both Teams to Score
+# Yes" - the named team is only used to look the match up, same "either
+# side works" reasoning as every other no-matchup parser in this file.
+_BTTS_NOMATCHUP_RE = re.compile(
+    r"^(.+?)\s+(?:both\s+teams\s+to\s+score|btts)\s*[:\-]?\s*(yes|no)\b", re.IGNORECASE,
+)
+
+
+def _parse_btts_pick(description: str) -> Optional[dict]:
+    text = _clean_line(description)
+    m = _BTTS_RE.match(text)
+    if not m:
+        return None
+    team_a, team_b, direction = m.group(1).strip(), m.group(2).strip(), m.group(3).lower()
+    if not team_a or not team_b:
+        return None
+    return {"kind": "btts", "sport": "soccer", "team": team_a, "direction": direction}
+
+
+def _parse_btts_nomatchup_pick(description: str) -> Optional[dict]:
+    text = _clean_line(description)
+    m = _BTTS_NOMATCHUP_RE.match(text)
+    if not m:
+        return None
+    team, direction = m.group(1).strip(), m.group(2).lower()
+    if not team:
+        return None
+    return {"kind": "btts", "sport": "soccer", "team": team, "direction": direction}
+
+
 # Every wording variant confirmed live for "wins at least one set" -
 # "a set", "at least 1 set(s)", and "1+ set(s)" (the last one fell through
 # to the simple-name fallback with no botlog trace at all, same failure
@@ -714,7 +756,7 @@ _DOUBLE_RESULT_SAME_TEAM_RE = re.compile(
 # once "Handicap" alone was recognized but this trailing qualifier wasn't.
 _INCL_EXTRA_INNINGS_RE = r"(?:\s*\(?Incl\.?\s+Extra\s+Innings\)?)?"
 _TEAM_SPREAD_NOMATCHUP_RE = re.compile(
-    rf"^(.+?)\s+([+-]\d+(?:\.\d+)?)(?:\s+(?:Points|Pts|Runs|Goals|Handicap))?{_INCL_EXTRA_INNINGS_RE}\s*$",
+    rf"^(.+?)\s+([+-]\d+(?:\.\d+)?)(?:\s+(?:Points|Pts|Runs|Goals|Handicap|Asian\s+Handicap))?{_INCL_EXTRA_INNINGS_RE}\s*$",
     re.IGNORECASE,
 )
 
@@ -752,7 +794,7 @@ def _parse_team_spread_nomatchup_pick(sport: str, description: str) -> Optional[
 # the same reason ("Broncos -3.5 Points").
 _TEAM_SPREAD_MATCHUP_RE = re.compile(
     rf"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s+-\s+(.+?)\s*\(?([+-]\d+(?:\.\d+)?)\)?"
-    rf"(?:\s+(?:Points|Pts|Runs|Goals|Handicap))?{_INCL_EXTRA_INNINGS_RE}\s*$",
+    rf"(?:\s+(?:Points|Pts|Runs|Goals|Handicap|Asian\s+Handicap))?{_INCL_EXTRA_INNINGS_RE}\s*$",
     re.IGNORECASE,
 )
 
@@ -2283,6 +2325,14 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
             if double_chance_nomatchup:
                 return double_chance_nomatchup
 
+        btts = _parse_btts_pick(description)
+        if btts:
+            return btts
+        if not has_matchup:
+            btts_nomatchup = _parse_btts_nomatchup_pick(description)
+            if btts_nomatchup:
+                return btts_nomatchup
+
     if sport == "tennis":
         # Checked before anything else for tennis, matchup or not - both
         # already try the matchup-included form first internally (see
@@ -2350,7 +2400,7 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
         if ht_ft:
             return ht_ft
 
-    if sport in ("nfl", "basketball", "volleyball", "baseball"):
+    if sport in ("nfl", "basketball", "volleyball", "baseball", "soccer"):
         # Volleyball's own "Set Handicap" (e.g. "Turkey -1.5") is just a
         # plain full-game spread as far as grading goes - 365scores' own
         # "score" field for a volleyball match already IS sets won (see
@@ -2360,7 +2410,13 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
         # story again - main_scores is already runs, so grade_spread just
         # works (confirmed live: "Atlanta Braves +1.5 Handicap" fell all
         # the way through to a bare wrong-team moneyline before baseball
-        # was added here - see this regex's own comment).
+        # was added here - see this regex's own comment). Soccer's own
+        # "Asian Handicap" is the same story a third time - main_scores is
+        # goals, so grade_spread works unchanged; only the regex's own
+        # trailing-word allowlist needed "Asian Handicap" added (confirmed
+        # live: "Anderlecht -0.75 Asian Handicap" fell through the same
+        # way, both because soccer wasn't in this sport list at all AND
+        # "Asian Handicap" wasn't a recognized trailing phrase).
         spread = _parse_team_spread_nomatchup_pick(sport, description)
         if spread:
             return spread

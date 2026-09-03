@@ -477,6 +477,46 @@ class GradeDoubleChance(unittest.TestCase):
             self.assertIn(result, ("won", "lost"))
 
 
+class GradeBtts(unittest.TestCase):
+    """grade_btts backs tracker.py's "yes"/"no" total_direction branch (see
+    that module's own _grade) - Both Teams to Score, both sides need at
+    least one goal for "Yes" to win. Purely main_scores-based, same as
+    grade_total/grade_spread - the caller (build_embed/_track_loop) is
+    what gates this to only run once the match is actually finished, not
+    this function itself, matching every other grade_* in this module."""
+
+    def _game(self, home_score, away_score, status_group=4):
+        return {
+            "statusGroup": status_group,
+            "homeCompetitor": {"name": "Copenhagen", "score": home_score},
+            "awayCompetitor": {"name": "Nordsjaelland", "score": away_score},
+        }
+
+    def test_not_started_returns_none(self):
+        game = self._game(0.0, 0.0, status_group=2)
+        self.assertIsNone(scores365.grade_btts(game, "yes"))
+
+    def test_yes_wins_when_both_score(self):
+        game = self._game(2.0, 1.0)
+        self.assertEqual(scores365.grade_btts(game, "yes"), "won")
+
+    def test_yes_loses_on_a_shutout(self):
+        game = self._game(2.0, 0.0)
+        self.assertEqual(scores365.grade_btts(game, "yes"), "lost")
+
+    def test_no_wins_on_a_shutout(self):
+        game = self._game(2.0, 0.0)
+        self.assertEqual(scores365.grade_btts(game, "no"), "won")
+
+    def test_no_loses_when_both_score(self):
+        game = self._game(1.0, 1.0)
+        self.assertEqual(scores365.grade_btts(game, "no"), "lost")
+
+    def test_scoreless_draw_loses_a_yes_pick(self):
+        game = self._game(0.0, 0.0)
+        self.assertEqual(scores365.grade_btts(game, "yes"), "lost")
+
+
 class GradeHtFt(unittest.TestCase):
     """grade_ht_ft backs htfttracker.py - monkeypatches quarters_breakdown
     (a live 365scores fetch) so this exercises the real compound-bet logic

@@ -1866,8 +1866,9 @@ async def _dispatch_pick(
     architecture) - /tracktoday rejects that combination before ever
     reaching here.
 
-    game_id (also /tracktoday-only, and only wired to the three "track"-
-    family kinds below) - see _auto_track's own docstring."""
+    game_id (also /tracktoday-only, and only wired to the "track"-family
+    kinds below, plus tennis/volleyball's own settracker-backed markets)
+    - see _auto_track's own docstring."""
     try:
         if pick["kind"] == "track":
             return await _auto_track(target_channel, pick["sport"], pick["team"], section=section, label=label, origin_channel_id=origin_channel_id, manual=manual, game_id=game_id)
@@ -1879,6 +1880,11 @@ async def _dispatch_pick(
         elif pick["kind"] == "team_total":
             return await _auto_track(
                 target_channel, pick["sport"], pick["team"], pick["direction"], pick["line"], pick["team"],
+                section=section, label=label, origin_channel_id=origin_channel_id, manual=manual, game_id=game_id,
+            )
+        elif pick["kind"] == "btts":
+            return await _auto_track(
+                target_channel, pick["sport"], pick["team"], pick["direction"],
                 section=section, label=label, origin_channel_id=origin_channel_id, manual=manual, game_id=game_id,
             )
         elif pick["kind"] == "f5_moneyline":
@@ -2310,7 +2316,7 @@ async def tracktoday(interaction: discord.Interaction, sport: app_commands.Choic
         )
         return
     _GAME_ID_SUPPORTED_KINDS = (
-        "track", "total", "team_total", "set1_moneyline", "tennis_set1_total_games", "tennis_match_total_games",
+        "track", "total", "team_total", "btts", "set1_moneyline", "tennis_set1_total_games", "tennis_match_total_games",
         "tennis_player_total_games", "tennis_win_a_set", "tennis_games_handicap", "tennis_set1_games_handicap",
         "tennis_sets_handicap", "volleyball_set1_handicap", "volleyball_match_point_handicap", "volleyball_match_point_total",
     )

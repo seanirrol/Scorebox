@@ -1543,6 +1543,20 @@ def grade_total(game: dict, direction: str, line: float) -> Optional[str]:
     return "won" if total < line else "lost"
 
 
+def grade_btts(game: dict, direction: str) -> Optional[str]:
+    """Grades a soccer "Both Teams to Score" pick - direction is "yes"
+    (both sides score at least once) or "no" (at least one side is shut
+    out). No line, and no push case either - either both sides scored or
+    they didn't, always a clean decision once there's a final score."""
+    scores = main_scores(game)
+    if not scores:
+        return None
+    both_scored = scores[0] >= 1 and scores[1] >= 1
+    if direction == "yes":
+        return "won" if both_scored else "lost"
+    return "won" if not both_scored else "lost"
+
+
 def grade_team_total(game: dict, team: str, direction: str, line: float) -> Optional[str]:
     """Grades a single team's own full-game score (not combined with the
     other side - see grade_total for that) against a line. Returns

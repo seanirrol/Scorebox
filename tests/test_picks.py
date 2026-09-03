@@ -1397,6 +1397,56 @@ class DoubleChance(unittest.TestCase):
         self.assertNotEqual(result["kind"] if result else None, "double_chance")
 
 
+class BothTeamsToScore(unittest.TestCase):
+    """Soccer's BTTS market - both sides need to score at least once for
+    "Yes" to win. See scores365.grade_btts/tracker.py's own "yes"/"no"
+    total_direction branch (no numeric line at all, unlike a real total)."""
+
+    def test_yes_with_matchup(self):
+        result = picks.parse_pick_line("[Soccer] Copenhagen vs Nordsjaelland - Both Teams to Score Yes")
+        self.assertEqual(result, {"kind": "btts", "sport": "soccer", "team": "Copenhagen", "direction": "yes"})
+
+    def test_no_with_matchup(self):
+        result = picks.parse_pick_line("[Soccer] Copenhagen vs Nordsjaelland - Both Teams to Score No")
+        self.assertEqual(result, {"kind": "btts", "sport": "soccer", "team": "Copenhagen", "direction": "no"})
+
+    def test_btts_abbreviation(self):
+        result = picks.parse_pick_line("[Soccer] Copenhagen vs Nordsjaelland - BTTS Yes")
+        self.assertEqual(result, {"kind": "btts", "sport": "soccer", "team": "Copenhagen", "direction": "yes"})
+
+    def test_no_matchup(self):
+        result = picks.parse_pick_line("[Soccer] Copenhagen Both Teams to Score Yes")
+        self.assertEqual(result, {"kind": "btts", "sport": "soccer", "team": "Copenhagen", "direction": "yes"})
+
+    def test_only_checked_for_soccer(self):
+        result = picks.parse_pick_line("[NFL] New England Patriots vs Cleveland Browns - Both Teams to Score Yes")
+        self.assertNotEqual(result["kind"] if result else None, "btts")
+
+
+class SoccerAsianHandicap(unittest.TestCase):
+    """Soccer's Asian Handicap - the generic team-spread parser
+    (_TEAM_SPREAD_MATCHUP_RE/_TEAM_SPREAD_NOMATCHUP_RE), extended to cover
+    soccer and to recognize "Asian Handicap" as trailing wording. Graded
+    via the same scores365.grade_spread every other sport's spread uses -
+    no soccer-specific grading needed, main_scores is already goals."""
+
+    def test_with_matchup(self):
+        result = picks.parse_pick_line("[Soccer] Anderlecht vs KV Kortrijk - Anderlecht -0.75 Asian Handicap")
+        self.assertEqual(result, {"kind": "team_total", "sport": "soccer", "team": "Anderlecht", "direction": "spread", "line": -0.75})
+
+    def test_without_matchup(self):
+        result = picks.parse_pick_line("[Soccer] Anderlecht -0.75 Asian Handicap")
+        self.assertEqual(result, {"kind": "team_total", "sport": "soccer", "team": "Anderlecht", "direction": "spread", "line": -0.75})
+
+    def test_plain_handicap_wording_still_works(self):
+        result = picks.parse_pick_line("[Soccer] Anderlecht -0.75 Handicap")
+        self.assertEqual(result["kind"], "team_total")
+
+    def test_double_chance_is_unaffected(self):
+        result = picks.parse_pick_line("[Soccer] Paris FC vs Nice - Paris FC or Draw")
+        self.assertEqual(result["kind"], "double_chance")
+
+
 class TennisHandicapWithMatchup(unittest.TestCase):
     """Games/sets handicap picks used to only be recognized with no
     opponent named at all - confirmed live, a real matchup-included "Alex
