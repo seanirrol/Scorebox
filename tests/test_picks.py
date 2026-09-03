@@ -1519,5 +1519,24 @@ class TennisSet1GamesHandicap(unittest.TestCase):
         self.assertEqual(result["kind"], "tennis_set1_total_games")
 
 
+class TennisExactSets(unittest.TestCase):
+    """"Exact Sets" - the match's total sets played must exactly equal the
+    picked number (e.g. "2 Exact Sets" wins on a straight-sets result) -
+    a genuinely new market, no line-shape it could have been mistaken for
+    before (not Over/Under, not a handicap)."""
+
+    def test_straight_sets_pick(self):
+        result = picks.parse_pick_line("[Tennis] Paula Badosa vs Coco Gauff - 2 Exact Sets")
+        self.assertEqual(result, {"kind": "tennis_exact_sets", "team": "Paula Badosa", "line": 2.0})
+
+    def test_three_set_pick(self):
+        result = picks.parse_pick_line("[Tennis] Paula Badosa vs Coco Gauff - 3 Exact Sets")
+        self.assertEqual(result, {"kind": "tennis_exact_sets", "team": "Paula Badosa", "line": 3.0})
+
+    def test_does_not_shadow_match_total_games(self):
+        result = picks.parse_pick_line("[Tennis] Oleksandra Oliynykova vs Alexandra Eala - Over 16.5 Total Games")
+        self.assertEqual(result["kind"], "tennis_match_total_games")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -535,6 +535,23 @@ def grade_sets_handicap(game: dict, team: str, line: float) -> Optional[str]:
     return "won" if adjusted > other_sets else "lost"
 
 
+def grade_tennis_exact_sets(game: dict, line: float) -> Optional[str]:
+    """Grades a tennis "Exact Sets" pick - the match's total sets played
+    must exactly equal the picked number (e.g. 2 for a straight-sets win).
+    Sourced from tennis_sets_won (each set's own final score), not
+    main_scores - a mid-set retirement leaves main_scores stuck at 0-0
+    even though an earlier set fully completed, which would undercount
+    the real total (see tennis_sets_won's own docstring).
+
+    No push case - the total either matches the picked number or it
+    doesn't. Voids on a walkover (see is_walkover) - no set was ever
+    actually decided, not a real "0 sets played" result."""
+    if is_walkover(game):
+        return "void"
+    home_sets, away_sets = tennis_sets_won(game)
+    return "won" if home_sets + away_sets == line else "lost"
+
+
 def tennis_match_games(game: dict) -> tuple[int, int]:
     """(home_games, away_games) running totals across every set so far -
     unlike tennis_first_set_result, not gated on each set being fully

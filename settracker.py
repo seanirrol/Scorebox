@@ -26,6 +26,11 @@ per-game detail call needed:
 - "sets_handicap": a sets-margin spread (e.g. "Wang Xiyu +1.5 Sets") - same
   shape as games_handicap but against sets won (main_scores) instead of
   games won.
+- "exact_sets": the match's total sets played must exactly equal the
+  picked number (e.g. "2 Exact Sets" wins on a straight-sets result) -
+  match-total like match_total_games (no named player), but an exact
+  match instead of Over/Under, so it settles the instant the match ends
+  regardless of which side wins.
 - "win_a_set": whether a named player wins at least one set during the
   match (Yes/No) - can be graded a "Yes" win as soon as it happens, since a
   player can't un-win a set.
@@ -219,6 +224,8 @@ def pick_label(market: str, team: Optional[str], direction: Optional[str], line:
         return f"{team} {line:+g} 1st Set Games"
     if market == "sets_handicap":
         return f"{team} {line:+g} Sets"
+    if market == "exact_sets":
+        return f"{line:g} Exact Sets"
     if market == "set1_point_handicap":
         return f"{team} {line:+g} 1st Set"
     if market == "match_point_total":
@@ -349,6 +356,13 @@ async def build_embed(
             # why main_scores' aggregate sets-won tally can't be trusted
             # here (a mid-set retirement can leave it stuck at 0-0 even
             # though an earlier set clearly finished with a winner).
+            home_sets, away_sets = scores365.tennis_sets_won(game)
+            frozen_cols = (scores365.fmt_score(home_sets), scores365.fmt_score(away_sets))
+
+    elif market == "exact_sets":
+        decided = scores365.is_finished(game)
+        if decided:
+            result = scores365.grade_tennis_exact_sets(game, line)
             home_sets, away_sets = scores365.tennis_sets_won(game)
             frozen_cols = (scores365.fmt_score(home_sets), scores365.fmt_score(away_sets))
 
@@ -525,6 +539,10 @@ def grade_now(game: dict, market: str, team: Optional[str], direction: Optional[
         if not scores365.is_finished(game):
             return False, None
         return True, scores365.grade_sets_handicap(game, team, line)
+    if market == "exact_sets":
+        if not scores365.is_finished(game):
+            return False, None
+        return True, scores365.grade_tennis_exact_sets(game, line)
     if market == "set1_point_handicap":
         breakdown = scores365.volleyball_first_set_result(game)
         if breakdown is None:

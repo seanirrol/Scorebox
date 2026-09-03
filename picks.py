@@ -208,6 +208,18 @@ _MATCH_TOTAL_GAMES_AFTER_RE = re.compile(
     re.IGNORECASE,
 )
 
+# "Iva Jovic vs Francesca Jones - 2 Exact Sets" - the match's total sets
+# played must exactly equal the picked number (see
+# scores365.grade_tennis_exact_sets) - not an Over/Under, so no
+# marker word to require the way _MATCH_TOTAL_GAMES_*_RE needs "Games";
+# "Exact Sets" itself is the distinguishing wording. No no-matchup form -
+# same as _MATCH_TOTAL_GAMES_*_RE above, there's no player identity in
+# this wording at all to look the match up by without the matchup.
+_EXACT_SETS_RE = re.compile(
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s+-\s+([\d.]+)\s*exact\s*sets\b",
+    re.IGNORECASE,
+)
+
 # "Rebecca Sramkova vs Anna Blinkova - Rebecca Sramkova Over 11.5 Total
 # Games" - a named PLAYER's own games won across the whole match, not the
 # two sides combined (see _MATCH_TOTAL_GAMES_.../grade_over_under above) -
@@ -1749,6 +1761,17 @@ def _parse_match_total_games_pick(description: str) -> Optional[dict]:
     }
 
 
+def _parse_exact_sets_pick(description: str) -> Optional[dict]:
+    text = _clean_line(description)
+    m = _EXACT_SETS_RE.match(text)
+    if not m:
+        return None
+    team = m.group(1).strip()  # either side - just used to look the match up
+    if not team:
+        return None
+    return {"kind": "tennis_exact_sets", "team": team, "line": float(m.group(3))}
+
+
 def _parse_win_a_set_pick(description: str) -> Optional[dict]:
     text = _clean_line(description)
     m = _WIN_A_SET_RE.match(text)
@@ -2358,6 +2381,10 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
         sets_handicap = _parse_sets_handicap_nomatchup_pick(description)
         if sets_handicap:
             return sets_handicap
+
+        exact_sets = _parse_exact_sets_pick(description)
+        if exact_sets:
+            return exact_sets
 
     if sport in ("dota2", "cs2"):
         # None of the generic total/player-prop/track fallback logic below

@@ -278,6 +278,47 @@ class GradeSet1GamesHandicap(unittest.TestCase):
         self.assertEqual(scores365.grade_set1_games_handicap(game, "Madison Keys", -2), "void")
 
 
+class GradeTennisExactSets(unittest.TestCase):
+    """grade_tennis_exact_sets backs settracker.py's exact_sets market -
+    sourced from tennis_sets_won (each set's own final score), not
+    main_scores, same reasoning as grade_sets_handicap's own display row
+    (a mid-set retirement leaves main_scores stuck at 0-0)."""
+
+    def _game(self, *set_scores, status_group=4):
+        stages = [
+            {"name": f"Set {i + 1}", "homeCompetitorScore": h, "awayCompetitorScore": a, "isEnded": True}
+            for i, (h, a) in enumerate(set_scores)
+        ]
+        return {
+            "statusGroup": status_group,
+            "homeCompetitor": {"name": "Paula Badosa", "score": 0.0},
+            "awayCompetitor": {"name": "Coco Gauff", "score": 0.0},
+            "stages": stages,
+        }
+
+    def test_straight_sets_wins_a_2_pick(self):
+        game = self._game((6, 3), (6, 4))
+        self.assertEqual(scores365.grade_tennis_exact_sets(game, 2), "won")
+
+    def test_straight_sets_loses_a_3_pick(self):
+        game = self._game((6, 3), (6, 4))
+        self.assertEqual(scores365.grade_tennis_exact_sets(game, 3), "lost")
+
+    def test_three_set_match_wins_a_3_pick(self):
+        game = self._game((6, 3), (4, 6), (6, 4))
+        self.assertEqual(scores365.grade_tennis_exact_sets(game, 3), "won")
+
+    def test_three_set_match_loses_a_2_pick(self):
+        game = self._game((6, 3), (4, 6), (6, 4))
+        self.assertEqual(scores365.grade_tennis_exact_sets(game, 2), "lost")
+
+    def test_walkover_voids_instead_of_grading_off_zero_sets(self):
+        game = self._game(status_group=4)
+        game["homeCompetitor"]["isWinner"] = True
+        game["awayCompetitor"]["isWinner"] = False
+        self.assertEqual(scores365.grade_tennis_exact_sets(game, 2), "void")
+
+
 class GradeSetsHandicap(unittest.TestCase):
     def test_walkover_voids_instead_of_grading_off_zero_sets(self):
         game = {
