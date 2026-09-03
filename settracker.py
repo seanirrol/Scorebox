@@ -19,6 +19,10 @@ per-game detail call needed:
   Games") - the picked player's own total games, adjusted by the
   (already-signed) line, compared against the opponent's total games. Also
   settles with the match finishing.
+- "set1_games_handicap": the games_handicap shape again, but scoped to
+  Set 1's own games (scores365.tennis_first_set_result) instead of the
+  whole match's - settles as soon as Set 1 itself ends, same early
+  settlement as set1_moneyline/set1_total_games above.
 - "sets_handicap": a sets-margin spread (e.g. "Wang Xiyu +1.5 Sets") - same
   shape as games_handicap but against sets won (main_scores) instead of
   games won.
@@ -119,7 +123,7 @@ def _footer_text(message_id: Optional[int] = None) -> str:
 # people referenced it via different anchor names.
 _PER_PLAYER_MARKETS = {
     "set1_moneyline", "player_total_games", "win_a_set", "games_handicap", "sets_handicap",
-    "set1_point_handicap", "match_point_handicap",
+    "set1_games_handicap", "set1_point_handicap", "match_point_handicap",
 }
 
 
@@ -211,6 +215,8 @@ def pick_label(market: str, team: Optional[str], direction: Optional[str], line:
         return f"{team} {direction.title()} {line:g} Total Games"
     if market == "games_handicap":
         return f"{team} {line:+g} Games"
+    if market == "set1_games_handicap":
+        return f"{team} {line:+g} 1st Set Games"
     if market == "sets_handicap":
         return f"{team} {line:+g} Sets"
     if market == "set1_point_handicap":
@@ -326,6 +332,14 @@ async def build_embed(
         if decided:
             result = scores365.grade_games_handicap(game, team, line)
         frozen_cols = (scores365.fmt_score(home_games), scores365.fmt_score(away_games))  # live-running, shown whether decided or not
+
+    elif market == "set1_games_handicap":
+        breakdown = scores365.tennis_first_set_result(game)
+        decided = breakdown is not None
+        if decided:
+            result = scores365.grade_set1_games_handicap(game, team, line)
+            frozen_cols = (scores365.fmt_score(breakdown[0]), scores365.fmt_score(breakdown[1]))
+        final_period_text = "1st Set Final"
 
     elif market == "sets_handicap":
         decided = scores365.is_finished(game)
@@ -502,6 +516,11 @@ def grade_now(game: dict, market: str, team: Optional[str], direction: Optional[
         if not scores365.is_finished(game):
             return False, None
         return True, scores365.grade_games_handicap(game, team, line)
+    if market == "set1_games_handicap":
+        breakdown = scores365.tennis_first_set_result(game)
+        if breakdown is None:
+            return False, None
+        return True, scores365.grade_set1_games_handicap(game, team, line)
     if market == "sets_handicap":
         if not scores365.is_finished(game):
             return False, None

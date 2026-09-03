@@ -293,6 +293,27 @@ _GAMES_HANDICAP_MATCHUP_RE = re.compile(
     re.IGNORECASE,
 )
 
+# "Madison Keys -2 1st Set Games" - the games-margin handicap above, scoped
+# to just Set 1's own games instead of the whole match (distinct market -
+# see scores365.grade_set1_games_handicap/settracker.py's own docstring).
+# Checked before _GAMES_HANDICAP_NOMATCHUP_RE/_GAMES_HANDICAP_MATCHUP_RE
+# (mutually exclusive shapes anyway - those require "games" right after the
+# number, this requires "1st set" in between - but ordering it first keeps
+# the more specific market from ever being at risk of the generic one
+# claiming it first, same defensive ordering as every other sport-specific
+# block in this file).
+_SET1_GAMES_HANDICAP_NOMATCHUP_RE = re.compile(
+    r"^(.+?)\s+([+-]\d+(?:\.\d+)?)\s*1st\s*set\s*(?:total\s+)?games\b", re.IGNORECASE,
+)
+
+# "Madison Keys vs Anna Bondar - Madison Keys -2 1st Set Games" - the
+# matchup-included counterpart to _SET1_GAMES_HANDICAP_NOMATCHUP_RE above,
+# same reasoning as _GAMES_HANDICAP_MATCHUP_RE's own comment.
+_SET1_GAMES_HANDICAP_MATCHUP_RE = re.compile(
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s+-\s+(.+?)\s+([+-]\d+(?:\.\d+)?)\s*1st\s*set\s*(?:total\s+)?games\b",
+    re.IGNORECASE,
+)
+
 # "Wang Xiyu +1.5 Sets" - a sets-margin HANDICAP, same no-matchup shape as
 # _GAMES_HANDICAP_NOMATCHUP_RE above but against sets won instead of games
 # won - confirmed live, a real pick worded this way went completely
@@ -1552,6 +1573,31 @@ def _parse_tennis_sets_total_nomatchup_pick(description: str) -> Optional[dict]:
     return {"kind": kind, "sport": "tennis", "team": player, "direction": m.group(2).lower(), "line": line}
 
 
+def _parse_set1_games_handicap_pick(description: str) -> Optional[dict]:
+    """"Player -2 1st Set Games", with or without the opponent named (see
+    _SET1_GAMES_HANDICAP_MATCHUP_RE/_SET1_GAMES_HANDICAP_NOMATCHUP_RE)."""
+    text = _clean_line(description)
+    m = _SET1_GAMES_HANDICAP_MATCHUP_RE.match(text)
+    if m:
+        team_a, team_b, named, line = m.group(1).strip(), m.group(2).strip(), m.group(3).strip(), m.group(4)
+        if not team_a or not team_b or not named:
+            return None
+        if scores365.names_match(named, team_a):
+            player = team_a
+        elif scores365.names_match(named, team_b):
+            player = team_b
+        else:
+            return None  # doesn't look like either matchup side - don't guess
+        return {"kind": "tennis_set1_games_handicap", "team": player, "line": float(line)}
+    m = _SET1_GAMES_HANDICAP_NOMATCHUP_RE.match(text)
+    if not m:
+        return None
+    player = m.group(1).strip()
+    if not player:
+        return None
+    return {"kind": "tennis_set1_games_handicap", "team": player, "line": float(m.group(2))}
+
+
 def _parse_games_handicap_nomatchup_pick(description: str) -> Optional[dict]:
     """"Player -2.5 Games", with or without the opponent named (see
     _GAMES_HANDICAP_MATCHUP_RE/_GAMES_HANDICAP_NOMATCHUP_RE)."""
@@ -2246,6 +2292,15 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
         # "Alex Michelsen vs Federico Cina - Alex Michelsen -1.5 Sets" pick
         # never even reached that block at all (has_matchup was True),
         # silently dropping the handicap line to a bare moneyline instead.
+        #
+        # Checked before the whole-match games handicap below - the two
+        # shapes are mutually exclusive ("1st set" appears only in this
+        # one), but ordering the more specific market first is the same
+        # defensive convention used everywhere else in this file.
+        set1_games_handicap = _parse_set1_games_handicap_pick(description)
+        if set1_games_handicap:
+            return set1_games_handicap
+
         games_handicap = _parse_games_handicap_nomatchup_pick(description)
         if games_handicap:
             return games_handicap

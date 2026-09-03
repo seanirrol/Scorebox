@@ -1441,5 +1441,33 @@ class TennisHandicapWithMatchup(unittest.TestCase):
         self.assertEqual(result, {"kind": "tennis_win_a_set", "team": "Jeffrey John Wolf", "direction": "yes"})
 
 
+class TennisSet1GamesHandicap(unittest.TestCase):
+    """"1st Set Games Handicap" - a games-margin spread scoped to just Set 1
+    (distinct from tennis_games_handicap's whole-match version) - confirmed
+    live, a real "Madison Keys vs Anna Bondar - Madison Keys -2 1st Set
+    Games" pick fell all the way through to a bare moneyline (no market for
+    this shape existed at all yet)."""
+
+    def test_with_matchup(self):
+        result = picks.parse_pick_line("[Tennis] Madison Keys vs Anna Bondar - Madison Keys -2 1st Set Games")
+        self.assertEqual(result, {"kind": "tennis_set1_games_handicap", "team": "Madison Keys", "line": -2.0})
+
+    def test_without_matchup(self):
+        result = picks.parse_pick_line("[Tennis] Madison Keys -2 1st Set Games")
+        self.assertEqual(result, {"kind": "tennis_set1_games_handicap", "team": "Madison Keys", "line": -2.0})
+
+    def test_named_side_must_match_a_real_matchup_side(self):
+        result = picks.parse_pick_line("[Tennis] Madison Keys vs Anna Bondar - Someone Else -2 1st Set Games")
+        self.assertNotEqual(result["kind"] if result else None, "tennis_set1_games_handicap")
+
+    def test_does_not_shadow_the_whole_match_games_handicap(self):
+        result = picks.parse_pick_line("[Tennis] Brandon Nakashima -2.5 Games")
+        self.assertEqual(result["kind"], "tennis_games_handicap")
+
+    def test_does_not_shadow_set1_total_games(self):
+        result = picks.parse_pick_line("[Tennis] Martin Landaluce vs Jacob Fearnley - Over 9.5 1st Set Total Games")
+        self.assertEqual(result["kind"], "tennis_set1_total_games")
+
+
 if __name__ == "__main__":
     unittest.main()

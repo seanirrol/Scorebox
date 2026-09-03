@@ -477,6 +477,33 @@ def grade_games_handicap(game: dict, team: str, line: float) -> Optional[str]:
     return "won" if adjusted > other_games else "lost"
 
 
+def grade_set1_games_handicap(game: dict, team: str, line: float) -> Optional[str]:
+    """Grades a Set-1-only games-margin handicap pick (e.g. "Madison Keys
+    -2 1st Set Games") - same adjust-then-compare shape as
+    grade_games_handicap, just scoped to Set 1's own games (tennis_
+    first_set_result) instead of the whole match's (tennis_match_games).
+    Only ever called once Set 1 has actually finished (see settracker.py's
+    own grade_now/build_embed - this settles with Set 1, not the match)."""
+    if is_walkover(game):
+        return "void"
+    breakdown = tennis_first_set_result(game)
+    if breakdown is None:
+        return None
+    home_games, away_games = breakdown
+    home = (game.get("homeCompetitor") or {}).get("name", "")
+    away = (game.get("awayCompetitor") or {}).get("name", "")
+    if names_match(home, team):
+        picked_games, other_games = home_games, away_games
+    elif names_match(away, team):
+        picked_games, other_games = away_games, home_games
+    else:
+        return None
+    adjusted = picked_games + line
+    if adjusted == other_games:
+        return "push"
+    return "won" if adjusted > other_games else "lost"
+
+
 def grade_sets_handicap(game: dict, team: str, line: float) -> Optional[str]:
     """Grades a tennis sets-margin handicap pick (e.g. "Wang Xiyu +1.5
     Sets") - same adjust-then-compare shape as grade_games_handicap, but

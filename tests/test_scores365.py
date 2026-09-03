@@ -236,6 +236,48 @@ class GradeGamesHandicap(unittest.TestCase):
         self.assertEqual(scores365.grade_games_handicap(game, "Xiyu Wang", -2.5), "void")
 
 
+class GradeSet1GamesHandicap(unittest.TestCase):
+    """grade_set1_games_handicap backs settracker.py's set1_games_handicap
+    market - same adjust-then-compare shape as grade_games_handicap, but
+    scoped to Set 1's own games (tennis_first_set_result, sourced straight
+    from the game dict's own "stages" - no network call needed here)."""
+
+    def _game(self, home_games, away_games, ended=True, status_group=4):
+        return {
+            "statusGroup": status_group,
+            "homeCompetitor": {"name": "Madison Keys", "score": 0.0},
+            "awayCompetitor": {"name": "Anna Bondar", "score": 0.0},
+            "stages": [{"name": "Set 1", "homeCompetitorScore": home_games, "awayCompetitorScore": away_games, "isEnded": ended}],
+        }
+
+    def test_set1_not_yet_ended_returns_none(self):
+        game = self._game(4, 3, ended=False)
+        self.assertIsNone(scores365.grade_set1_games_handicap(game, "Madison Keys", -2))
+
+    def test_favorite_covers_the_line(self):
+        game = self._game(6, 2)
+        self.assertEqual(scores365.grade_set1_games_handicap(game, "Madison Keys", -2), "won")
+
+    def test_favorite_fails_to_cover_the_line(self):
+        game = self._game(4, 6)
+        self.assertEqual(scores365.grade_set1_games_handicap(game, "Madison Keys", -2), "lost")
+
+    def test_underdog_side_of_the_same_line(self):
+        game = self._game(4, 6)
+        self.assertEqual(scores365.grade_set1_games_handicap(game, "Anna Bondar", 2), "won")
+
+    def test_exact_push(self):
+        game = self._game(4, 6)
+        self.assertEqual(scores365.grade_set1_games_handicap(game, "Madison Keys", 2), "push")
+
+    def test_walkover_voids_instead_of_grading_off_stale_partial_games(self):
+        game = self._game(0, 0)
+        game["statusGroup"] = 4
+        game["homeCompetitor"]["isWinner"] = True
+        game["awayCompetitor"]["isWinner"] = False
+        self.assertEqual(scores365.grade_set1_games_handicap(game, "Madison Keys", -2), "void")
+
+
 class GradeSetsHandicap(unittest.TestCase):
     def test_walkover_voids_instead_of_grading_off_zero_sets(self):
         game = {
