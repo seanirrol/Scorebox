@@ -50,6 +50,11 @@ _SPORT_MAP = {
     "cs 2": "cs2",
     "counter-strike": "cs2",
     "counter strike": "cs2",
+    "lol": "lol",
+    "league of legends": "lol",
+    "mobile legends": "mobilelegends",
+    "mobilelegends": "mobilelegends",
+    "mlbb": "mobilelegends",
 }
 
 # Bare section headers can use the sport's full name ("Basketball") instead
@@ -1956,17 +1961,23 @@ def _parse_ufc_round_total_pick(description: str) -> Optional[dict]:
     }
 
 
-# Dota 2 / CS2 esports markets (see esports.py/esportstracker.py). Unlike
-# every other sport in this module, hawk.live/GosuGamers can only resolve a
-# match by BOTH team names together - there's no "find any match for this
-# one team" lookup the way 365scores/ESPN support - so every one of these
-# six requires an explicit "Team A vs Team B" matchup; a bare single-name
-# pick (no opponent) genuinely can't be resolved and isn't supported here.
+# Dota 2 / CS2 / LoL / Mobile Legends esports markets (see esports.py/
+# esportstracker.py). Unlike every other sport in this module, hawk.live/
+# GosuGamers can only resolve a match by BOTH team names together - there's
+# no "find any match for this one team" lookup the way 365scores/ESPN
+# support - so every one of these six requires an explicit "Team A vs Team
+# B" matchup; a bare single-name pick (no opponent) genuinely can't be
+# resolved and isn't supported here.
 
 # "Team A vs Team B - Team X (-1.5) Map Handicap" / "... - Team X -1.5 Map
-# Handicap" (parens optional either way).
+# Handicap" (parens optional either way). The sign itself is optional too -
+# confirmed live, a real sportsbook slip wrote the underdog side's own line
+# as a bare "(1.5)" with no "+" at all (only the favorite's negative side
+# ever carries an explicit sign) - float() already treats an unsigned
+# number as positive on its own, so this just needed to stop requiring the
+# sign character to be present at all.
 _ESPORTS_MAP_HANDICAP_RE = re.compile(
-    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s+-\s+(.+?)\s*\(?([+-]\d+(?:\.\d+)?)\)?\s*map\s*handicap\b",
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s+-\s+(.+?)\s*\(?([+-]?\d+(?:\.\d+)?)\)?\s*map\s*handicap\b",
     re.IGNORECASE,
 )
 
@@ -2413,7 +2424,7 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
         if exact_sets:
             return exact_sets
 
-    if sport in ("dota2", "cs2"):
+    if sport in ("dota2", "cs2", "lol", "mobilelegends"):
         # None of the generic total/player-prop/track fallback logic below
         # applies to esports at all (see _parse_esports_pick's own
         # docstring) - returns unconditionally, same as mma's own
@@ -2906,7 +2917,7 @@ def parse_picks_message(content: str) -> list[dict]:
             results.append(pick)
             continue
 
-        if sport in ("dota2", "cs2"):
+        if sport in ("dota2", "cs2", "lol", "mobilelegends"):
             # No generic bare-name fallback for esports at all (see this
             # module's own docstring above _ESPORTS_MAP_HANDICAP_RE) -
             # hawk.live/GosuGamers can only resolve a match by BOTH team

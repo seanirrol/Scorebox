@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """
-Dota 2 / CS2 esports live match data.
+Dota 2 / CS2 / LoL / Mobile Legends esports live match data.
 
 Ported from the same approach already proven in the Torn-BetSync project
 (see src/hawklive.js and src/gosugamers.js) - Dota 2 goes through hawk.live
 first (its own games-won/current-game-number/decided-results tracking was
 confirmed there to be more accurate and timely than GosuGamers'), falling
-back to GosuGamers when hawk.live has nothing for a given match; CS2 goes
-through GosuGamers only (hawk.live doesn't carry it at all). Both sites are
-scraped via curl rather than `requests` for the same TLS-fingerprint-block
-reason already documented in scoreimage.py's own logo fetch.
+back to GosuGamers when hawk.live has nothing for a given match; CS2/LoL/
+Mobile Legends go through GosuGamers only (hawk.live doesn't carry any of
+them). Both sites are scraped via curl rather than `requests` for the same
+TLS-fingerprint-block reason already documented in scoreimage.py's own logo
+fetch.
 
 Unlike scores365.py/espn.py, there's no stable "refetch by id" endpoint on
 either site distinct from a fresh team-name search - every lookup here
@@ -55,6 +56,10 @@ def _normalize_sport(sport: str) -> Optional[str]:
         return "dota2"
     if s in ("counter-strike", "counter strike", "cs2", "cs:2", "cs 2", "counterstrike"):
         return "cs2"
+    if s in ("lol", "league of legends", "league-of-legends"):
+        return "lol"
+    if s in ("mobilelegends", "mobile legends", "mobile-legends", "mlbb"):
+        return "mobilelegends"
     return None
 
 
@@ -346,9 +351,10 @@ def _hawk_total_kills(series_data: dict) -> Optional[tuple[int, int]]:
     return (team1_total, team2_total) if home_is_team1 else (team2_total, team1_total)
 
 
-# --- GosuGamers (CS2 primary, Dota 2 fallback) ------------------------------
+# --- GosuGamers (CS2/LoL/Mobile Legends primary, Dota 2 fallback) -----------
 
-_GOSU_GAME_SLUGS = {"dota2": "dota2", "cs2": "counterstrike"}
+_GOSU_GAME_SLUGS = {"dota2": "dota2", "cs2": "counterstrike", "lol": "lol", "mobilelegends": "mobile-legends"}
+_GOSU_SLUG_TO_SPORT = {slug: sport for sport, slug in _GOSU_GAME_SLUGS.items()}
 _GOSU_LIST_CACHE_SECONDS = 30
 _GOSU_LIST_PAGES = 3
 _GOSU_DETAIL_CACHE_SECONDS = 15
@@ -578,7 +584,7 @@ def _get_series_gosu(game_slug: str, team_a: str, team_b: str, expected_epoch: O
     home_score, away_score = home_opp.get("score") or 0, away_opp.get("score") or 0
 
     return {
-        "sport": "dota2" if game_slug == "dota2" else "cs2",
+        "sport": _GOSU_SLUG_TO_SPORT.get(game_slug, game_slug),
         "provider": "gosugamers",
         "home_team": home_opp.get("name"),
         "away_team": away_opp.get("name"),
@@ -717,8 +723,7 @@ def get_series(sport: str, team_a: str, team_b: str, start_time: Optional[float]
         result = _get_series_hawk(team_a, team_b)
         if result:
             return result
-        return _get_series_gosu("dota2", team_a, team_b, start_time)
-    return _get_series_gosu("counterstrike", team_a, team_b, start_time)
+    return _get_series_gosu(_GOSU_GAME_SLUGS[norm_sport], team_a, team_b, start_time)
 
 
 def is_finished(series_data: dict) -> bool:
@@ -754,22 +759,26 @@ def live_kill_count(series_data: dict) -> Optional[tuple[int, int]]:
     """(home, away) live in-map score for whichever map is currently being
     played - kills for Dota 2 (hawk.live), rounds for CS2 (Strafe.com,
     since neither hawk.live nor GosuGamers covers CS2 at all, and
-    GosuGamers has no live in-map stat for either game). Purely a
-    supplementary display value, not used for grading anything - every
-    market here settles on maps won. None while notstarted/finished, if the
-    relevant provider has no live data for this map right now, or (Dota 2
-    only) if the series was only ever resolved via the GosuGamers fallback
-    - confirmed live, a real Nigma Galaxy vs Vici Gaming series resolved
-    that way crashed the whole /parlay-visible pick with a raw KeyError
-    ("unexpected error: 'series'") instead of returning None, since
-    _hawk_live_kill_count assumes hawk.live's own series shape unconditionally."""
+    GosuGamers has no live in-map stat for either game). None for LoL/Mobile
+    Legends - Strafe.com only covers CS2, and there's no other live in-map
+    stat source wired up for either yet. Purely a supplementary display
+    value, not used for grading anything - every market here settles on
+    maps won. None while notstarted/finished, if the relevant provider has
+    no live data for this map right now, or (Dota 2 only) if the series was
+    only ever resolved via the GosuGamers fallback - confirmed live, a real
+    Nigma Galaxy vs Vici Gaming series resolved that way crashed the whole
+    /parlay-visible pick with a raw KeyError ("unexpected error: 'series'")
+    instead of returning None, since _hawk_live_kill_count assumes
+    hawk.live's own series shape unconditionally."""
     if series_data["status"] != "inprogress":
         return None
     if series_data["sport"] == "dota2":
         if series_data["_ref"]["provider"] != "hawklive":
             return None
         return _hawk_live_kill_count(series_data)
-    return _strafe_live_round_score(series_data["home_team"], series_data["away_team"])
+    if series_data["sport"] == "cs2":
+        return _strafe_live_round_score(series_data["home_team"], series_data["away_team"])
+    return None
 
 
 def total_kills(series_data: dict) -> Optional[tuple[int, int]]:

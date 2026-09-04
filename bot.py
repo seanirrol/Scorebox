@@ -1709,8 +1709,8 @@ async def _auto_esports(
     map_number: Optional[int] = None, picked_maps: Optional[int] = None, other_maps: Optional[int] = None,
     section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
 ):
-    """Dota 2 / CS2 picks - six markets, all settling on the overall series
-    or one specific map within it - see esports.py/esportstracker.py.
+    """Dota 2 / CS2 / LoL / Mobile Legends picks - six markets, all settling
+    on the overall series or one specific map within it - see esports.py/esportstracker.py.
     Unlike every other sport in this bot, both team_a and team_b (not just
     one) are needed to resolve the match at all - hawk.live/GosuGamers have
     no "find any match for this one team" lookup the way 365scores/ESPN do."""
@@ -2358,6 +2358,8 @@ _TRACKTODAY_SPORT_CHOICES = [
     app_commands.Choice(name="Boxing", value="Boxing"),
     app_commands.Choice(name="Dota 2", value="Dota 2"),
     app_commands.Choice(name="CS2", value="CS2"),
+    app_commands.Choice(name="LoL", value="LoL"),
+    app_commands.Choice(name="Mobile Legends", value="Mobile Legends"),
 ]
 
 
@@ -3030,7 +3032,7 @@ _SECTION_TITLES = {
     "tennis_prop": "Tracked tennis player props",
     "soccer_prop": "Tracked soccer player props",
     "ufc": "Tracked UFC picks",
-    "esports": "Tracked Dota 2 / CS2 picks",
+    "esports": "Tracked Dota 2 / CS2 / LoL / Mobile Legends picks",
 }
 
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Manages background tasks for Dota 2 / CS2 esports picks - eight markets, all
+Manages background tasks for Dota 2 / CS2 / LoL / Mobile Legends esports
+picks - eight markets, all
 settling on the overall best-of-N series or one specific map within it (see
 esports.py's own docstring for where the underlying data comes from):
 
@@ -69,7 +70,7 @@ MAX_CONSECUTIVE_MISSES = 6  # raised from 3 - see tracker.py's own comment
 MAX_CONSECUTIVE_RATE_LIMIT_FAILURES = 20  # separate, more generous threshold for a 429 on the edit itself - see tracker.py
 TRASH_EMOJI = "🗑️"
 
-_SPORT_LABELS = {"dota2": "Dota 2", "cs2": "CS2"}
+_SPORT_LABELS = {"dota2": "Dota 2", "cs2": "CS2", "lol": "LoL", "mobilelegends": "Mobile Legends"}
 
 _active: dict[str, asyncio.Task] = {}
 

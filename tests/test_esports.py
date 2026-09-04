@@ -50,6 +50,44 @@ def _map(number, is_team1_radiant, radiant_score, dire_score, winner=True):
     }
 
 
+class NormalizeSport(unittest.TestCase):
+    """LoL and Mobile Legends both route through GosuGamers only (see
+    _GOSU_GAME_SLUGS) - confirmed live against real GosuGamers matches
+    during development (gosugamers.net/lol and /mobile-legends both have a
+    live matches listing), unlike hawk.live which only ever covers Dota 2."""
+
+    def test_lol_recognized(self):
+        self.assertTrue(esports.is_supported_sport("LoL"))
+        self.assertTrue(esports.is_supported_sport("League of Legends"))
+
+    def test_mobile_legends_recognized(self):
+        self.assertTrue(esports.is_supported_sport("mobilelegends"))
+        self.assertTrue(esports.is_supported_sport("Mobile Legends"))
+        self.assertTrue(esports.is_supported_sport("MLBB"))
+
+    def test_unrelated_esport_not_recognized(self):
+        # Confirms this didn't accidentally broaden to "any esport" - only
+        # the four games actually wired up here (see _GOSU_GAME_SLUGS)
+        # should be recognized.
+        self.assertFalse(esports.is_supported_sport("Valorant"))
+
+
+class LiveKillCountUnsupportedSport(unittest.TestCase):
+    """live_kill_count's CS2 branch calls out to Strafe.com (a CS2-only
+    site) - LoL/Mobile Legends must return None directly instead of
+    silently making a doomed request to a site that can never have their
+    data, same "no live in-map stat available" outcome as before this sport
+    existed at all, just without the wasted network call."""
+
+    def test_lol_returns_none_without_hitting_strafe(self):
+        series = {"sport": "lol", "status": "inprogress", "home_team": "Team A", "away_team": "Team B"}
+        self.assertIsNone(esports.live_kill_count(series))
+
+    def test_mobile_legends_returns_none_without_hitting_strafe(self):
+        series = {"sport": "mobilelegends", "status": "inprogress", "home_team": "Team A", "away_team": "Team B"}
+        self.assertIsNone(esports.live_kill_count(series))
+
+
 class GradeWinAtLeastOneMap(unittest.TestCase):
     def test_locked_in_but_series_still_live_returns_none(self):
         # Confirmed live: a still-live best-of-3 (1-0, picked team already

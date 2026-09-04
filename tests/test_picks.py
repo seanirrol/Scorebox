@@ -388,6 +388,49 @@ class EsportsBareHeaderNoMatchupFallback(unittest.TestCase):
         self.assertEqual(picked, [{"kind": "track", "sport": "basketball", "team": "Indiana Fever", "section": "WNBA", "raw": "Indiana Fever"}])
 
 
+class EsportsLolAndMobileLegends(unittest.TestCase):
+    """LoL/Mobile Legends both route through the same generic esports
+    parsers as Dota 2/CS2 (see esports.py's own docstring - only the
+    Dota 2-only kill markets are excluded, gated separately in
+    _parse_esports_pick) - GosuGamers has a live matches listing for both
+    (gosugamers.net/lol and /mobile-legends), confirmed live during
+    development, unlike hawk.live which only ever covers Dota 2."""
+
+    def test_lol_total_maps(self):
+        pick = picks.parse_pick_line("[LoL] KT Rolster vs Dplus KIA - Over 3.5 Total Maps")
+        self.assertEqual(pick, {
+            "kind": "esports_total_maps", "sport": "lol",
+            "team_a": "KT Rolster", "team_b": "Dplus KIA", "direction": "over", "line": 3.5,
+        })
+
+    def test_mobile_legends_match_winner(self):
+        pick = picks.parse_pick_line("[Mobile Legends] Twisted Minds PH vs Aurora Gaming PH - Twisted Minds PH ML")
+        self.assertEqual(pick, {
+            "kind": "esports_match_winner", "sport": "mobilelegends",
+            "team_a": "Twisted Minds PH", "team_b": "Aurora Gaming PH", "team": "Twisted Minds PH",
+        })
+
+    def test_mlbb_tag_alias(self):
+        pick = picks.parse_pick_line("[MLBB] TNC Pro Team vs ONIC Philippines - ONIC Philippines -1.5 Map Handicap")
+        self.assertEqual(pick["sport"], "mobilelegends")
+
+    def test_map_handicap_underdog_side_needs_no_explicit_plus_sign(self):
+        # Confirmed live: a real sportsbook slip wrote the underdog's own
+        # line as a bare "(1.5)" with no "+" at all - only the favorite's
+        # negative side ever carries an explicit sign.
+        pick = picks.parse_pick_line("[Mobile Legends] Natus Vincere vs Dewa United - Dewa United 1.5 Map Handicap")
+        self.assertEqual(pick["kind"], "esports_map_handicap")
+        self.assertEqual(pick["team"], "Dewa United")
+        self.assertEqual(pick["line"], 1.5)
+
+    def test_lol_kill_markets_not_supported(self):
+        # Kills are Dota 2-only (see EsportsMapKillsHandicap.test_cs2_not_
+        # supported's same reasoning) - the kill-market parsers must stay
+        # gated to "dota2" specifically, not broadened to every esport.
+        pick = picks.parse_pick_line("[LoL] KT Rolster vs Dplus KIA - Over 130.5 Total Kills")
+        self.assertIsNone(pick)
+
+
 class EsportsMapKillsHandicap(unittest.TestCase):
     """"Team X (-4.5) Map 1 Kills Handicap" - a spread on one specific map's
     own kill count, distinct from the maps-won Map Handicap and the
