@@ -46,6 +46,28 @@ class NamesMatchAccentFolding(unittest.TestCase):
         self.assertTrue(scores365.names_match("Xin-Yu Wang", "Xinyu"))
 
 
+class NamesMatchKnownAliases(unittest.TestCase):
+    """365scores lists some well-known clubs under a name that shares no
+    word at all with how a bettor actually writes them - no amount of
+    accent-folding/fuzzy-transliteration/hyphen-fusing helps when there's
+    no overlapping word to anchor on in the first place. Confirmed live:
+    365scores lists Paris Saint-Germain as just "PSG" - a real "Paris
+    Saint Germain ML" pick queued forever with "no match found" despite
+    the game being live the whole time."""
+
+    def test_psg_acronym_matches_full_name(self):
+        self.assertTrue(scores365.names_match("Paris Saint Germain", "PSG"))
+
+    def test_direction_independent(self):
+        self.assertTrue(scores365.names_match("PSG", "Paris Saint Germain"))
+
+    def test_hyphenated_full_name_variant_also_matches(self):
+        self.assertTrue(scores365.names_match("Paris Saint-Germain", "PSG"))
+
+    def test_unrelated_team_does_not_match_the_alias(self):
+        self.assertFalse(scores365.names_match("PSG", "Real Madrid"))
+
+
 class NamesMatchFuzzyTransliteration(unittest.TestCase):
     """A first name transliterated differently by two sources (e.g. a
     Russian name romanized two valid ways) is allowed to differ by a

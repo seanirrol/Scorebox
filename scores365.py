@@ -951,7 +951,28 @@ def _reserve_qualifiers(name: str) -> frozenset[str]:
     return frozenset(_RESERVE_QUALIFIER_RE.findall(lowered))
 
 
+# Well-known clubs where 365scores' own name shares no word (not even a
+# fuzzy-matchable one) with how a bettor/sportsbook actually writes it -
+# every other case in this file (accents, hyphens, transliteration,
+# reserve-team qualifiers) still has SOME overlapping word to anchor a
+# match on; an acronym like "PSG" has none at all against "Paris Saint
+# Germain". Confirmed live: 365scores lists Paris Saint-Germain as just
+# "PSG" (see the match's own #id=4735273 page), so a real "Paris Saint
+# Germain ML" pick queued forever with "no match found" despite the game
+# being live on 365scores the whole time. Keyed by the alias's own
+# normalized (_normalize) form so lookup doesn't need a second pass through
+# accent-stripping/lowercasing.
+_TEAM_NAME_ALIASES = {
+    "psg": "Paris Saint Germain",
+}
+
+
+def _resolve_alias(name: str) -> str:
+    return _TEAM_NAME_ALIASES.get(_normalize(name), name)
+
+
 def names_match(a: str, b: str) -> bool:
+    a, b = _resolve_alias(a), _resolve_alias(b)
     if _reserve_qualifiers(a) != _reserve_qualifiers(b):
         return False
     na, nb = _normalize(a), _normalize(b)
