@@ -88,6 +88,28 @@ def _key(channel_id: int, identifier: str) -> str:
     return f"{channel_id}:{identifier}"
 
 
+def _persist(key: str, group: Optional[dict]):
+    """Reloads parlay_state.json fresh right before writing, then applies
+    only this transaction's own key - state.save_parlays writes the WHOLE
+    file, and every caller here awaits a Discord API call (via
+    _post_or_edit_summary/_repost_summary) between its own load and save, so
+    a same-process but DIFFERENT group's update can load, save, and get
+    silently clobbered by this transaction's now-stale full-dict snapshot -
+    _group_locks only serializes access to the SAME group's key, not the
+    shared file itself. Confirmed live: group 25808's summary card kept
+    losing its freshly-reposted message id back to a dead one every cycle
+    for hours - another parlay's concurrent update saved its own fresh copy
+    (still holding 25808's stale pre-repost state) in the window 25808's own
+    transaction spent awaiting Discord, and 25808's save then clobbered that
+    right back. Pass group=None to delete the key instead of writing it."""
+    data = state.load_parlays()
+    if group is None:
+        data.pop(key, None)
+    else:
+        data[key] = group
+    state.save_parlays(data)
+
+
 def _tracker_modules():
     """Lazily imports every tracker module (function-local, not at module
     level) since each of them calls back into this module's
@@ -611,8 +633,7 @@ async def report_leg_progress(
             message_id = legs[leg_id].get("message_id")
             legs[leg_id] = {"label": label, "status": "pending", "detail": detail, "message_id": message_id}
             group["summary_message_id"] = await _post_or_edit_summary(channel, channel_id, group)
-            data[key] = group
-            state.save_parlays(data)
+            _persist(key, group)
 
 
 async def handle_leg_result(
@@ -659,10 +680,9 @@ async def handle_leg_result(
                 # The summary card message itself stays in the channel
                 # (not deleted) as the final record, just no longer
                 # tracked.
-                data.pop(key, None)
+                _persist(key, None)
             else:
-                data[key] = group
-            state.save_parlays(data)
+                _persist(key, group)
 
 
 async def add_legs(
@@ -708,8 +728,7 @@ async def add_legs(
 
         if added:
             group["summary_message_id"] = await _post_or_edit_summary(channel, channel_id, group)
-        data[key] = group
-        state.save_parlays(data)
+        _persist(key, group)
 
     parts = []
     if added:
@@ -792,8 +811,7 @@ async def remove_legs(
 
         _recompute_group_counts(group)
         group["summary_message_id"] = await _post_or_edit_summary(channel, channel_id, group)
-        data[key] = group
-        state.save_parlays(data)
+        _persist(key, group)
 
     parts = [f"Removed {len(removed)} leg(s): {', '.join(removed)}"]
     if not_in_group:
@@ -846,11 +864,7 @@ async def set_leg_result(
         group["summary_message_id"] = await _repost_summary(channel, channel_id, key, group)
 
         all_resolved = group["resolved_legs"] >= group["total_legs"] + group["voided"]
-        if all_resolved:
-            data.pop(key, None)
-        else:
-            data[key] = group
-        state.save_parlays(data)
+        _persist(key, None if all_resolved else group)
 
     parts = [f"Marked {len(resolved_ids)} leg(s) as {_RESULT_DETAIL[result]}: {', '.join(resolved_ids)}"]
     if not_found:
