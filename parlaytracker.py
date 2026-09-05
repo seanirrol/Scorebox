@@ -116,6 +116,7 @@ def _tracker_modules():
     report_leg_progress/handle_leg_result/groups_for_leg - a module-level
     import here would be circular."""
     import boxingtracker
+    import doublechancetracker
     import esportstracker
     import f5tracker
     import halftracker
@@ -138,6 +139,7 @@ def _tracker_modules():
         "settracker": settracker, "soccerpropstracker": soccerpropstracker,
         "tennispropstracker": tennispropstracker, "ufctracker": ufctracker, "boxingtracker": boxingtracker,
         "esportstracker": esportstracker, "kboproptracker": kboproptracker, "htfttracker": htfttracker,
+        "doublechancetracker": doublechancetracker,
     }
 
 
@@ -256,6 +258,11 @@ def resolve_leg(message_id: int) -> Optional[tuple[str, str, int]]:
         channel_id, game_id, ht_team, ft_team, _owner_id = owner
         key = mods["htfttracker"].track_key(channel_id, game_id, ht_team, ft_team)
         return "htfttracker", key, channel_id
+
+    owner = mods["doublechancetracker"].get_message_owner(message_id)
+    if owner:
+        channel_id, game_id, _owner_id = owner
+        return "doublechancetracker", mods["doublechancetracker"].track_key(channel_id, game_id), channel_id
 
     return None
 

@@ -26,6 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import discord
 
 import boxingtracker
+import doublechancetracker
 import esportstracker
 import f5tracker
 import halftracker
@@ -174,6 +175,19 @@ class ResolveLegMatchesEachModulesOwnerShape(unittest.TestCase):
         self.assertEqual(
             parlaytracker.resolve_leg(12),
             ("esportstracker", esportstracker.track_key(555, "cs2", "Team A", "Team B", "match_winner"), 555),
+        )
+
+    def test_doublechancetracker_was_completely_missing(self):
+        # Confirmed live: a real "Draw or Atletico Madrid" double-chance
+        # card was actively tracked (doublechancetracker.py already calls
+        # back into parlaytracker.groups_for_leg on every poll cycle), but
+        # /parlay add always reported it as "Not a currently-tracked card"
+        # since this module had no branch in resolve_leg at all - same
+        # class of omission as halftracker above.
+        self._register(doublechancetracker, 15, 555, 100, 1)
+        self.assertEqual(
+            parlaytracker.resolve_leg(15),
+            ("doublechancetracker", doublechancetracker.track_key(555, 100), 555),
         )
 
     def test_unknown_message_id_returns_none(self):
