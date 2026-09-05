@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
 Regression tests for mergetracker.py - the /merge command that combines
-several already-tracked cards (tracker.py/doublechancetracker.py) on the
-SAME game into one card. See mergetracker.py's own module docstring for why
-a merged-away leg's own tracker loop must report through here instead of
-just being left to fail its own (deleted) card's edit.
+several already-tracked cards (tracker.py/doublechancetracker.py/
+settracker.py) on the SAME game into one card. See mergetracker.py's own
+module docstring for why a merged-away leg's own tracker loop must report
+through here instead of just being left to fail its own (deleted) card's
+edit.
 
 Run with: python -m unittest discover -s tests -t .
 """
@@ -22,6 +23,7 @@ import discord
 import doublechancetracker
 import mergetracker
 import scores365
+import settracker
 import tracker
 
 
@@ -243,13 +245,14 @@ class PersistDoesNotClobberAConcurrentlySavedDifferentGroup(unittest.TestCase):
 
 class CreateMergeValidation(unittest.TestCase):
     """create_merge is the /merge command's entry point - resolves each
-    pasted card id via tracker.py/doublechancetracker.py's own
+    pasted card id via tracker.py/doublechancetracker.py/settracker.py's own
     get_message_owner (same source parlaytracker.resolve_leg uses), then
     requires every id to belong to this channel and the SAME game."""
 
     def setUp(self):
         self._registered_tracker = []
         self._registered_dc = []
+        self._registered_set = []
         self._data: dict = {}
         self._orig_load = mergetracker.state.load_merges
         self._orig_save = mergetracker.state.save_merges
@@ -266,6 +269,8 @@ class CreateMergeValidation(unittest.TestCase):
             tracker.unregister_message(mid)
         for mid in self._registered_dc:
             doublechancetracker.unregister_message(mid)
+        for mid in self._registered_set:
+            settracker.unregister_message(mid)
         mergetracker.state.load_merges = self._orig_load
         mergetracker.state.save_merges = self._orig_save
         mergetracker._leg_index.clear()
@@ -279,6 +284,10 @@ class CreateMergeValidation(unittest.TestCase):
     def _register_dc_leg(self, mid, channel_id, game_id):
         doublechancetracker.register_message(mid, channel_id, game_id, 1)
         self._registered_dc.append(mid)
+
+    def _register_set_leg(self, mid, channel_id, game_id, market, team=None):
+        settracker.register_message(mid, channel_id, game_id, market, team, 1)
+        self._registered_set.append(mid)
 
     def test_needs_at_least_two_ids(self):
         result = asyncio.run(mergetracker.create_merge(_FakeChannel(), 555, [1]))
@@ -323,6 +332,27 @@ class CreateMergeValidation(unittest.TestCase):
         self.assertEqual(len(channel.sent), 1)
         self.assertEqual(mergetracker.merged_into(555, "tracker", tracker.track_key(555, 100, None, None, "over", 2.5)), "555:100")
         self.assertEqual(mergetracker.merged_into(555, "doublechancetracker", doublechancetracker.track_key(555, 100)), "555:100")
+
+    def test_settracker_legs_resolve_and_merge_alongside_tracker(self):
+        # The original real-world case this was added for: a tennis
+        # same-game multi (Win a Set / Games Handicap / 1st Set Games
+        # Handicap) all backed by settracker.py, initially rejected by
+        # /merge entirely since this module had no branch here yet.
+        self._register_set_leg(1, 555, 100, "win_a_set", "Francisco Cerundolo")
+        self._register_set_leg(2, 555, 100, "games_handicap", "Francisco Cerundolo")
+        self._register_set_leg(3, 555, 100, "set1_games_handicap", "Francisco Cerundolo")
+        channel = _FakeChannel()
+        channel.add(_FakeMessage(1, embeds=[_FakeEmbed(description="Francisco Cerundolo to Win a Set", author_name="Tennis")]))
+        channel.add(_FakeMessage(2, embeds=[_FakeEmbed(description="Francisco Cerundolo +6.5 Games")]))
+        channel.add(_FakeMessage(3, embeds=[_FakeEmbed(description="Francisco Cerundolo +2.5 1st Set Games")]))
+
+        result = asyncio.run(mergetracker.create_merge(channel, 555, [1, 2, 3]))
+
+        self.assertIn("Merged 3 leg(s)", result)
+        group = self._data["555:100"]
+        self.assertEqual(len(group["legs"]), 3)
+        for mid in (1, 2, 3):
+            self.assertTrue(channel.messages[mid].deleted)
 
     def test_rejects_merging_into_an_already_merged_game(self):
         self._data["555:100"] = {"channel_id": 555, "game_id": 100, "legs": {}}

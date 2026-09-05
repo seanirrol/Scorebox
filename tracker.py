@@ -567,28 +567,19 @@ async def _track_loop(
                 continue
             consecutive_misses = 0
 
+            # Checked once per cycle, then threaded through every branch
+            # below as `if not merge_key: <touch the individual card>` -
+            # merging replaces this card with a combined one (see
+            # mergetracker.py's own module docstring), but every OTHER
+            # side effect below (grading, dailylog, and critically this
+            # leg's own parlay reporting - a leg can be merged AND in a
+            # parlay at the same time, independently of each other) must
+            # keep running exactly as before. Confirmed live: an earlier
+            # version of this guard short-circuited the whole cycle
+            # (`continue`/`break` immediately after reporting to
+            # mergetracker), which silently stopped this leg's parlay
+            # summary row from ever updating again the moment it got merged.
             merge_key = mergetracker.merged_into(channel_id, "tracker", key)
-            if merge_key:
-                # This leg's own card was deleted by /merge - it no longer
-                # exists to build/edit, so report straight into the merged
-                # card instead (see mergetracker.py's own module docstring
-                # for why leaving this loop untouched would auto-void the
-                # pick within a few cycles instead).
-                if scores365.is_finished(game):
-                    result = _grade(game, picked_team, team_total, total_direction, total_line)
-                    if not result and scores365.is_cancelled(game):
-                        result = "void"
-                    if result:
-                        dailylog.record_result(channel_id, "tracker", key, result)
-                        await mergetracker.handle_leg_result(message.channel, channel_id, merge_key, "tracker", key, result)
-                    break
-                kickoff = scores365.start_epoch(game)
-                if scores365.map_status_type(game.get("statusGroup")) == "notstarted":
-                    detail = f"NOT STARTED - <t:{int(kickoff)}:f>" if kickoff else "NOT STARTED"
-                else:
-                    detail = f"LIVE, {scores365.status_line(game, sport_id)}"
-                await mergetracker.report_leg(message.channel, channel_id, merge_key, "tracker", key, detail, game, sport_id)
-                continue
 
             embed, file = await build_embed(
                 game, sport_id, picked_team, total_direction, total_line, team_total, message_id=message.id,
@@ -608,15 +599,17 @@ async def _track_loop(
                 # be buried under whatever chat happened during the (possibly
                 # long) hibernation. This is the one moment reposting helps
                 # rather than hurts, since it's about to actually go live.
-                await _repost_final(embed, file)
-                _persist(
-                    channel_id, game_id, message.id, sport_id, owner_id, picked_team,
-                    total_direction, total_line, team_total,
-                )
+                if not merge_key:
+                    await _repost_final(embed, file)
+                    _persist(
+                        channel_id, game_id, message.id, sport_id, owner_id, picked_team,
+                        total_direction, total_line, team_total,
+                    )
                 continue
 
             if scores365.is_finished(game):
-                carry_emojis = await _repost_final(embed, file)
+                if not merge_key:
+                    carry_emojis = await _repost_final(embed, file)
 
                 if picked_team or (total_direction and total_line is not None):
                     result = _grade(game, picked_team, team_total, total_direction, total_line)
@@ -626,19 +619,23 @@ async def _track_loop(
                         # handling so the card's void color/title and the
                         # actual recorded result never disagree.
                         result = "void"
-                    reaction = _RESULT_REACTIONS.get(result)
-                    if reaction:
-                        try:
-                            await message.add_reaction(reaction)
-                        except discord.HTTPException as e:
-                            log.warning("Failed to add result reaction: %s", e)
+                    if not merge_key:
+                        reaction = _RESULT_REACTIONS.get(result)
+                        if reaction:
+                            try:
+                                await message.add_reaction(reaction)
+                            except discord.HTTPException as e:
+                                log.warning("Failed to add result reaction: %s", e)
                     if result:
                         dailylog.record_result(channel_id, "tracker", key, result)
                         group_ids = parlaytracker.groups_for_leg(channel_id, "tracker", key)
                         await parlaytracker.handle_leg_result(
                             message.channel, channel_id, message, "tracker", key, leg_label, result, group_ids,
                         )
-                pendingdelete.start(channel_id, message, embed.description or "")
+                        if merge_key:
+                            await mergetracker.handle_leg_result(message.channel, channel_id, merge_key, "tracker", key, result)
+                if not merge_key:
+                    pendingdelete.start(channel_id, message, embed.description or "")
                 break
 
             kickoff = scores365.start_epoch(game)
@@ -652,6 +649,9 @@ async def _track_loop(
                 await parlaytracker.report_leg_progress(
                     message.channel, channel_id, message, "tracker", key, leg_label, detail, group_ids,
                 )
+            if merge_key:
+                await mergetracker.report_leg(message.channel, channel_id, merge_key, "tracker", key, detail, game, sport_id)
+                continue
 
             try:
                 await throttle.run(channel_id, lambda: message.edit(embed=embed, attachments=[file]))

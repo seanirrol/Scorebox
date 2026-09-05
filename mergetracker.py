@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 """
 Combines several already-tracked cards (tracker.py / doublechancetracker.py
-only, for now) that are all on the SAME underlying game into one card - a
-stack of per-market pick lines up top (each showing its own live status),
-with one shared live score box at the bottom, via the /merge command
-(paste the comma-separated footer ids of the cards to combine).
+/ settracker.py only, for now) that are all on the SAME underlying game
+into one card - a stack of per-market pick lines up top (each showing its
+own live status), with one shared live score box at the bottom, via the
+/merge command (paste the comma-separated footer ids of the cards to
+combine).
 
 Unlike parlaytracker's groups, a merge group has no independent polling
 loop of its own - it's purely passive, refreshed opportunistically whenever
 whichever underlying leg's own tracker loop next reports in (report_leg/
-handle_leg_result, called from the exact same call sites tracker.py/
-doublechancetracker.py already use to report into parlaytracker on every
-poll cycle). This avoids needing a second hibernation/timeout/finished-
+handle_leg_result, called from the exact same call sites each supported
+module already uses to report into parlaytracker on every poll cycle).
+This avoids needing a second hibernation/timeout/finished-
 detection system - the underlying legs' own loops already do all of that,
 this module just needs somewhere to put the result. A merged-away leg's own
 tracker loop skips building/editing its own (now-deleted) card entirely -
@@ -91,14 +92,15 @@ def merged_into(channel_id: int, module_name: str, track_key_str: str) -> Option
 
 
 def _tracker_modules():
-    """Lazily imported - tracker.py/doublechancetracker.py both import this
-    module at the top level to call merged_into/report_leg/
-    handle_leg_result, so importing them back at module level here would be
-    circular (same reasoning as parlaytracker._tracker_modules)."""
+    """Lazily imported - every supported module imports this one at the top
+    level to call merged_into/report_leg/handle_leg_result, so importing
+    them back at module level here would be circular (same reasoning as
+    parlaytracker._tracker_modules)."""
     import doublechancetracker
+    import settracker
     import tracker
 
-    return {"tracker": tracker, "doublechancetracker": doublechancetracker}
+    return {"tracker": tracker, "doublechancetracker": doublechancetracker, "settracker": settracker}
 
 
 async def build_merged_embed(
@@ -256,6 +258,13 @@ async def create_merge(channel: discord.abc.Messageable, channel_id: int, messag
                 owner_channel_id, game_id, _owner_id = owner
                 key = mods["doublechancetracker"].track_key(owner_channel_id, game_id)
                 found = ("doublechancetracker", key, owner_channel_id, game_id)
+
+        if found is None:
+            owner = mods["settracker"].get_message_owner(mid)
+            if owner:
+                owner_channel_id, game_id, market, team, _owner_id = owner
+                key = mods["settracker"].track_key(owner_channel_id, game_id, market, team)
+                found = ("settracker", key, owner_channel_id, game_id)
 
         if found is None:
             not_found.append(str(mid))

@@ -73,6 +73,7 @@ import discord
 import botlog
 import config
 import dailylog
+import mergetracker
 import parlaytracker
 import pendingdelete
 import scoreimage
@@ -725,6 +726,14 @@ async def _track_loop(
                 continue
             consecutive_misses = 0
 
+            # Checked once per cycle, then threaded through every branch
+            # below as `if not merge_key: <touch the individual card>` - see
+            # tracker.py's identical guard for why a leg's own parlay
+            # reporting must keep running unconditionally even once merged
+            # (a leg can be merged AND in a parlay at the same time,
+            # independently of each other).
+            merge_key = mergetracker.merged_into(channel_id, "settracker", key)
+
             embed, file = await build_embed(game, sport_id, market, team, direction, line, message_id=message.id)
             leg_matchup = f"{(game.get('homeCompetitor') or {}).get('name', '?')} vs {(game.get('awayCompetitor') or {}).get('name', '?')}"
             leg_pick = embed.description.splitlines()[0] if embed.description else None
@@ -735,27 +744,31 @@ async def _track_loop(
                 # bottom of the channel instead of editing a message that may
                 # be buried under whatever chat happened during the (possibly
                 # long) hibernation. Same treatment as tracker.py/f5tracker.py.
-                await _repost_final(embed, file)
-                _persist(channel_id, game_id, market, message.id, sport_id, owner_id, team, direction, line)
+                if not merge_key:
+                    await _repost_final(embed, file)
+                    _persist(channel_id, game_id, market, message.id, sport_id, owner_id, team, direction, line)
                 continue
 
             decided, result = grade_now(game, market, team, direction, line)
             if decided:
-                await _repost_final(embed, file)
+                if not merge_key:
+                    await _repost_final(embed, file)
 
-                reaction = _RESULT_REACTIONS.get(result)
-                if reaction:
-                    try:
-                        await message.add_reaction(reaction)
-                    except discord.HTTPException as e:
-                        log.warning("Failed to add result reaction: %s", e)
-                pendingdelete.start(channel_id, message, embed.description or "")
+                    reaction = _RESULT_REACTIONS.get(result)
+                    if reaction:
+                        try:
+                            await message.add_reaction(reaction)
+                        except discord.HTTPException as e:
+                            log.warning("Failed to add result reaction: %s", e)
+                    pendingdelete.start(channel_id, message, embed.description or "")
                 if result:
                     dailylog.record_result(channel_id, "settracker", key, result)
                     group_ids = parlaytracker.groups_for_leg(channel_id, "settracker", key)
                     await parlaytracker.handle_leg_result(
                         message.channel, channel_id, message, "settracker", key, leg_label, result, group_ids,
                     )
+                    if merge_key:
+                        await mergetracker.handle_leg_result(message.channel, channel_id, merge_key, "settracker", key, result)
                 break
 
             if scores365.is_cancelled(game):
@@ -764,22 +777,25 @@ async def _track_loop(
                 # matters (the loop above would otherwise wait here forever,
                 # showing a misleading "LIVE" detail on a match that's never
                 # resuming).
-                void_embed, void_file = await build_embed(
-                    game, sport_id, market, team, direction, line,
-                    force_result="void", message_id=message.id,
-                )
-                void_embed.title = _RESULT_TITLES["void"]
-                await _repost_final(void_embed, void_file)
-                try:
-                    await message.add_reaction(_RESULT_REACTIONS["void"])
-                except discord.HTTPException as e:
-                    log.warning("Failed to add void reaction: %s", e)
-                pendingdelete.start(channel_id, message, void_embed.description or "")
+                if not merge_key:
+                    void_embed, void_file = await build_embed(
+                        game, sport_id, market, team, direction, line,
+                        force_result="void", message_id=message.id,
+                    )
+                    void_embed.title = _RESULT_TITLES["void"]
+                    await _repost_final(void_embed, void_file)
+                    try:
+                        await message.add_reaction(_RESULT_REACTIONS["void"])
+                    except discord.HTTPException as e:
+                        log.warning("Failed to add void reaction: %s", e)
+                    pendingdelete.start(channel_id, message, void_embed.description or "")
                 dailylog.record_result(channel_id, "settracker", key, "void", "Cancelled")
                 group_ids = parlaytracker.groups_for_leg(channel_id, "settracker", key)
                 await parlaytracker.handle_leg_result(
                     message.channel, channel_id, message, "settracker", key, leg_label, "void", group_ids,
                 )
+                if merge_key:
+                    await mergetracker.handle_leg_result(message.channel, channel_id, merge_key, "settracker", key, "void")
                 botlog.event(f"➖ Voided ({market}, cancelled): game `{game_id}` in <#{channel_id}>")
                 break
 
@@ -794,6 +810,9 @@ async def _track_loop(
                 await parlaytracker.report_leg_progress(
                     message.channel, channel_id, message, "settracker", key, leg_label, detail, group_ids,
                 )
+            if merge_key:
+                await mergetracker.report_leg(message.channel, channel_id, merge_key, "settracker", key, detail, game, sport_id)
+                continue
 
             image_bytes = file.fp.getvalue()
             if image_bytes == last_sent_image_bytes:
