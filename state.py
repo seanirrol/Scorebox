@@ -40,6 +40,7 @@ WINLOSSGRAPH_OVERRIDES_FILE = os.path.join(_DIR, "winlossgraph_overrides_state.j
 BOXING_FILE = os.path.join(_DIR, "boxing_state.json")
 KBO_PROPS_FILE = os.path.join(_DIR, "kbo_props_state.json")
 DOUBLE_CHANCE_FILE = os.path.join(_DIR, "double_chance_state.json")
+MERGE_FILE = os.path.join(_DIR, "merge_state.json")
 
 
 def _load(path: str) -> dict[str, Any]:
@@ -231,6 +232,14 @@ def load_pending_track() -> dict[str, Any]:
 
 def save_pending_track(data: dict[str, Any]):
     _save(PENDING_TRACK_FILE, data)
+
+
+def load_merges() -> dict[str, Any]:
+    return _load(MERGE_FILE)
+
+
+def save_merges(data: dict[str, Any]):
+    _save(MERGE_FILE, data)
 
 
 def load_pending_auto() -> dict[str, Any]:

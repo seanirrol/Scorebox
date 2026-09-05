@@ -45,6 +45,7 @@ import kboproptracker
 import koreabaseball
 import masterparlay
 import matchhrtracker
+import mergetracker
 import parlaytracker
 import pendingdelete
 import pendingauto
@@ -246,6 +247,7 @@ async def on_ready():
     await _safe_resume("kboproptracker", kboproptracker.resume_all(client))
     await _safe_resume("esportstracker", esportstracker.resume_all(client))
     await _safe_resume("parlaytracker", parlaytracker.resume_all(client))
+    await _safe_resume("mergetracker", mergetracker.resume_all())
     await _safe_resume("pendingdelete", pendingdelete.resume_all(client))
     await _safe_resume("pendingsoccerprops", pendingsoccerprops.resume_all(_resolve_pending_soccer_prop))
     await _safe_resume("pendingtrack", pendingtrack.resume_all(_resolve_pending_track))
@@ -3232,6 +3234,35 @@ async def parlay(
     else:  # remove
         summary = await parlaytracker.remove_legs(interaction.channel, interaction.channel_id, identifier, message_ids)
     botlog.event(f"🎟️ Parlay **{identifier}** ({action.name}) in <#{interaction.channel_id}>: {summary} — by **{interaction.user}**")
+    await interaction.followup.send(summary, ephemeral=True)
+
+
+@tree.command(name="merge", description="Combine several same-match cards (different markets) into one card")
+@app_commands.describe(ids="Comma-separated card IDs from each card's footer - must all be the same match")
+async def merge(interaction: discord.Interaction, ids: str):
+    if not _channel_allowed(interaction):
+        await _reject_wrong_channel(interaction)
+        return
+    _log_command(interaction, ids=ids)
+    await interaction.response.defer(ephemeral=True)
+
+    raw_ids = [part.strip() for part in ids.split(",") if part.strip()]
+    message_ids: list[int] = []
+    invalid = []
+    for raw in raw_ids:
+        try:
+            message_ids.append(int(raw))
+        except ValueError:
+            invalid.append(raw)
+    if invalid:
+        await interaction.followup.send(f"Not a valid card ID (must be numeric): {', '.join(invalid)}", ephemeral=True)
+        return
+    if not message_ids:
+        await interaction.followup.send("No valid card IDs given.", ephemeral=True)
+        return
+
+    summary = await mergetracker.create_merge(interaction.channel, interaction.channel_id, message_ids)
+    botlog.event(f"🔗 Merge in <#{interaction.channel_id}>: {summary} — by **{interaction.user}**")
     await interaction.followup.send(summary, ephemeral=True)
 
 

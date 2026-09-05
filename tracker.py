@@ -13,6 +13,7 @@ import discord
 import botlog
 import config
 import dailylog
+import mergetracker
 import parlaytracker
 import pendingdelete
 import scoreimage
@@ -565,6 +566,29 @@ async def _track_loop(
                     break
                 continue
             consecutive_misses = 0
+
+            merge_key = mergetracker.merged_into(channel_id, "tracker", key)
+            if merge_key:
+                # This leg's own card was deleted by /merge - it no longer
+                # exists to build/edit, so report straight into the merged
+                # card instead (see mergetracker.py's own module docstring
+                # for why leaving this loop untouched would auto-void the
+                # pick within a few cycles instead).
+                if scores365.is_finished(game):
+                    result = _grade(game, picked_team, team_total, total_direction, total_line)
+                    if not result and scores365.is_cancelled(game):
+                        result = "void"
+                    if result:
+                        dailylog.record_result(channel_id, "tracker", key, result)
+                        await mergetracker.handle_leg_result(message.channel, channel_id, merge_key, "tracker", key, result)
+                    break
+                kickoff = scores365.start_epoch(game)
+                if scores365.map_status_type(game.get("statusGroup")) == "notstarted":
+                    detail = f"NOT STARTED - <t:{int(kickoff)}:f>" if kickoff else "NOT STARTED"
+                else:
+                    detail = f"LIVE, {scores365.status_line(game, sport_id)}"
+                await mergetracker.report_leg(message.channel, channel_id, merge_key, "tracker", key, detail, game, sport_id)
+                continue
 
             embed, file = await build_embed(
                 game, sport_id, picked_team, total_direction, total_line, team_total, message_id=message.id,

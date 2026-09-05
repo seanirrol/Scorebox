@@ -30,6 +30,7 @@ import discord
 import botlog
 import config
 import dailylog
+import mergetracker
 import parlaytracker
 import pendingdelete
 import scoreimage
@@ -337,6 +338,38 @@ async def _track_loop(
                     break
                 continue
             consecutive_misses = 0
+
+            merge_key = mergetracker.merged_into(channel_id, "doublechancetracker", key)
+            if merge_key:
+                # This leg's own card was deleted by /merge - see
+                # tracker.py's identical guard/mergetracker.py's own module
+                # docstring for why this can't just be left untouched.
+                if scores365.is_finished(game):
+                    result = scores365.grade_double_chance(game, covered)
+                    if result:
+                        dailylog.record_result(channel_id, "doublechancetracker", key, result)
+                        await mergetracker.handle_leg_result(
+                            message.channel, channel_id, merge_key, "doublechancetracker", key, result,
+                        )
+                    break
+                if scores365.is_cancelled(game):
+                    # A cancelled game will never finish - see the
+                    # non-merged branch below for why this needs its own
+                    # check outside is_finished.
+                    dailylog.record_result(channel_id, "doublechancetracker", key, "void", "Cancelled")
+                    await mergetracker.handle_leg_result(
+                        message.channel, channel_id, merge_key, "doublechancetracker", key, "void",
+                    )
+                    break
+                kickoff = scores365.start_epoch(game)
+                if scores365.map_status_type(game.get("statusGroup")) == "notstarted":
+                    detail = f"NOT STARTED - <t:{int(kickoff)}:f>" if kickoff else "NOT STARTED"
+                else:
+                    detail = f"LIVE, {scores365.status_line(game, sport_id)}"
+                await mergetracker.report_leg(
+                    message.channel, channel_id, merge_key, "doublechancetracker", key, detail, game, sport_id,
+                )
+                continue
 
             embed, file = await build_embed(game, sport_id, team, covered, message_id=message.id)
             leg_matchup = f"{(game.get('homeCompetitor') or {}).get('name', '?')} vs {(game.get('awayCompetitor') or {}).get('name', '?')}"
