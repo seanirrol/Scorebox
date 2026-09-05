@@ -66,6 +66,37 @@ SUMMARY_ALLOWED_USER_IDS: set[int] = {
     int(uid.strip()) for uid in _summary_allowed_user_ids.split(",") if uid.strip()
 }
 
+class ParlayRoute(NamedTuple):
+    scores_channel_id: int
+    post_channel_id: int
+
+
+# Lets /parlay's summary card post to a different channel than the one its
+# legs' own score cards live in - e.g. a dedicated "parlays" channel kept
+# separate from the noisier scores channel. Legs are still only ever
+# matched against scores_channel_id (that's where tracker.py/
+# doublechancetracker.py/settracker.py actually post their cards -
+# unaffected by this setting); only the summary card's own posting
+# location is redirected. /parlay can be invoked from EITHER channel in a
+# pair - both are keyed to the same ParlayRoute below so the lookup is a
+# single dict access regardless of which one was used. A channel with no
+# pair configured here keeps behaving exactly as before (summary posts
+# wherever /parlay was invoked, gated by ALLOWED_CHANNEL_ID as usual).
+# Format (comma-separated "scores_id:post_id" pairs):
+#   PARLAY_ROUTES=111111111111111111:222222222222222222
+_parlay_routes_raw = os.environ.get("PARLAY_ROUTES", "").strip()
+PARLAY_ROUTES: dict[int, ParlayRoute] = {}
+for _proute in _parlay_routes_raw.split(","):
+    _proute = _proute.strip()
+    if not _proute:
+        continue
+    _scores_id, _, _post_id = _proute.partition(":")
+    if _scores_id.strip() and _post_id.strip():
+        _route = ParlayRoute(int(_scores_id.strip()), int(_post_id.strip()))
+        PARLAY_ROUTES[_route.scores_channel_id] = _route
+        PARLAY_ROUTES[_route.post_channel_id] = _route
+
+
 class SummaryRoute(NamedTuple):
     origins: tuple[int, ...]
     post_channel_id: int

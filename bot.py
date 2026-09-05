@@ -3147,6 +3147,28 @@ _PARLAY_RESULT_CHOICES = [
 ]
 
 
+async def _resolve_parlay_scope(interaction: discord.Interaction) -> Optional[tuple[int, discord.abc.Messageable]]:
+    """Resolves the (scores_channel_id, scores_channel) /parlay should
+    actually operate against - every parlaytracker call needs the SCORES
+    channel (where legs' own cards live), not necessarily whatever channel
+    the command was typed in. Lets /parlay be invoked from either side of a
+    config.PARLAY_ROUTES pair (the scores channel itself, or its paired
+    post channel) - both keys resolve to the same route. Falls back to the
+    ordinary global ALLOWED_CHANNEL_ID gate when no route is configured for
+    this channel at all, unchanged from before this pairing existed.
+    Returns None if this channel isn't allowed to run /parlay."""
+    route = config.PARLAY_ROUTES.get(interaction.channel_id)
+    if route is None:
+        return (interaction.channel_id, interaction.channel) if _channel_allowed(interaction) else None
+    if interaction.channel_id == route.scores_channel_id:
+        return route.scores_channel_id, interaction.channel
+    try:
+        scores_channel = client.get_channel(route.scores_channel_id) or await client.fetch_channel(route.scores_channel_id)
+    except discord.HTTPException:
+        return None
+    return route.scores_channel_id, scores_channel
+
+
 @tree.command(name="parlay", description="Manually manage a parlay group by pasting each leg's card ID from its footer")
 @app_commands.describe(
     action="What to do",
@@ -3159,9 +3181,11 @@ async def parlay(
     interaction: discord.Interaction, action: app_commands.Choice[str],
     identifier: Optional[str] = None, ids: Optional[str] = None, result: Optional[app_commands.Choice[str]] = None,
 ):
-    if not _channel_allowed(interaction):
+    scope = await _resolve_parlay_scope(interaction)
+    if scope is None:
         await _reject_wrong_channel(interaction)
         return
+    channel_id, channel = scope
     # Every group lookup is an exact-match dict key (_key(channel_id,
     # identifier) in parlaytracker.py) - untrimmed, incidental leading/
     # trailing whitespace (easy to introduce copy-pasting an identifier
@@ -3176,7 +3200,7 @@ async def parlay(
     await interaction.response.defer(ephemeral=True)
 
     if action.value == "list":
-        groups = parlaytracker.list_groups(interaction.channel_id)
+        groups = parlaytracker.list_groups(channel_id)
         if not groups:
             await interaction.followup.send("No active parlays in this channel.", ephemeral=True)
             return
@@ -3193,7 +3217,7 @@ async def parlay(
         return
 
     if action.value == "create":
-        error = await parlaytracker.create_group(interaction.channel_id, identifier)
+        error = await parlaytracker.create_group(channel_id, identifier)
         if error:
             await interaction.followup.send(error, ephemeral=True)
             return
@@ -3202,12 +3226,12 @@ async def parlay(
             f"`/parlay action:Add legs identifier:{identifier} ids:<card id>, <card id>, ...`",
             ephemeral=True,
         )
-        botlog.event(f"🎟️ Parlay **{identifier}** created in <#{interaction.channel_id}> by **{interaction.user}**")
+        botlog.event(f"🎟️ Parlay **{identifier}** created in <#{channel_id}> by **{interaction.user}**")
         return
 
     if action.value == "delete":
-        summary = await parlaytracker.delete_group(interaction.channel_id, identifier)
-        botlog.event(f"🎟️ Parlay **{identifier}** (Delete) in <#{interaction.channel_id}>: {summary} — by **{interaction.user}**")
+        summary = await parlaytracker.delete_group(channel_id, identifier)
+        botlog.event(f"🎟️ Parlay **{identifier}** (Delete) in <#{channel_id}>: {summary} — by **{interaction.user}**")
         await interaction.followup.send(summary, ephemeral=True)
         return
 
@@ -3233,12 +3257,12 @@ async def parlay(
         if not result:
             await interaction.followup.send("`result` is required for this action.", ephemeral=True)
             return
-        summary = await parlaytracker.set_leg_result(interaction.channel, interaction.channel_id, identifier, message_ids, result.value)
+        summary = await parlaytracker.set_leg_result(channel, channel_id, identifier, message_ids, result.value)
     elif action.value == "add":
-        summary = await parlaytracker.add_legs(interaction.channel, interaction.channel_id, identifier, message_ids)
+        summary = await parlaytracker.add_legs(channel, channel_id, identifier, message_ids)
     else:  # remove
-        summary = await parlaytracker.remove_legs(interaction.channel, interaction.channel_id, identifier, message_ids)
-    botlog.event(f"🎟️ Parlay **{identifier}** ({action.name}) in <#{interaction.channel_id}>: {summary} — by **{interaction.user}**")
+        summary = await parlaytracker.remove_legs(channel, channel_id, identifier, message_ids)
+    botlog.event(f"🎟️ Parlay **{identifier}** ({action.name}) in <#{channel_id}>: {summary} — by **{interaction.user}**")
     await interaction.followup.send(summary, ephemeral=True)
 
 

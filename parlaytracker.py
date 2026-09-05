@@ -46,11 +46,24 @@ from typing import Optional
 
 import discord
 
+import config
 import scoreimage
 import state
 import throttle
 
 log = logging.getLogger("scorebox.parlaytracker")
+
+# Lets _resolve_post_channel fetch an arbitrary channel by id (a group's
+# configured post channel per config.PARLAY_ROUTES, which may differ from
+# whatever channel object a tracker's own poll cycle happens to pass in) -
+# same client-injection pattern as botlog.py's own init/_client.
+_client: Optional[discord.Client] = None
+
+
+def set_client(client: discord.Client):
+    global _client
+    _client = client
+
 
 # Serializes group creation/update per (channel, identifier) - a manual
 # /parlay add/remove and a tracker's own report_leg_progress/
@@ -438,6 +451,29 @@ def _build_summary_embed(group: dict) -> discord.Embed:
 _REPOST_ON_FAILURE_COOLDOWN_SECONDS = 120
 
 
+async def _resolve_post_channel(
+    channel: discord.abc.Messageable, channel_id: int,
+) -> tuple[discord.abc.Messageable, int]:
+    """Redirects to a group's configured post channel (config.PARLAY_ROUTES)
+    when one's set up for this channel_id - a no-op returning (channel,
+    channel_id) unchanged otherwise, so every OTHER parlay (no route
+    configured) behaves exactly as before this existed. channel_id here is
+    always the SCORES channel a group's legs actually live in (unaffected -
+    every tracker still reports using its own card's real channel), only
+    the summary card's own posting destination moves. Falls back to the
+    passed-in channel on any resolution failure (client not ready yet,
+    channel unreachable) rather than dropping the update outright."""
+    route = config.PARLAY_ROUTES.get(channel_id)
+    if not route or route.post_channel_id == channel_id or _client is None:
+        return channel, channel_id
+    try:
+        post_channel = _client.get_channel(route.post_channel_id) or await _client.fetch_channel(route.post_channel_id)
+    except discord.HTTPException as e:
+        log.warning("Failed to resolve parlay post channel %s, posting to %s instead: %s", route.post_channel_id, channel_id, e)
+        return channel, channel_id
+    return post_channel, route.post_channel_id
+
+
 async def _post_or_edit_summary(channel: discord.abc.Messageable, channel_id: int, group: dict) -> Optional[int]:
     """Sends the one summary card the first time a group has anything to
     show, edits it in place on every later update - returns the message id
@@ -453,6 +489,7 @@ async def _post_or_edit_summary(channel: discord.abc.Messageable, channel_id: in
     fell straight through to sending a fresh card with no delete attempt at
     all, silently orphaning one card in the channel per failed edit - a
     multi-day parlay could accumulate several of these over time."""
+    channel, channel_id = await _resolve_post_channel(channel, channel_id)
     embed = _build_summary_embed(group)
     message_id = group.get("summary_message_id")
     old_message: Optional[discord.Message] = None
@@ -502,6 +539,7 @@ async def _repost_summary(channel: discord.abc.Messageable, channel_id: int, key
     message actually being deleted would otherwise orphan it in the
     channel forever, with nothing left anywhere that remembers it needs
     cleaning up. resume_all sweeps this on startup."""
+    channel, channel_id = await _resolve_post_channel(channel, channel_id)
     embed = _build_summary_embed(group)
     old_message_id = group.get("summary_message_id")
 
@@ -538,6 +576,7 @@ async def resume_all(client: discord.Client):
     deleted, same "leave the last known record" treatment as any other
     retired group) - only the dead internal tracking entry goes away, so
     nothing (e.g. groups_for_leg) ever has to see it again."""
+    set_client(client)  # guarantee _resolve_post_channel works below regardless of bot.py's own call-ordering
     data = state.load_parlays()
     changed = False
     for key, group in list(data.items()):
@@ -549,10 +588,16 @@ async def resume_all(client: discord.Client):
         if not old_id:
             continue
         try:
-            channel = await client.fetch_channel(group["channel_id"])
+            # The repost that got interrupted always targets the group's
+            # resolved POST channel (see _repost_summary/_resolve_post_
+            # channel) - fetching group["channel_id"] directly here would
+            # look in the wrong channel for any group with a configured
+            # config.PARLAY_ROUTES redirect.
+            raw_channel = await client.fetch_channel(group["channel_id"])
+            channel, _post_channel_id = await _resolve_post_channel(raw_channel, group["channel_id"])
             message = await channel.fetch_message(old_id)
             await message.delete()
-            log.info("Cleaned up an orphaned parlay summary card %s (interrupted repost) in channel %s", old_id, group["channel_id"])
+            log.info("Cleaned up an orphaned parlay summary card %s (interrupted repost) in channel %s", old_id, channel.id)
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
             pass  # already gone, or no longer reachable - nothing more to do
         group["pending_delete_message_id"] = None

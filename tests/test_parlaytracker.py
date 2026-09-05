@@ -20,12 +20,14 @@ import os
 import sys
 import time
 import unittest
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import discord
 
 import boxingtracker
+import config
 import doublechancetracker
 import esportstracker
 import f5tracker
@@ -387,6 +389,50 @@ class PostOrEditSummaryThrottlesFailureReposts(unittest.TestCase):
         new_id = asyncio.run(parlaytracker._post_or_edit_summary(channel, 555, group))
         self.assertEqual(len(channel.sent), 1)
         self.assertEqual(new_id, channel.sent[0].id)
+
+
+class ResolvePostChannelRedirectsViaConfiguredRoute(unittest.TestCase):
+    """_resolve_post_channel lets a parlay's summary card post to a
+    different channel than wherever its legs actually live (config.
+    PARLAY_ROUTES) - confirmed this was the real blocker for a "put every
+    parlay summary in its own dedicated channel" request, since
+    group["channel_id"] doubled as both the leg-matching key (unaffected -
+    legs still only ever live in the scores channel) AND the summary's own
+    posting destination before this existed."""
+
+    def setUp(self):
+        self._orig_routes = config.PARLAY_ROUTES
+        self._orig_client = parlaytracker._client
+
+    def tearDown(self):
+        config.PARLAY_ROUTES = self._orig_routes
+        parlaytracker._client = self._orig_client
+
+    def test_no_route_configured_returns_the_passed_in_channel_unchanged(self):
+        config.PARLAY_ROUTES = {}
+        channel = object()
+        result = asyncio.run(parlaytracker._resolve_post_channel(channel, 555))
+        self.assertEqual(result, (channel, 555))
+
+    def test_configured_route_redirects_to_the_post_channel(self):
+        config.PARLAY_ROUTES = {555: config.ParlayRoute(555, 777)}
+        post_channel = object()
+        parlaytracker._client = SimpleNamespace(get_channel=lambda cid: post_channel if cid == 777 else None)
+        result = asyncio.run(parlaytracker._resolve_post_channel(object(), 555))
+        self.assertEqual(result, (post_channel, 777))
+
+    def test_route_where_scores_and_post_are_the_same_channel_is_a_no_op(self):
+        config.PARLAY_ROUTES = {555: config.ParlayRoute(555, 555)}
+        channel = object()
+        result = asyncio.run(parlaytracker._resolve_post_channel(channel, 555))
+        self.assertEqual(result, (channel, 555))
+
+    def test_falls_back_to_the_passed_in_channel_when_client_not_ready_yet(self):
+        config.PARLAY_ROUTES = {555: config.ParlayRoute(555, 777)}
+        parlaytracker._client = None
+        channel = object()
+        result = asyncio.run(parlaytracker._resolve_post_channel(channel, 555))
+        self.assertEqual(result, (channel, 555))
 
 
 class AutoDeleteOldGroups(unittest.TestCase):
