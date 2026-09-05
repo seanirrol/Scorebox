@@ -229,6 +229,12 @@ async def on_ready():
         log.exception("tree.sync() failed on startup - slash commands may be stale, but tracking still resumes normally")
         botlog.event("⚠️ Slash command sync failed on startup (see server logs) - commands may be stale until the next successful sync")
     log.info("Logged in as %s", client.user)
+    # Must run before tracker/doublechancetracker/settracker's own
+    # resume_all below - each of those calls mergetracker.merged_into to
+    # tell a merged-away leg's now-deleted card apart from a genuinely lost
+    # one (see mergetracker.MergedLegPlaceholder's own docstring), which
+    # needs _leg_index already rebuilt from merge_state.json first.
+    await _safe_resume("mergetracker", mergetracker.resume_all())
     await _safe_resume("tracker", tracker.resume_all(client))
     await _safe_resume("proptracker", proptracker.resume_all(client))
     await _safe_resume("inningtracker", inningtracker.resume_all(client))
@@ -247,7 +253,6 @@ async def on_ready():
     await _safe_resume("kboproptracker", kboproptracker.resume_all(client))
     await _safe_resume("esportstracker", esportstracker.resume_all(client))
     await _safe_resume("parlaytracker", parlaytracker.resume_all(client))
-    await _safe_resume("mergetracker", mergetracker.resume_all())
     await _safe_resume("pendingdelete", pendingdelete.resume_all(client))
     await _safe_resume("pendingsoccerprops", pendingsoccerprops.resume_all(_resolve_pending_soccer_prop))
     await _safe_resume("pendingtrack", pendingtrack.resume_all(_resolve_pending_track))

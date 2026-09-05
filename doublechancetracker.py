@@ -554,6 +554,7 @@ async def resume_all(client: discord.Client):
             continue
         owner_id = entry.get("owner_id")
         message = None
+        channel = None
         for attempt in range(MAX_CONSECUTIVE_MISSES):
             try:
                 channel = await client.fetch_channel(channel_id)
@@ -568,11 +569,19 @@ async def resume_all(client: discord.Client):
                 if attempt < MAX_CONSECUTIVE_MISSES - 1:
                     await asyncio.sleep(5)
         if message is None:
-            # Silent before this fix - see tracker.py's identical resume_all
-            # fix for why this matters.
-            botlog.event(f"⚠️ Dropped on resume (double chance): game `{game_id}` — message/channel no longer reachable, in <#{channel_id}>")
-            _forget_key(key)
-            continue
+            # A merged-away leg's own card is SUPPOSED to be gone - see
+            # tracker.py's identical resume_all fix/mergetracker.
+            # MergedLegPlaceholder's own docstring for why this matters.
+            merge_key = mergetracker.merged_into(channel_id, "doublechancetracker", key) if channel else None
+            if merge_key:
+                message = mergetracker.MergedLegPlaceholder(channel, message_id)
+                log.info("Resuming merged double-chance leg %s via merge group %s (own card intentionally gone)", key, merge_key)
+            else:
+                # Silent before this fix - see tracker.py's identical
+                # resume_all fix for why this matters.
+                botlog.event(f"⚠️ Dropped on resume (double chance): game `{game_id}` — message/channel no longer reachable, in <#{channel_id}>")
+                _forget_key(key)
+                continue
 
         # A single miss right here at startup used to forget the game
         # forever, permanently killing tracking on the unlucky restart that

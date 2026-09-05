@@ -800,6 +800,7 @@ async def resume_all(client: discord.Client):
             continue
         owner_id = entry.get("owner_id")
         message = None
+        channel = None
         for attempt in range(MAX_CONSECUTIVE_MISSES):
             try:
                 channel = await client.fetch_channel(channel_id)
@@ -819,16 +820,27 @@ async def resume_all(client: discord.Client):
                 if attempt < MAX_CONSECUTIVE_MISSES - 1:
                     await asyncio.sleep(5)
         if message is None:
-            # Silent before this fix - confirmed live this made a pick
-            # vanish from tracking on restart with zero trace anywhere,
-            # unlike every other give-up path in this module, which always
-            # logs. Worse, since the persisted state entry is gone too, the
-            # exact same pick showing up again in a later message (a resend/
-            # live-odds repost) reads as brand new rather than a duplicate,
-            # silently resetting its /summary progress.
-            botlog.event(f"⚠️ Dropped on resume: game `{game_id}` — message/channel no longer reachable, in <#{channel_id}>")
-            _forget_key(key)
-            continue
+            # A merged-away leg's own card is SUPPOSED to be gone (deleted
+            # by /merge, not lost) - see mergetracker.MergedLegPlaceholder's
+            # own docstring for the real incident this fixes (a restart
+            # while a merge was active used to drop all its legs here,
+            # freezing the merged card with nothing left polling it).
+            merge_key = mergetracker.merged_into(channel_id, "tracker", key) if channel else None
+            if merge_key:
+                message = mergetracker.MergedLegPlaceholder(channel, message_id)
+                log.info("Resuming merged leg %s via merge group %s (own card intentionally gone)", key, merge_key)
+            else:
+                # Silent before this fix - confirmed live this made a pick
+                # vanish from tracking on restart with zero trace anywhere,
+                # unlike every other give-up path in this module, which
+                # always logs. Worse, since the persisted state entry is
+                # gone too, the exact same pick showing up again in a later
+                # message (a resend/live-odds repost) reads as brand new
+                # rather than a duplicate, silently resetting its /summary
+                # progress.
+                botlog.event(f"⚠️ Dropped on resume: game `{game_id}` — message/channel no longer reachable, in <#{channel_id}>")
+                _forget_key(key)
+                continue
 
         # 365scores' pagination can transiently return an incomplete list
         # (e.g. a mid-fetch network hiccup) - a single miss right here at

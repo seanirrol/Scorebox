@@ -63,6 +63,31 @@ _leg_index: dict[str, str] = {}
 _REPOST_ON_FAILURE_COOLDOWN_SECONDS = 120
 
 
+class MergedLegPlaceholder:
+    """Stands in for a merged-away leg's own message during resume_all,
+    when that leg's original (now-deleted) card can't be re-fetched on
+    startup. Confirmed live: a bot restart while a merge was active dropped
+    all 3 merged legs from tracking entirely, freezing the merged card -
+    each module's own resume_all treated "can't fetch my own message" as
+    unconditionally fatal, with no way to know the card was INTENTIONALLY
+    gone (merged away) rather than actually lost.
+
+    Once merged, a leg's tracker loop never calls .edit()/.add_reaction()/
+    .delete() on its own message again (see each module's own `if not
+    merge_key` guards) - only .channel (passed through to mergetracker's
+    report_leg/handle_leg_result) and .id (kept as the original id, purely
+    for _message_owners/state-file bookkeeping continuity - never
+    dereferenced against real Discord state) are ever touched. This is
+    intentionally minimal rather than a full discord.Message duck-type -
+    anything beyond those two attributes touching this object on a merged
+    path is a bug to fix at that call site, not something to paper over
+    here."""
+
+    def __init__(self, channel: discord.abc.Messageable, message_id: int):
+        self.channel = channel
+        self.id = message_id
+
+
 def _key(channel_id: int, game_id) -> str:
     return f"{channel_id}:{game_id}"
 
