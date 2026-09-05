@@ -47,13 +47,16 @@ class NamesMatchAccentFolding(unittest.TestCase):
 
 
 class NamesMatchKnownAliases(unittest.TestCase):
-    """365scores lists some well-known clubs under a name that shares no
-    word at all with how a bettor actually writes them - no amount of
-    accent-folding/fuzzy-transliteration/hyphen-fusing helps when there's
-    no overlapping word to anchor on in the first place. Confirmed live:
-    365scores lists Paris Saint-Germain as just "PSG" - a real "Paris
-    Saint Germain ML" pick queued forever with "no match found" despite
-    the game being live the whole time."""
+    """365scores lists some well-known clubs under a name that differs from
+    how a bettor actually writes them by more than the other matching
+    layers can bridge - either no overlapping word at all to anchor on
+    (an acronym like "PSG"), or a word-count mismatch that blocks the
+    subset check even though most words do overlap (a missing region
+    prefix stacked with a spelling difference). Confirmed live: 365scores
+    lists Paris Saint-Germain as just "PSG" and this NPB team as "Rakuten
+    Gold Eagles" (missing "Tohoku", "Gold" not "Golden") - both real picks
+    queued forever with "no match found" despite the games being live the
+    whole time."""
 
     def test_psg_acronym_matches_full_name(self):
         self.assertTrue(scores365.names_match("Paris Saint Germain", "PSG"))
@@ -66,6 +69,13 @@ class NamesMatchKnownAliases(unittest.TestCase):
 
     def test_unrelated_team_does_not_match_the_alias(self):
         self.assertFalse(scores365.names_match("PSG", "Real Madrid"))
+
+    def test_rakuten_gold_eagles_matches_full_bettor_wording(self):
+        self.assertTrue(scores365.names_match(
+            "Tohoku Rakuten Golden Eagles", "Rakuten Gold Eagles"))
+
+    def test_rakuten_gold_eagles_unrelated_team_does_not_match(self):
+        self.assertFalse(scores365.names_match("Rakuten Gold Eagles", "Yomiuri Giants"))
 
 
 class NamesMatchFuzzyTransliteration(unittest.TestCase):

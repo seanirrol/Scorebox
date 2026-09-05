@@ -951,19 +951,23 @@ def _reserve_qualifiers(name: str) -> frozenset[str]:
     return frozenset(_RESERVE_QUALIFIER_RE.findall(lowered))
 
 
-# Well-known clubs where 365scores' own name shares no word (not even a
-# fuzzy-matchable one) with how a bettor/sportsbook actually writes it -
-# every other case in this file (accents, hyphens, transliteration,
-# reserve-team qualifiers) still has SOME overlapping word to anchor a
-# match on; an acronym like "PSG" has none at all against "Paris Saint
-# Germain". Confirmed live: 365scores lists Paris Saint-Germain as just
-# "PSG" (see the match's own #id=4735273 page), so a real "Paris Saint
-# Germain ML" pick queued forever with "no match found" despite the game
-# being live on 365scores the whole time. Keyed by the alias's own
-# normalized (_normalize) form so lookup doesn't need a second pass through
-# accent-stripping/lowercasing.
+# Well-known clubs where 365scores' own name differs from how a bettor/
+# sportsbook actually writes it by more than the other layers in this file
+# can bridge - either zero shared words at all (an acronym like "PSG" has
+# none against "Paris Saint Germain"), or a shared-word-count mismatch that
+# blocks _meaningful_words' subset check even though most words do overlap
+# (365scores' "Rakuten Gold Eagles" is missing the "Tohoku" prefix AND
+# spells "Gold" instead of "Golden" versus the bettor's "Tohoku Rakuten
+# Golden Eagles" - two differences stacked on the same name). Confirmed
+# live: 365scores lists Paris Saint-Germain as just "PSG" (see the match's
+# own #id=4735273 page) and this NPB team as "Rakuten Gold Eagles" (see
+# #id=4626566) - both real picks queued forever with "no match found"
+# despite the games being live on 365scores the whole time. Keyed by the
+# alias's own normalized (_normalize) form so lookup doesn't need a second
+# pass through accent-stripping/lowercasing.
 _TEAM_NAME_ALIASES = {
     "psg": "Paris Saint Germain",
+    "rakutengoldeagles": "Tohoku Rakuten Golden Eagles",
 }
 
 
