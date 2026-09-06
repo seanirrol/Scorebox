@@ -39,6 +39,7 @@ import parlaytracker
 import proptracker
 import settracker
 import soccerpropstracker
+import tabletennistracker
 import tennispropstracker
 import tracker
 import ufctracker
@@ -190,6 +191,17 @@ class ResolveLegMatchesEachModulesOwnerShape(unittest.TestCase):
         self.assertEqual(
             parlaytracker.resolve_leg(15),
             ("doublechancetracker", doublechancetracker.track_key(555, 100), 555),
+        )
+
+    def test_tabletennistracker(self):
+        self._register(tabletennistracker, 16, 555, "ts_l5erg0t7304kq8k", "winner", "Marek Bereiter", 1)
+        self.assertEqual(
+            parlaytracker.resolve_leg(16),
+            (
+                "tabletennistracker",
+                tabletennistracker.track_key(555, "ts_l5erg0t7304kq8k", "winner", "Marek Bereiter"),
+                555,
+            ),
         )
 
     def test_unknown_message_id_returns_none(self):

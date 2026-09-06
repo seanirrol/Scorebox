@@ -55,6 +55,8 @@ _SPORT_MAP = {
     "mobile legends": "mobilelegends",
     "mobilelegends": "mobilelegends",
     "mlbb": "mobilelegends",
+    "table tennis": "tabletennis",
+    "tabletennis": "tabletennis",
 }
 
 # Bare section headers can use the sport's full name ("Basketball") instead
@@ -437,6 +439,78 @@ def _parse_volleyball_point_total_pick(description: str) -> Optional[dict]:
     if not team:
         return None
     return {"kind": "volleyball_match_point_total", "team": team, "direction": m.group(3).lower(), "line": float(m.group(4))}
+
+
+# "Marek Bereiter vs Adrian Walek - Marek Bereiter +3.5 Point Handicap" -
+# table tennis's own combined-points margin (see tabletennis.
+# grade_point_handicap) - a completely separate market/provider from every
+# other sport in this file (365scores has no table tennis coverage at all -
+# see tabletennis.py's own module docstring), so this needs its own kind
+# rather than reusing volleyball's shape even though the underlying idea
+# (total points, not games/sets won) is the same.
+_TABLE_TENNIS_POINT_HANDICAP_MATCHUP_RE = re.compile(
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s+-\s+(.+?)\s*\(?([+-]\d+(?:\.\d+)?)\)?\s*(?:total\s+)?points?(?:\s+handicap)?\b",
+    re.IGNORECASE,
+)
+_TABLE_TENNIS_POINT_HANDICAP_NOMATCHUP_RE = re.compile(
+    r"^(.+?)\s+([+-]\d+(?:\.\d+)?)\s*(?:total\s+)?points?(?:\s+handicap)?\b", re.IGNORECASE,
+)
+
+
+def _parse_table_tennis_point_handicap_pick(description: str) -> Optional[dict]:
+    text = _clean_line(description)
+    m = _TABLE_TENNIS_POINT_HANDICAP_MATCHUP_RE.match(text)
+    if m:
+        team_a, team_b, named_team = m.group(1).strip(), m.group(2).strip(), m.group(3).strip()
+        if not team_a or not team_b or not named_team:
+            return None
+        if scores365.names_match(named_team, team_a):
+            team = team_a
+        elif scores365.names_match(named_team, team_b):
+            team = team_b
+        else:
+            return None
+        return {"kind": "tabletennis_point_handicap", "team": team, "line": float(m.group(4))}
+    m = _TABLE_TENNIS_POINT_HANDICAP_NOMATCHUP_RE.match(text)
+    if m:
+        team = m.group(1).strip()
+        if not team:
+            return None
+        return {"kind": "tabletennis_point_handicap", "team": team, "line": float(m.group(2))}
+    return None
+
+
+# "Marek Bereiter vs Adrian Walek - Marek Bereiter Winner" - table tennis's
+# own match-winner market, backed by tabletennis.py/tabletennistracker.py
+# instead of scores365.py (see tabletennis.py's own module docstring for
+# why table tennis needs a completely separate provider). A dedicated kind
+# (not the generic "track") since it settles via a different tracker
+# entirely - same reasoning as esports_match_winner not reusing "track"
+# either. Confirmed live: this tipster's own sportsbook labels the market
+# "Winner", not "ML"/"Moneyline" - tolerated here as a same-market synonym
+# rather than widening the generic _TEAM_ML_MATCHUP_RE (which would
+# misroute a table tennis pick into the scores365-backed "track" kind).
+_TABLE_TENNIS_WINNER_RE = re.compile(
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s+-\s+(.+?)\s+(?:Winner|ML|Moneyline)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _parse_table_tennis_winner_pick(description: str) -> Optional[dict]:
+    text = _clean_line(description)
+    m = _TABLE_TENNIS_WINNER_RE.match(text)
+    if not m:
+        return None
+    team_a, team_b, named_team = m.group(1).strip(), m.group(2).strip(), m.group(3).strip()
+    if not team_a or not team_b or not named_team:
+        return None
+    if scores365.names_match(named_team, team_a):
+        team = team_a
+    elif scores365.names_match(named_team, team_b):
+        team = team_b
+    else:
+        return None
+    return {"kind": "tabletennis_winner", "team_a": team_a, "team_b": team_b, "team": team}
 
 
 # "Paris FC vs Nice - Paris FC or Draw" (Double Chance "1X") / "... - Draw
@@ -2376,6 +2450,21 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
         set1_handicap = _parse_volleyball_set1_handicap_nomatchup_pick(description)
         if set1_handicap:
             return set1_handicap
+
+    if sport == "tabletennis":
+        # Checked before anything else, and returns None outright rather
+        # than falling through when neither market matches - table tennis
+        # has no data at all on scores365 (see tabletennis.py's own module
+        # docstring), so letting an unrecognized wording fall through to
+        # the generic team-pick/total parsers below would silently produce
+        # a "track"-kind pick that gets routed to the scores365-backed
+        # auto-tracker and can never find a match, same class of bug as
+        # tennis/soccer's own unsupported-stat guards elsewhere in this
+        # file.
+        point_handicap = _parse_table_tennis_point_handicap_pick(description)
+        if point_handicap:
+            return point_handicap
+        return _parse_table_tennis_winner_pick(description)
 
     if sport == "soccer":
         double_chance = _parse_double_chance_pick(description)

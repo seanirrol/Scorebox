@@ -431,6 +431,45 @@ class EsportsLolAndMobileLegends(unittest.TestCase):
         self.assertIsNone(pick)
 
 
+class TableTennis(unittest.TestCase):
+    """Table tennis is backed by tabletennis.py/tabletennistracker.py
+    (scores24.live), not scores365.py - confirmed live that 365scores has
+    no table tennis coverage at all (see tabletennis.py's own module
+    docstring). Winner/Point Handicap are dedicated kinds rather than the
+    generic "track"/team_total kinds so they route to the right tracker -
+    letting either fall through to the generic parsers below would produce
+    a pick that can never be found on scores365."""
+
+    def test_winner_market(self):
+        pick = picks.parse_pick_line("[Table Tennis] Marek Bereiter vs Adrian Walek - Marek Bereiter Winner")
+        self.assertEqual(pick, {
+            "kind": "tabletennis_winner",
+            "team_a": "Marek Bereiter", "team_b": "Adrian Walek", "team": "Marek Bereiter",
+        })
+
+    def test_tabletennis_tag_alias(self):
+        pick = picks.parse_pick_line("[TableTennis] Lukas Martinak vs Marek Bereiter - Marek Bereiter Winner")
+        self.assertEqual(pick["kind"], "tabletennis_winner")
+        self.assertEqual(pick["team"], "Marek Bereiter")
+
+    def test_point_handicap_matchup_form(self):
+        pick = picks.parse_pick_line("[Table Tennis] Marek Bereiter vs Adrian Walek - Marek Bereiter +3.5 Point Handicap")
+        self.assertEqual(pick, {"kind": "tabletennis_point_handicap", "team": "Marek Bereiter", "line": 3.5})
+
+    def test_point_handicap_bare_points_wording(self):
+        pick = picks.parse_pick_line("[Table Tennis] Marek Bereiter vs Adrian Walek - Marek Bereiter -3.5 Points")
+        self.assertEqual(pick, {"kind": "tabletennis_point_handicap", "team": "Marek Bereiter", "line": -3.5})
+
+    def test_unsupported_market_returns_none_rather_than_falling_through(self):
+        # Confirmed live this matters: without an explicit return None
+        # here, this would otherwise fall through to the generic total
+        # parser below and produce a "total"-kind pick that gets routed to
+        # the scores365-backed auto-tracker, which can never find a table
+        # tennis match at all.
+        pick = picks.parse_pick_line("[Table Tennis] Marek Bereiter vs Adrian Walek - Over 3.5 Total Games")
+        self.assertIsNone(pick)
+
+
 class EsportsMapKillsHandicap(unittest.TestCase):
     """"Team X (-4.5) Map 1 Kills Handicap" - a spread on one specific map's
     own kill count, distinct from the maps-won Map Handicap and the
