@@ -114,12 +114,22 @@ def _match_epoch(match: dict) -> Optional[float]:
         return None
 
 
-def find_match_for_team(team: str) -> Optional[dict]:
+def find_match_for_team(team: str, opponent: Optional[str] = None) -> Optional[dict]:
     """Searches today (and the adjacent days - see _SEARCH_DAYS_BACK/
     _SEARCH_DAYS_AHEAD) for a match involving this player, across every
     league. Prefers an in-progress match, then the soonest upcoming, then
     the most recently finished - same preference order as
-    scores365.find_match_for_team/espn_ufc.find_ufc_fight."""
+    scores365.find_match_for_team/espn_ufc.find_ufc_fight.
+
+    opponent, when given, requires the OTHER side of the match to also
+    match by name - confirmed live this matters: these bulk 24/7 leagues
+    routinely have the same player in back-to-back matches against
+    different opponents, so a bare name-only search can't tell two
+    genuinely different picks on the same player apart and silently
+    resolves both to whichever match happens to rank best. Only the
+    Winner market's own parser always has an opponent available (Point
+    Handicap's bare, no-matchup wording doesn't - see picks.py's own
+    comment on that shape), so this stays optional rather than required."""
     today = datetime.datetime.now(datetime.timezone.utc).date()
     days = [today + datetime.timedelta(days=d) for d in range(-_SEARCH_DAYS_BACK, _SEARCH_DAYS_AHEAD + 1)]
 
@@ -138,6 +148,10 @@ def find_match_for_team(team: str) -> Optional[dict]:
             found = next((t for t in teams if scores365.names_match(t.get("name", ""), team)), None)
             if not found:
                 continue
+            if opponent:
+                other = next((t for t in teams if t is not found), None)
+                if not other or not scores365.names_match(other.get("name", ""), opponent):
+                    continue
             if match.get("is_live"):
                 rank = 0
             elif match.get("is_finished"):

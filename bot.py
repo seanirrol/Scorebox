@@ -1760,15 +1760,23 @@ async def _auto_esports(
 
 async def _auto_table_tennis(
     channel: discord.abc.Messageable, market: str, picked_team: str,
-    line: Optional[float] = None, section: Optional[str] = None, label: Optional[str] = None,
-    origin_channel_id: Optional[int] = None,
+    opponent: Optional[str] = None, line: Optional[float] = None, section: Optional[str] = None,
+    label: Optional[str] = None, origin_channel_id: Optional[int] = None,
 ):
     """Table tennis picks - backed by tabletennis.py (scores24.live), not
     scores365.py, which has no table tennis coverage at all (see
     tabletennis.py's own module docstring). Mirrors _auto_esports: found
     now or not tracked at all, no pending-retry queue, since a match this
-    provider will ever have is already there by the time a pick comes in."""
-    match = await asyncio.to_thread(tabletennis.find_match_for_team, picked_team)
+    provider will ever have is already there by the time a pick comes in.
+
+    opponent is passed straight through to tabletennis.find_match_for_team
+    - confirmed live this is required, not optional in practice: a real
+    player had two picks against different opponents come in close
+    together, and without the opponent to disambiguate, the second pick
+    silently resolved to the SAME match as the first (whichever one
+    find_match_for_team ranked best) and got reported "already being
+    tracked" instead of tracking its own, genuinely different match."""
+    match = await asyncio.to_thread(tabletennis.find_match_for_team, picked_team, opponent)
     if not match:
         log.info("Auto-table-tennis (%s): no match found for '%s'", market, picked_team)
         botlog.event(f"❌ Not tracked (table tennis {market}): **{picked_team}** — no match found")
@@ -2203,12 +2211,17 @@ async def _dispatch_pick(
                 section=section, label=label, origin_channel_id=origin_channel_id,
             )
         elif pick["kind"] == "tabletennis_winner":
+            opponent = pick["team_b"] if pick["team"] == pick["team_a"] else pick["team_a"]
             return await _auto_table_tennis(
-                target_channel, "winner", pick["team"], section=section, label=label, origin_channel_id=origin_channel_id,
+                target_channel, "winner", pick["team"], opponent=opponent,
+                section=section, label=label, origin_channel_id=origin_channel_id,
             )
         elif pick["kind"] == "tabletennis_point_handicap":
+            opponent = None
+            if "team_a" in pick and "team_b" in pick:
+                opponent = pick["team_b"] if pick["team"] == pick["team_a"] else pick["team_a"]
             return await _auto_table_tennis(
-                target_channel, "point_handicap", pick["team"], line=pick["line"],
+                target_channel, "point_handicap", pick["team"], opponent=opponent, line=pick["line"],
                 section=section, label=label, origin_channel_id=origin_channel_id,
             )
         else:

@@ -454,11 +454,30 @@ class TableTennis(unittest.TestCase):
 
     def test_point_handicap_matchup_form(self):
         pick = picks.parse_pick_line("[Table Tennis] Marek Bereiter vs Adrian Walek - Marek Bereiter +3.5 Point Handicap")
-        self.assertEqual(pick, {"kind": "tabletennis_point_handicap", "team": "Marek Bereiter", "line": 3.5})
+        self.assertEqual(pick, {
+            "kind": "tabletennis_point_handicap",
+            "team_a": "Marek Bereiter", "team_b": "Adrian Walek", "team": "Marek Bereiter", "line": 3.5,
+        })
 
     def test_point_handicap_bare_points_wording(self):
         pick = picks.parse_pick_line("[Table Tennis] Marek Bereiter vs Adrian Walek - Marek Bereiter -3.5 Points")
-        self.assertEqual(pick, {"kind": "tabletennis_point_handicap", "team": "Marek Bereiter", "line": -3.5})
+        self.assertEqual(pick, {
+            "kind": "tabletennis_point_handicap",
+            "team_a": "Marek Bereiter", "team_b": "Adrian Walek", "team": "Marek Bereiter", "line": -3.5,
+        })
+
+    def test_winner_and_point_handicap_both_carry_the_opponent(self):
+        # Confirmed live: dropping the opponent when dispatching this pick
+        # meant tabletennis.find_match_for_team had no way to tell two
+        # DIFFERENT matches involving the same player apart (the same
+        # picked player, "Marek Bereiter", had two genuinely different
+        # opponents in flight at once) - the second pick silently resolved
+        # to whichever match ranked best and got reported "already being
+        # tracked" instead of finding its own match.
+        winner = picks.parse_pick_line("[Table Tennis] Lukas Martinak vs Marek Bereiter - Marek Bereiter Winner")
+        self.assertEqual((winner["team_a"], winner["team_b"]), ("Lukas Martinak", "Marek Bereiter"))
+        handicap = picks.parse_pick_line("[Table Tennis] Lukas Martinak vs Marek Bereiter - Marek Bereiter +3.5 Points")
+        self.assertEqual((handicap["team_a"], handicap["team_b"]), ("Lukas Martinak", "Marek Bereiter"))
 
     def test_unsupported_market_returns_none_rather_than_falling_through(self):
         # Confirmed live this matters: without an explicit return None

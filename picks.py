@@ -470,12 +470,16 @@ def _parse_table_tennis_point_handicap_pick(description: str) -> Optional[dict]:
             team = team_b
         else:
             return None
-        return {"kind": "tabletennis_point_handicap", "team": team, "line": float(m.group(4))}
+        return {"kind": "tabletennis_point_handicap", "team_a": team_a, "team_b": team_b, "team": team, "line": float(m.group(4))}
     m = _TABLE_TENNIS_POINT_HANDICAP_NOMATCHUP_RE.match(text)
     if m:
         team = m.group(1).strip()
         if not team:
             return None
+        # No opponent named in this shape - _auto_table_tennis falls back
+        # to a single-name search when team_a/team_b aren't present (see
+        # its own docstring for why that's ambiguous whenever the picked
+        # player has more than one match going at once).
         return {"kind": "tabletennis_point_handicap", "team": team, "line": float(m.group(2))}
     return None
 

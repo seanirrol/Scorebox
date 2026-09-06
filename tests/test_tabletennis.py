@@ -17,6 +17,15 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import tabletennis
 
 
+def _listing_match(match_id, home, away, is_live=True):
+    return {
+        "id": match_id, "slug": f"slug-{match_id}",
+        "teams": [{"name": home}, {"name": away}],
+        "result_scores": [{"type": "FT", "value": "0:0"}],
+        "is_live": is_live, "is_finished": False, "match_date": "2026-09-06T00:00:00.000000Z",
+    }
+
+
 def _match(
     result_scores, winner=None, is_live=False, is_finished=False,
     home="Player A", away="Player B",
@@ -153,6 +162,41 @@ class StatusLine(unittest.TestCase):
     def test_not_started_is_blank(self):
         m = _match([])
         self.assertEqual(tabletennis.status_line(m), "")
+
+
+class FindMatchForTeamDisambiguatesByOpponent(unittest.TestCase):
+    """Confirmed live: the same player ("Marek Bereiter") had two
+    genuinely different matches in flight at once against different
+    opponents - a name-only search has no way to tell them apart and just
+    returns whichever one ranks best (is_live first) for BOTH picks,
+    silently resolving the second pick to the wrong match entirely."""
+
+    def setUp(self):
+        self._orig = tabletennis._fetch_matches_for_day
+        self._matches = [
+            _listing_match("m1", "Lukas Martinak", "Marek Bereiter", is_live=True),
+            _listing_match("m2", "Marek Bereiter", "Adrian Walek", is_live=True),
+        ]
+        tabletennis._fetch_matches_for_day = lambda day: list(self._matches)
+
+    def tearDown(self):
+        tabletennis._fetch_matches_for_day = self._orig
+
+    def test_without_opponent_returns_some_match_but_cant_tell_them_apart(self):
+        result = tabletennis.find_match_for_team("Marek Bereiter")
+        self.assertIn(result["id"], ("m1", "m2"))
+
+    def test_with_opponent_resolves_to_the_correct_match(self):
+        result = tabletennis.find_match_for_team("Marek Bereiter", opponent="Lukas Martinak")
+        self.assertEqual(result["id"], "m1")
+
+    def test_with_the_other_opponent_resolves_to_the_other_match(self):
+        result = tabletennis.find_match_for_team("Marek Bereiter", opponent="Adrian Walek")
+        self.assertEqual(result["id"], "m2")
+
+    def test_opponent_that_matches_neither_match_returns_none(self):
+        result = tabletennis.find_match_for_team("Marek Bereiter", opponent="Someone Else")
+        self.assertIsNone(result)
 
 
 if __name__ == "__main__":
