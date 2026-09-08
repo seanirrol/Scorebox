@@ -489,6 +489,48 @@ class TableTennis(unittest.TestCase):
         self.assertIsNone(pick)
 
 
+class Snooker(unittest.TestCase):
+    """Snooker is backed by snooker.py/snookertracker.py (scores24.live),
+    same reasoning as TableTennis above - 365scores has no snooker
+    coverage either (see snooker.py's own module docstring). Winner/Frame
+    Handicap are dedicated kinds for the same "must not fall through to a
+    scores365-backed generic parser" reason."""
+
+    def test_winner_market(self):
+        pick = picks.parse_pick_line("[Snooker] Thepchaiya Un-Nooh vs Wang Xinbo - Thepchaiya Un-Nooh Winner")
+        self.assertEqual(pick, {
+            "kind": "snooker_winner",
+            "team_a": "Thepchaiya Un-Nooh", "team_b": "Wang Xinbo", "team": "Thepchaiya Un-Nooh",
+        })
+
+    def test_frame_handicap_matchup_form(self):
+        pick = picks.parse_pick_line("[Snooker] Thepchaiya Un-Nooh vs Wang Xinbo - Thepchaiya Un-Nooh -2.5 Frame Handicap")
+        self.assertEqual(pick, {
+            "kind": "snooker_frame_handicap",
+            "team_a": "Thepchaiya Un-Nooh", "team_b": "Wang Xinbo", "team": "Thepchaiya Un-Nooh", "line": -2.5,
+        })
+
+    def test_frame_handicap_bare_frames_wording(self):
+        pick = picks.parse_pick_line("[Snooker] Thepchaiya Un-Nooh vs Wang Xinbo - Wang Xinbo +2.5 Frames")
+        self.assertEqual(pick, {
+            "kind": "snooker_frame_handicap",
+            "team_a": "Thepchaiya Un-Nooh", "team_b": "Wang Xinbo", "team": "Wang Xinbo", "line": 2.5,
+        })
+
+    def test_winner_and_frame_handicap_both_carry_the_opponent(self):
+        # Same disambiguation reasoning as table tennis's own equivalent
+        # test - a picked player can have two genuinely different matches
+        # in flight at once.
+        winner = picks.parse_pick_line("[Snooker] Thepchaiya Un-Nooh vs Wang Xinbo - Thepchaiya Un-Nooh Winner")
+        self.assertEqual((winner["team_a"], winner["team_b"]), ("Thepchaiya Un-Nooh", "Wang Xinbo"))
+        handicap = picks.parse_pick_line("[Snooker] Thepchaiya Un-Nooh vs Wang Xinbo - Thepchaiya Un-Nooh -2.5 Frames")
+        self.assertEqual((handicap["team_a"], handicap["team_b"]), ("Thepchaiya Un-Nooh", "Wang Xinbo"))
+
+    def test_unsupported_market_returns_none_rather_than_falling_through(self):
+        pick = picks.parse_pick_line("[Snooker] Thepchaiya Un-Nooh vs Wang Xinbo - Over 3.5 Total Frames")
+        self.assertIsNone(pick)
+
+
 class EsportsMapKillsHandicap(unittest.TestCase):
     """"Team X (-4.5) Map 1 Kills Handicap" - a spread on one specific map's
     own kill count, distinct from the maps-won Map Handicap and the

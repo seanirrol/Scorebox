@@ -42,6 +42,7 @@ KBO_PROPS_FILE = os.path.join(_DIR, "kbo_props_state.json")
 DOUBLE_CHANCE_FILE = os.path.join(_DIR, "double_chance_state.json")
 MERGE_FILE = os.path.join(_DIR, "merge_state.json")
 TABLE_TENNIS_FILE = os.path.join(_DIR, "table_tennis_state.json")
+SNOOKER_FILE = os.path.join(_DIR, "snooker_state.json")
 
 
 def _load(path: str) -> dict[str, Any]:
@@ -249,6 +250,14 @@ def load_table_tennis() -> dict[str, Any]:
 
 def save_table_tennis(data: dict[str, Any]):
     _save(TABLE_TENNIS_FILE, data)
+
+
+def load_snooker() -> dict[str, Any]:
+    return _load(SNOOKER_FILE)
+
+
+def save_snooker(data: dict[str, Any]):
+    _save(SNOOKER_FILE, data)
 
 
 def load_pending_auto() -> dict[str, Any]:

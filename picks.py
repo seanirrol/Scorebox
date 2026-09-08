@@ -33,6 +33,8 @@ _SPORT_MAP = {
     "npb": "baseball",
     "nba": "basketball",
     "wnba": "basketball",
+    "fiba": "basketball",
+    "fiba women": "basketball",
     "nfl": "nfl",
     "nhl": "hockey",
     "soccer": "soccer",
@@ -57,6 +59,7 @@ _SPORT_MAP = {
     "mlbb": "mobilelegends",
     "table tennis": "tabletennis",
     "tabletennis": "tabletennis",
+    "snooker": "snooker",
 }
 
 # Bare section headers can use the sport's full name ("Basketball") instead
@@ -515,6 +518,75 @@ def _parse_table_tennis_winner_pick(description: str) -> Optional[dict]:
     else:
         return None
     return {"kind": "tabletennis_winner", "team_a": team_a, "team_b": team_b, "team": team}
+
+
+# "Un-Nooh, Thepchaiya vs Xinbo, Wang - Thepchaiya Un-Nooh +2.5 Frame
+# Handicap" - snooker's own frames-won margin (see snooker.
+# grade_frame_handicap) - same "own provider, own kind" reasoning as table
+# tennis's Point Handicap above (365scores has no snooker coverage either -
+# see snooker.py's own module docstring), just against frames won instead
+# of combined points, since that's the actual sportsbook market for
+# snooker (unlike table tennis, where combined points is what's offered).
+_SNOOKER_FRAME_HANDICAP_MATCHUP_RE = re.compile(
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s+-\s+(.+?)\s*\(?([+-]\d+(?:\.\d+)?)\)?\s*frames?(?:\s+handicap)?\b",
+    re.IGNORECASE,
+)
+_SNOOKER_FRAME_HANDICAP_NOMATCHUP_RE = re.compile(
+    r"^(.+?)\s+([+-]\d+(?:\.\d+)?)\s*frames?(?:\s+handicap)?\b", re.IGNORECASE,
+)
+
+
+def _parse_snooker_frame_handicap_pick(description: str) -> Optional[dict]:
+    text = _clean_line(description)
+    m = _SNOOKER_FRAME_HANDICAP_MATCHUP_RE.match(text)
+    if m:
+        team_a, team_b, named_team = m.group(1).strip(), m.group(2).strip(), m.group(3).strip()
+        if not team_a or not team_b or not named_team:
+            return None
+        if scores365.names_match(named_team, team_a):
+            team = team_a
+        elif scores365.names_match(named_team, team_b):
+            team = team_b
+        else:
+            return None
+        return {"kind": "snooker_frame_handicap", "team_a": team_a, "team_b": team_b, "team": team, "line": float(m.group(4))}
+    m = _SNOOKER_FRAME_HANDICAP_NOMATCHUP_RE.match(text)
+    if m:
+        team = m.group(1).strip()
+        if not team:
+            return None
+        # No opponent named in this shape - _auto_snooker falls back to a
+        # single-name search when team_a/team_b aren't present (same
+        # ambiguity as table tennis's own no-matchup form).
+        return {"kind": "snooker_frame_handicap", "team": team, "line": float(m.group(2))}
+    return None
+
+
+# "Un-Nooh, Thepchaiya vs Xinbo, Wang - Thepchaiya Un-Nooh Winner" -
+# snooker's own match-winner market, backed by snooker.py/snookertracker.py
+# instead of scores365.py - same reasoning as table tennis's own Winner
+# market above.
+_SNOOKER_WINNER_RE = re.compile(
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s+-\s+(.+?)\s+(?:Winner|ML|Moneyline)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _parse_snooker_winner_pick(description: str) -> Optional[dict]:
+    text = _clean_line(description)
+    m = _SNOOKER_WINNER_RE.match(text)
+    if not m:
+        return None
+    team_a, team_b, named_team = m.group(1).strip(), m.group(2).strip(), m.group(3).strip()
+    if not team_a or not team_b or not named_team:
+        return None
+    if scores365.names_match(named_team, team_a):
+        team = team_a
+    elif scores365.names_match(named_team, team_b):
+        team = team_b
+    else:
+        return None
+    return {"kind": "snooker_winner", "team_a": team_a, "team_b": team_b, "team": team}
 
 
 # "Paris FC vs Nice - Paris FC or Draw" (Double Chance "1X") / "... - Draw
@@ -2469,6 +2541,15 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
         if point_handicap:
             return point_handicap
         return _parse_table_tennis_winner_pick(description)
+
+    if sport == "snooker":
+        # Same "own provider, return None rather than fall through" reasoning
+        # as table tennis above - 365scores has no snooker coverage either
+        # (see snooker.py's own module docstring).
+        frame_handicap = _parse_snooker_frame_handicap_pick(description)
+        if frame_handicap:
+            return frame_handicap
+        return _parse_snooker_winner_pick(description)
 
     if sport == "soccer":
         double_chance = _parse_double_chance_pick(description)

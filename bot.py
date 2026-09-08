@@ -56,6 +56,8 @@ import playerstatsfootball
 import proptracker
 import scores365
 import settracker
+import snooker
+import snookertracker
 import soccerpropstracker
 import state
 import tabletennis
@@ -247,6 +249,7 @@ async def on_ready():
     await _safe_resume("htfttracker", htfttracker.resume_all(client))
     await _safe_resume("doublechancetracker", doublechancetracker.resume_all(client))
     await _safe_resume("tabletennistracker", tabletennistracker.resume_all(client))
+    await _safe_resume("snookertracker", snookertracker.resume_all(client))
     await _safe_resume("inning1tracker", inning1tracker.resume_all(client))
     await _safe_resume("settracker", settracker.resume_all(client))
     await _safe_resume("tennispropstracker", tennispropstracker.resume_all(client))
@@ -309,6 +312,7 @@ def _find_message_owner(card_message_id: int) -> Optional[tuple[str, tuple]]:
         ("htft", htfttracker.get_message_owner),
         ("double_chance", doublechancetracker.get_message_owner),
         ("table_tennis", tabletennistracker.get_message_owner),
+        ("snooker", snookertracker.get_message_owner),
     ):
         info = getter(card_message_id)
         if info:
@@ -373,6 +377,9 @@ def _stop_tracking_by_card_message(card_message_id: int) -> Optional[str]:
     elif kind == "table_tennis":
         channel_id, match_id, market, team, _ = info
         tabletennistracker.stop_tracking(channel_id, match_id, market, team)
+    elif kind == "snooker":
+        channel_id, match_id, market, team, _ = info
+        snookertracker.stop_tracking(channel_id, match_id, market, team)
     else:
         channel_id, game_id, member_id, stat_name, direction, line, _ = info
         soccerpropstracker.stop_tracking(channel_id, game_id, member_id, stat_name, direction, line)
@@ -1801,6 +1808,41 @@ async def _auto_table_tennis(
     return message.id
 
 
+async def _auto_snooker(
+    channel: discord.abc.Messageable, market: str, picked_team: str,
+    opponent: Optional[str] = None, line: Optional[float] = None, section: Optional[str] = None,
+    label: Optional[str] = None, origin_channel_id: Optional[int] = None,
+):
+    """Snooker picks - backed by snooker.py (scores24.live), same shape as
+    _auto_table_tennis (365scores has no snooker coverage either - see
+    snooker.py's own module docstring). opponent is passed straight through
+    to snooker.find_match_for_team for the same same-player-two-matches
+    disambiguation confirmed live for table tennis."""
+    match = await asyncio.to_thread(snooker.find_match_for_team, picked_team, opponent)
+    if not match:
+        log.info("Auto-snooker (%s): no match found for '%s'", market, picked_team)
+        botlog.event(f"❌ Not tracked (snooker {market}): **{picked_team}** — no match found")
+        return
+    match_id = match["id"]
+    if snookertracker.is_tracked(channel.id, match_id, market, picked_team):
+        botlog.event(f"⏭️ Skipped (snooker {market}): **{picked_team}** — already being tracked in <#{channel.id}>")
+        return "skipped"
+
+    embed, file = await snookertracker.build_embed(match, market, picked_team, line)
+    message = await throttle.run(channel.id, lambda: channel.send(embed=embed, file=file))
+    embed.set_footer(text=snookertracker._footer_text(message.id))
+    await throttle.run(channel.id, lambda: message.edit(embed=embed))
+    snookertracker.register_message(message.id, channel.id, match_id, market, picked_team, None)
+    await _safe_add_trash_reaction(message)
+
+    snookertracker.start_tracking(
+        message, match, channel.id, market, None, picked_team, line, section, label, origin_channel_id,
+    )
+    log.info("Auto-tracked snooker (%s) pick '%s' -> match %s", market, picked_team, match_id)
+    botlog.event(f"✅ Tracked (snooker {market}): **{picked_team}** in <#{channel.id}>")
+    return message.id
+
+
 def _forwarded_content_and_attachments(message: discord.Message) -> tuple[str, list[discord.Attachment]]:
     """Discord's own "Forward" message feature carries the original
     message's text/images in message.message_snapshots, NOT
@@ -2222,6 +2264,20 @@ async def _dispatch_pick(
                 opponent = pick["team_b"] if pick["team"] == pick["team_a"] else pick["team_a"]
             return await _auto_table_tennis(
                 target_channel, "point_handicap", pick["team"], opponent=opponent, line=pick["line"],
+                section=section, label=label, origin_channel_id=origin_channel_id,
+            )
+        elif pick["kind"] == "snooker_winner":
+            opponent = pick["team_b"] if pick["team"] == pick["team_a"] else pick["team_a"]
+            return await _auto_snooker(
+                target_channel, "winner", pick["team"], opponent=opponent,
+                section=section, label=label, origin_channel_id=origin_channel_id,
+            )
+        elif pick["kind"] == "snooker_frame_handicap":
+            opponent = None
+            if "team_a" in pick and "team_b" in pick:
+                opponent = pick["team_b"] if pick["team"] == pick["team_a"] else pick["team_a"]
+            return await _auto_snooker(
+                target_channel, "frame_handicap", pick["team"], opponent=opponent, line=pick["line"],
                 section=section, label=label, origin_channel_id=origin_channel_id,
             )
         else:

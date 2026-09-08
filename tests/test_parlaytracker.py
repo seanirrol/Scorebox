@@ -38,6 +38,7 @@ import kboproptracker
 import parlaytracker
 import proptracker
 import settracker
+import snookertracker
 import soccerpropstracker
 import tabletennistracker
 import tennispropstracker
@@ -200,6 +201,17 @@ class ResolveLegMatchesEachModulesOwnerShape(unittest.TestCase):
             (
                 "tabletennistracker",
                 tabletennistracker.track_key(555, "ts_l5erg0t7304kq8k", "winner", "Marek Bereiter"),
+                555,
+            ),
+        )
+
+    def test_snookertracker(self):
+        self._register(snookertracker, 17, 555, "73609478", "winner", "Thepchaiya Un-Nooh", 1)
+        self.assertEqual(
+            parlaytracker.resolve_leg(17),
+            (
+                "snookertracker",
+                snookertracker.track_key(555, "73609478", "winner", "Thepchaiya Un-Nooh"),
                 555,
             ),
         )
