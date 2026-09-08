@@ -314,6 +314,18 @@ class PitchingOutsAndMidPhraseAltLine(unittest.TestCase):
         self.assertEqual(pick["kind"], "playerprops")
         self.assertEqual(pick["stat"], "Pitching Outs")
 
+    def test_bare_outs_does_not_collide_with_strikeouts(self):
+        # "outs" is a literal substring of "strikeOUTS" - without an
+        # explicit default, _match_stat_label's substring fallback matched
+        # "Strikeouts (Batting)" (first in the catalog) before ever
+        # reaching "Pitching Outs".
+        pick = picks.parse_pick_line("[MLB Props] Zack Wheeler Over 5.5 Outs")
+        self.assertEqual(pick["stat"], "Pitching Outs")
+
+    def test_outs_recorded_wording_maps_to_pitching_outs(self):
+        pick = picks.parse_pick_line("[MLB Props] Zack Wheeler Over 5.5 Outs Recorded")
+        self.assertEqual(pick["stat"], "Pitching Outs")
+
     def test_alt_line_between_number_and_stat_name(self):
         pick = picks.parse_pick_line("[WNBA] Bridget Carleton OVER 1.5 (Alt Line) THREE POINTERS (Underdog -235)")
         self.assertEqual(pick["kind"], "playerprops")

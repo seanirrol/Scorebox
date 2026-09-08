@@ -1128,6 +1128,18 @@ _AMBIGUOUS_STAT_DEFAULTS = {
     ("baseball", "walks"): "Walks (Pitching)",
     ("baseball", "player walks"): "Walks (Pitching)",
     ("baseball", "total walks"): "Walks (Pitching)",
+    # Bare "Outs" is a substring of "Strikeouts" itself ("strike" + "outs"),
+    # so without an explicit default here it silently matched "Strikeouts
+    # (Batting)" via _match_stat_label's substring fallback instead of ever
+    # reaching "Pitching Outs" later in the catalog - same class of bug as
+    # the bare Strikeouts/Walks defaults above, just via an accidental
+    # substring match rather than dict ordering alone. "Outs Recorded"
+    # shares no substring with any catalog label at all and needs its own
+    # entry for the same reason "Earned Runs Allowed" does above.
+    ("baseball", "outs"): "Pitching Outs",
+    ("baseball", "total outs"): "Pitching Outs",
+    ("baseball", "pitcher outs"): "Pitching Outs",
+    ("baseball", "outs recorded"): "Pitching Outs",
     # "Rushing Yards" doesn't substring-match "rush yards" in either
     # direction (the "ing" breaks the contiguous substring) - confirmed
     # live: "Trey Benson - Over 33.5 Rush yards" silently dropped the
