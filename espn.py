@@ -58,8 +58,18 @@ TOTAL_BASES_KEY = ("__computed__", "total_bases")
 # (unlike Total Bases, every component here already has its own plain
 # boxscore column, so no play-by-play digging is needed).
 PRA_KEY = ("__computed__", "pra")
+# NFL's "Rushing + Receiving Yards" - same combined-stat idea as PRA above,
+# just summing a runner's rushing yards and receiving yards instead
+# (confirmed live: without this, "Rushing + Receiving Yards" wasn't its own
+# catalog entry at all, and _match_stat_label's substring fallback silently
+# matched it to plain "Receiving Yards" instead - the raw text "rushing +
+# receiving yards" contains "receiving yards" as a literal substring - which
+# graded the pick against the wrong, smaller number instead of rejecting it
+# outright).
+RUSH_REC_YARDS_KEY = ("__computed__", "rush_rec_yards")
 _COMBO_STAT_COMPONENTS = {
     PRA_KEY: (("PTS", None), ("REB", None), ("AST", None)),
+    RUSH_REC_YARDS_KEY: (("YDS", "CAR"), ("YDS", "TGTS")),
 }
 
 # ESPN's raw "IP" boxscore field uses baseball notation - "5.2" means 5 full
@@ -77,6 +87,15 @@ PITCHING_OUTS_KEY = ("__computed__", "pitching_outs")
 # grade won/lost and silently voided after timing out instead. Only the
 # made count (before the "-") is what the line actually grades against.
 _MADE_ATTEMPTED_LABELS = {"3PT"}
+
+# NFL's passing group reports a single "C/ATT" column ("23/33" - completions
+# slash attempts, not a hyphen like 3PT's made-attempted format above, so it
+# can't reuse _MADE_ATTEMPTED_LABELS' splitting) - Completions and Attempts
+# are each their own real prop market, so both halves matter here, unlike
+# 3PT where only the made count is ever asked about. Handled specially in
+# get_stat_value like PITCHING_OUTS_KEY.
+PASSING_COMPLETIONS_KEY = ("__computed__", "passing_completions")
+PASSING_ATTEMPTS_KEY = ("__computed__", "passing_attempts")
 
 # label -> (label within its stat group, a second "discriminator" label that
 # must also be present in that same group). ESPN's stat groups don't carry a
@@ -119,11 +138,14 @@ STAT_CATALOG = {
         "Passing Yards": ("YDS", "RTG"),
         "Passing TDs": ("TD", "RTG"),
         "Interceptions Thrown": ("INT", "RTG"),
+        "Passing Completions": PASSING_COMPLETIONS_KEY,
+        "Passing Attempts": PASSING_ATTEMPTS_KEY,
         "Rushing Yards": ("YDS", "CAR"),
         "Rushing TDs": ("TD", "CAR"),
         "Receiving Yards": ("YDS", "TGTS"),
         "Receptions": ("REC", "TGTS"),
         "Receiving TDs": ("TD", "TGTS"),
+        "Rushing + Receiving Yards": RUSH_REC_YARDS_KEY,
         "Sacks": ("SACKS", "SOLO"),
         "Tackles": ("TOT", "SOLO"),
     },
@@ -429,6 +451,22 @@ def get_stat_value(event: dict, entity_id: str, stat_key: tuple) -> tuple[Option
         except ValueError:
             return None, is_home, team
         return outs, is_home, team
+
+    if stat_key in (PASSING_COMPLETIONS_KEY, PASSING_ATTEMPTS_KEY):
+        # "C/ATT" is a single "23/33" boxscore field (slash-separated, not
+        # the hyphen _MADE_ATTEMPTED_LABELS splitting expects) - both halves
+        # are real, separately-tracked prop markets here, so this pulls out
+        # whichever half was asked for instead of only ever keeping the
+        # first the way 3PT's made-attempted handling does.
+        raw, _, _ = get_stat_value(event, entity_id, ("C/ATT", "RTG"))
+        if raw is None or "/" not in str(raw):
+            return None, is_home, team
+        made, _, attempted = str(raw).partition("/")
+        try:
+            value = int(made) if stat_key == PASSING_COMPLETIONS_KEY else int(attempted)
+        except ValueError:
+            return None, is_home, team
+        return value, is_home, team
 
     if stat_key in _COMBO_STAT_COMPONENTS:
         # PTS/REB/AST are always whole numbers - int, not float, so display

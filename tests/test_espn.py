@@ -65,6 +65,88 @@ class PitchingOutsConversion(unittest.TestCase):
         self.assertEqual(espn.grade_over_under(value, "over", 16.5), "won")
 
 
+def _nfl_boxscore_event(comp_att, rushing_yds=None, receiving_yds=None, entity_id="1"):
+    """A single-athlete NFL boxscore with passing/rushing/receiving groups -
+    only the groups the caller actually supplies get a row for entity_id,
+    same as ESPN's own boxscore (a QB has no receiving row at all, a WR has
+    no passing row, etc.)."""
+    team = {"id": "10"}
+    statistics = [{
+        "labels": ["C/ATT", "YDS", "AVG", "TD", "INT", "SACKS", "QBR", "RTG"],
+        "athletes": [{"athlete": {"id": entity_id}, "stats": [comp_att, "310", "9.4", "2", "0", "1-8", "88.1", "118.5"]}],
+    }]
+    if rushing_yds is not None:
+        statistics.append({
+            "labels": ["CAR", "YDS", "AVG", "TD", "LONG"],
+            "athletes": [{"athlete": {"id": entity_id}, "stats": ["8", str(rushing_yds), "3.9", "0", "12"]}],
+        })
+    if receiving_yds is not None:
+        statistics.append({
+            "labels": ["REC", "YDS", "AVG", "TD", "LONG", "TGTS"],
+            "athletes": [{"athlete": {"id": entity_id}, "stats": ["5", str(receiving_yds), "8.0", "0", "20", "7"]}],
+        })
+    row = {"team": team, "statistics": statistics}
+    other_row = {"team": {"id": "20"}, "statistics": []}
+    return {
+        "header": {"competitions": [{"status": {"type": {"state": "post"}}}]},
+        "boxscore": {"players": [row, other_row]},
+    }
+
+
+class PassingCompletionsAndAttempts(unittest.TestCase):
+    """ESPN reports NFL passing completions/attempts as a single "23/33"
+    boxscore field (slash-separated), not the hyphen-separated made-
+    attempted format 3PT uses - confirmed live against a real finished
+    game's boxscore (Drake Maye, NE @ SEA: raw "23/33"). Both halves are
+    real, separately-tracked prop markets, unlike 3PT where only the made
+    count is ever asked about."""
+
+    def test_completions_reads_the_first_half(self):
+        event = _nfl_boxscore_event("23/33")
+        value, _, _ = espn.get_stat_value(event, "1", espn.PASSING_COMPLETIONS_KEY)
+        self.assertEqual(value, 23)
+
+    def test_attempts_reads_the_second_half(self):
+        event = _nfl_boxscore_event("23/33")
+        value, _, _ = espn.get_stat_value(event, "1", espn.PASSING_ATTEMPTS_KEY)
+        self.assertEqual(value, 33)
+
+    def test_player_not_in_boxscore_returns_none(self):
+        event = _nfl_boxscore_event("23/33")
+        value, _, _ = espn.get_stat_value(event, "does-not-exist", espn.PASSING_COMPLETIONS_KEY)
+        self.assertIsNone(value)
+
+
+class RushingPlusReceivingYards(unittest.TestCase):
+    """Confirmed live: "Rushing + Receiving Yards" wasn't its own catalog
+    entry, so _match_stat_label's substring fallback silently matched it to
+    plain "Receiving Yards" instead (the raw text contains "receiving
+    yards" as a literal substring) - graded against the wrong, smaller
+    number instead of being rejected outright."""
+
+    def test_sums_both_components(self):
+        event = _nfl_boxscore_event("8/10", rushing_yds=40, receiving_yds=7)
+        value, _, _ = espn.get_stat_value(event, "1", espn.RUSH_REC_YARDS_KEY)
+        self.assertEqual(value, 47)
+
+    def test_a_qb_with_no_receiving_row_counts_rushing_only(self):
+        event = _nfl_boxscore_event("23/33", rushing_yds=47)
+        value, _, _ = espn.get_stat_value(event, "1", espn.RUSH_REC_YARDS_KEY)
+        self.assertEqual(value, 47)
+
+    def test_a_receiver_with_no_rushing_row_counts_receiving_only(self):
+        event = _nfl_boxscore_event("0/0", receiving_yds=65)
+        value, _, _ = espn.get_stat_value(event, "1", espn.RUSH_REC_YARDS_KEY)
+        self.assertEqual(value, 65)
+
+    def test_catalog_lookup_resolves_to_the_combo_stat_not_receiving_yards(self):
+        # Regression for the exact substring-collision bug - goes through
+        # picks.py's own stat-label matcher, not just espn.py directly.
+        import picks
+        pick = picks.parse_pick_line("[NFL Props] Kyren Williams Over 59.5 Rushing + Receiving Yards")
+        self.assertEqual(pick["stat"], "Rushing + Receiving Yards")
+
+
 def _play_by_play_event(state: str, play_types: list[str]):
     return {
         "header": {"competitions": [{"status": {"type": {"state": state}}}]},

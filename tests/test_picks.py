@@ -296,6 +296,25 @@ class StatAliases(unittest.TestCase):
         self.assertEqual(pick["stat"], "Rushing Yards")
 
 
+class NflPassingCompletionsAttemptsAndComboYards(unittest.TestCase):
+    """Passing Completions/Attempts and Rushing + Receiving Yards - none of
+    these existed as catalog entries before; the combo stat in particular
+    used to silently substring-match "Receiving Yards" instead of being
+    rejected (see espn.py's own RUSH_REC_YARDS_KEY docstring)."""
+
+    def test_passing_completions(self):
+        pick = picks.parse_pick_line("[NFL Props] Matthew Stafford Over 20.5 Passing Completions")
+        self.assertEqual(pick["stat"], "Passing Completions")
+
+    def test_passing_attempts(self):
+        pick = picks.parse_pick_line("[NFL Props] Brock Purdy Under 36.5 Passing Attempts")
+        self.assertEqual(pick["stat"], "Passing Attempts")
+
+    def test_rushing_plus_receiving_yards(self):
+        pick = picks.parse_pick_line("[NFL Props] Kyren Williams Over 59.5 Rushing + Receiving Yards")
+        self.assertEqual(pick["stat"], "Rushing + Receiving Yards")
+
+
 class PitchingOutsAndMidPhraseAltLine(unittest.TestCase):
     """Two distinct real-message bugs confirmed live in the same slate:
     "Pitching Outs" wasn't a recognized stat at all (fell through to a
