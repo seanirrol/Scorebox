@@ -314,6 +314,28 @@ class NflPassingCompletionsAttemptsAndComboYards(unittest.TestCase):
         pick = picks.parse_pick_line("[NFL Props] Kyren Williams Over 59.5 Rushing + Receiving Yards")
         self.assertEqual(pick["stat"], "Rushing + Receiving Yards")
 
+    def test_abbreviated_pass_attempts(self):
+        pick = picks.parse_pick_line("[NFL Props] Brock Purdy Under 36.5 Pass Attempts")
+        self.assertEqual(pick["stat"], "Passing Attempts")
+
+    def test_abbreviated_rush_plus_rec_yards(self):
+        pick = picks.parse_pick_line("[NFL Props] Kyren Williams Over 59.5 Rush + Rec Yards")
+        self.assertEqual(pick["stat"], "Rushing + Receiving Yards")
+
+    def test_higher_lower_recognized_as_over_under(self):
+        # Confirmed live: _clean_line already normalizes Lower/Higher into
+        # Under/Over for every other market, but _parse_player_prop matched
+        # raw `description` directly instead of calling _clean_line first -
+        # so a real "Kyren Williams Higher 55.5 Rush Yards" pick never
+        # benefited from that existing fix and silently failed to parse.
+        pick = picks.parse_pick_line("[NFL Props] Kyren Williams Higher 55.5 Rush Yards")
+        self.assertEqual(pick, {
+            "kind": "playerprops", "sport": "nfl", "player": "Kyren Williams",
+            "stat": "Rushing Yards", "direction": "over", "line": 55.5,
+        })
+        pick = picks.parse_pick_line("[NFL Props] Brock Purdy Lower 36.5 Pass Attempts")
+        self.assertEqual(pick["direction"], "under")
+
 
 class PitchingOutsAndMidPhraseAltLine(unittest.TestCase):
     """Two distinct real-message bugs confirmed live in the same slate:
@@ -693,6 +715,13 @@ class NflSpreadNoMatchup(unittest.TestCase):
         self.assertEqual(pick["direction"], "spread")
         self.assertEqual(pick["line"], 5.0)
 
+    def test_spread_trailing_word(self):
+        # Confirmed live: "San Francisco 49ers +7.5 Spread" fell through to
+        # a bare moneyline with the line dropped - "Spread" itself wasn't
+        # in the trailing-word allowlist, only "Handicap"/"Points"/etc.
+        pick = picks.parse_pick_line("[NFL] San Francisco 49ers +7.5 Spread")
+        self.assertEqual(pick, {"kind": "team_total", "sport": "nfl", "team": "San Francisco 49ers", "direction": "spread", "line": 7.5})
+
     def test_bare_header_bullet_list(self):
         msg = "NFL\n- Denver Broncos -3.5 (Fanatics -100)\n- New York Jets -5.0 (Bet365 -105)"
         picked = picks.parse_picks_message(msg)
@@ -735,6 +764,10 @@ class NflSpreadWithMatchup(unittest.TestCase):
     def test_at_separated_named_team_spread(self):
         pick = picks.parse_pick_line("[NFL] Packers at Broncos - Broncos -3.5 (Alt Spread) (Fanatics -130)")
         self.assertEqual(pick, {"kind": "team_total", "sport": "nfl", "team": "Broncos", "direction": "spread", "line": -3.5})
+
+    def test_spread_trailing_word_with_matchup(self):
+        pick = picks.parse_pick_line("[NFL] San Francisco 49ers vs Los Angeles Rams - San Francisco 49ers +7.5 Spread")
+        self.assertEqual(pick, {"kind": "team_total", "sport": "nfl", "team": "San Francisco 49ers", "direction": "spread", "line": 7.5})
 
     def test_at_separated_named_team_spread_underdog(self):
         pick = picks.parse_pick_line("[NFL] Jets at Steelers - Steelers +1.5 (DraftKings -108)")

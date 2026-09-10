@@ -953,9 +953,13 @@ _DOUBLE_RESULT_SAME_TEAM_RE = re.compile(
 # Handicap" both fell through to a bare moneyline with the line dropped,
 # since the extra "Set"/"Sets" word between the number and "Handicap"
 # wasn't in this allowlist at all - only a bare trailing "Handicap" was.
+#
+# "Spread" itself - some sources label the market this way instead of
+# "Handicap" (e.g. "San Francisco 49ers +7.5 Spread") - same fall-through-
+# to-a-bare-moneyline failure as every other missing trailing word here.
 _INCL_EXTRA_INNINGS_RE = r"(?:\s*\(?Incl\.?\s+Extra\s+Innings\)?)?"
 _TEAM_SPREAD_NOMATCHUP_RE = re.compile(
-    rf"^(.+?)\s+([+-]\d+(?:\.\d+)?)(?:\s+(?:Points|Pts|Runs|Goals|Handicap|Asian\s+Handicap|Sets?\s+Handicap))?{_INCL_EXTRA_INNINGS_RE}\s*$",
+    rf"^(.+?)\s+([+-]\d+(?:\.\d+)?)(?:\s+(?:Points|Pts|Runs|Goals|Handicap|Asian\s+Handicap|Sets?\s+Handicap|Spread))?{_INCL_EXTRA_INNINGS_RE}\s*$",
     re.IGNORECASE,
 )
 
@@ -993,7 +997,7 @@ def _parse_team_spread_nomatchup_pick(sport: str, description: str) -> Optional[
 # the same reason ("Broncos -3.5 Points").
 _TEAM_SPREAD_MATCHUP_RE = re.compile(
     rf"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s+-\s+(.+?)\s*\(?([+-]\d+(?:\.\d+)?)\)?"
-    rf"(?:\s+(?:Points|Pts|Runs|Goals|Handicap|Asian\s+Handicap|Sets?\s+Handicap))?{_INCL_EXTRA_INNINGS_RE}\s*$",
+    rf"(?:\s+(?:Points|Pts|Runs|Goals|Handicap|Asian\s+Handicap|Sets?\s+Handicap|Spread))?{_INCL_EXTRA_INNINGS_RE}\s*$",
     re.IGNORECASE,
 )
 
@@ -1171,6 +1175,17 @@ _AMBIGUOUS_STAT_DEFAULTS = {
     ("nfl", "rush yds"): "Rushing Yards",
     ("nfl", "rec yds"): "Receiving Yards",
     ("nfl", "receiving yds"): "Receiving Yards",
+    # "Pass Attempts" shares no substring with "Passing Attempts" either -
+    # same "ing" gap as "Rush Yards"/"Pass Yds" above. Confirmed live-style,
+    # "Brock Purdy Under 36.5 Pass Attempts" silently dropped the whole
+    # pick.
+    ("nfl", "pass attempts"): "Passing Attempts",
+    # "Rush + Rec Yards" (this source's own abbreviated wording for the
+    # combined rushing+receiving-yards prop) shares no substring with
+    # "Rushing + Receiving Yards" either - same "ing" gap as "Rush Yards"
+    # above, just on both halves of the combo stat at once.
+    ("nfl", "rush + rec yards"): "Rushing + Receiving Yards",
+    ("nfl", "rush+rec yards"): "Rushing + Receiving Yards",
     # "3-Pointers Made" shares no substring with any of these (confirmed
     # live: "A'ja Wilson Over 0.5 player threes" silently dropped the whole
     # pick), unlike most other stat wording variants this module already
@@ -1650,6 +1665,13 @@ def _parse_implicit_over_player_prop(sport_key: str, sport: str, description: st
 def _parse_player_prop(sport_key: str, sport: str, description: str) -> Optional[dict]:
     if sport not in espn.SPORT_PATHS:
         return None
+    # Confirmed live: unlike every other parser in this file, this one
+    # matched raw `description` directly instead of calling _clean_line
+    # first - so a real "Kyren Williams Higher 55.5 Rush Yards" pick never
+    # benefited from _clean_line's own Lower/Higher -> Under/Over
+    # normalization (that fix already existed and already worked for every
+    # other market), and silently failed to parse at all.
+    description = _clean_line(description)
     pm = _PLAYER_STAT_RE.match(description)
     if not pm:
         return None
@@ -1676,6 +1698,7 @@ def _parse_combo_stat_prop(sport_key: str, sport: str, description: str) -> Opti
     every other prop here - see _COMBO_STAT_BEFORE_RE."""
     if sport not in ("basketball", "wnba"):
         return None
+    description = _clean_line(description)  # see _parse_player_prop's own comment on this same gap
     m = _COMBO_STAT_BEFORE_RE.match(description)
     if not m:
         return None
