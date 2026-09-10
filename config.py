@@ -57,6 +57,17 @@ for _pair in _picks_channel_map_raw.split(","):
     if _picks_id.strip() and _target_id.strip():
         PICKS_CHANNEL_MAP[int(_picks_id.strip())] = int(_target_id.strip())
 
+# A picks channel listed here only parses messages from someone with the
+# "Administrator" guild permission - anyone else's message in that specific
+# channel is silently ignored, same as if the channel weren't mapped at
+# all. Per-channel rather than global: most picks channels are meant to be
+# open to whoever's posting tips there, this only locks down the specific
+# channel(s) listed. Comma-separated channel IDs.
+_admin_only_picks_channel_ids = os.environ.get("ADMIN_ONLY_PICKS_CHANNEL_IDS", "").strip()
+ADMIN_ONLY_PICKS_CHANNEL_IDS: set[int] = {
+    int(cid.strip()) for cid in _admin_only_picks_channel_ids.split(",") if cid.strip()
+}
+
 # /summary is restricted to server admins (guild_permissions.administrator)
 # plus these specific user IDs, comma-separated - lets a non-admin (e.g. in
 # a server they don't administer) still use it without granting them admin

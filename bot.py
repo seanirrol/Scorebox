@@ -1915,6 +1915,10 @@ async def on_message(message: discord.Message):
     target_channel_id = config.PICKS_CHANNEL_MAP.get(message.channel.id)
     if target_channel_id is None or message.author.id == client.user.id:
         return
+    if message.channel.id in config.ADMIN_ONLY_PICKS_CHANNEL_IDS:
+        is_admin = isinstance(message.author, discord.Member) and message.author.guild_permissions.administrator
+        if not is_admin:
+            return
     if message.id in _processed_message_ids:
         log.warning("Ignoring duplicate on_message delivery for message %s in channel %s", message.id, message.channel.id)
         return
