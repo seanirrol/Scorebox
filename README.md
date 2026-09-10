@@ -30,8 +30,17 @@ so `/score team:Lakers` doesn't need you to specify the sport.
 
 1. Create a Discord application + bot at
    https://discord.com/developers/applications, copy its token, and invite
-   it to your server with the `bot` and `applications.commands` scopes
-   (Send Messages, Embed Links permissions).
+   it to your server with the `bot` and `applications.commands` scopes and
+   these permissions: View Channel, Send Messages, Embed Links, Attach
+   Files, Add Reactions, Use External Emojis, Read Message History, and
+   Manage Messages (needed to remove a non-owner's 🗑️ reaction instead of
+   deleting the card - see `on_raw_reaction_add` in `bot.py`).
+
+   Also enable two Privileged Gateway Intents on the Bot page (the bot
+   fails to log in without them): **Message Content Intent** (to read pick
+   text in tracked channels) and **Server Members Intent** (so the 🗑️
+   handler can see a reacting member's roles to check if they're an
+   admin).
 2. Install dependencies:
    ```
    pip install -r requirements.txt
