@@ -2367,7 +2367,8 @@ async def on_message_edit(before: discord.Message, after: discord.Message):
 
 
 def _channel_allowed(interaction: discord.Interaction) -> bool:
-    if config.ALLOWED_CHANNEL_IDS is not None and interaction.channel_id not in config.ALLOWED_CHANNEL_IDS:
+    guild_unrestricted = interaction.guild_id in config.UNRESTRICTED_GUILD_IDS
+    if not guild_unrestricted and config.ALLOWED_CHANNEL_IDS is not None and interaction.channel_id not in config.ALLOWED_CHANNEL_IDS:
         return False
     if interaction.channel_id in config.ADMIN_ONLY_COMMAND_CHANNEL_IDS:
         return isinstance(interaction.user, discord.Member) and interaction.user.guild_permissions.administrator

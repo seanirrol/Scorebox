@@ -38,6 +38,19 @@ ALLOWED_CHANNEL_IDS = (
     else None
 )
 
+# A guild listed here skips the ALLOWED_CHANNEL_IDS check entirely - every
+# channel in it is allowed, not just whatever's on the fixed list above.
+# Lets a server's own admin use commands anywhere in their server without
+# needing every individual channel added to ALLOWED_CHANNEL_ID by hand
+# (and kept in sync as they add more channels later). ADMIN_ONLY_COMMAND_
+# CHANNEL_IDS still applies on top of this for any channel listed there -
+# this only bypasses the fixed-allowlist gate, not the admin-only one.
+# Comma-separated guild IDs.
+_unrestricted_guild_ids = os.environ.get("UNRESTRICTED_GUILD_IDS", "").strip()
+UNRESTRICTED_GUILD_IDS: set[int] = {
+    int(gid.strip()) for gid in _unrestricted_guild_ids.split(",") if gid.strip()
+}
+
 # Maps each picks channel to its own target scores channel - messages posted
 # in a mapped channel are auto-parsed for picks, which get tracked
 # automatically (via the same logic as /track/.../playerprops) and posted
