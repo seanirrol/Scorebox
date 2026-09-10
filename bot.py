@@ -3539,7 +3539,19 @@ def _pack_summary_blocks_into_embeds(date_str: str, blocks: list[str]) -> list[d
     return embeds
 
 
+def _is_manually_untracked(entry: dict) -> bool:
+    """A pick someone deliberately removed via the 🗑️ reaction (or
+    /untrack) before it ever produced a result - unlike every other void
+    reason (crashed, postponed too long, event never found, etc.), this
+    one was never a real, decided bet, so it's noise in the summary report
+    rather than useful audit trail. Still excluded from the win rate
+    either way (see _win_rate_line) - this only controls whether the line
+    itself shows up at all."""
+    return entry["status"] == "void" and entry["detail"] == "VOID - Manually untracked"
+
+
 def _build_summary_embeds(date_str: str, picks_list: list[dict]) -> list[discord.Embed]:
+    picks_list = [e for e in picks_list if not _is_manually_untracked(e)]
     sections: dict[str, list[dict]] = {}
     for entry in picks_list:
         # Group by each tracker's own canonical sport label (dailylog.

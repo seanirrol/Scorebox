@@ -80,6 +80,57 @@ class SummaryStatusLine(unittest.TestCase):
         self.assertTrue(line.startswith("⏳"))
 
 
+class BuildSummaryEmbedsExcludesManuallyUntracked(unittest.TestCase):
+    """A pick someone deliberately removed via the 🗑️ reaction before it
+    ever produced a result is noise in the report, unlike every other void
+    reason (crashed, postponed too long, etc.), which stays visible as an
+    audit trail - see bot._is_manually_untracked's own docstring."""
+
+    def _entry(self, **overrides):
+        base = {"status": "pending", "detail": "⏳ Not Started", "label": "Team A ML", "sport": "MLB"}
+        base.update(overrides)
+        return base
+
+    def test_manually_untracked_pick_is_dropped(self):
+        picks_list = [
+            self._entry(status="void", detail="VOID - Manually untracked", label="Jessica Pegula ML"),
+            self._entry(status="won", detail="WON", label="Zack Wheeler Over 5.5 Strikeouts"),
+        ]
+        embeds = bot._build_summary_embeds("2026-09-10", picks_list)
+        combined = "\n".join(e.description for e in embeds)
+        self.assertNotIn("Jessica Pegula", combined)
+        self.assertIn("Zack Wheeler", combined)
+
+    def test_other_void_reasons_stay_visible(self):
+        # Only the specific "Manually untracked" reason is filtered - every
+        # other void reason (crashed, event not found, etc.) is still real
+        # audit-trail information worth showing.
+        picks_list = [self._entry(status="void", detail="VOID - Event not found on ESPN", label="Some Player Prop")]
+        embeds = bot._build_summary_embeds("2026-09-10", picks_list)
+        combined = "\n".join(e.description for e in embeds)
+        self.assertIn("Some Player Prop", combined)
+
+    def test_section_with_only_manually_untracked_picks_disappears_entirely(self):
+        picks_list = [
+            self._entry(status="void", detail="VOID - Manually untracked", label="Jessica Pegula ML", sport="Tennis"),
+            self._entry(status="won", detail="WON", label="Zack Wheeler Over 5.5 Strikeouts", sport="MLB"),
+        ]
+        embeds = bot._build_summary_embeds("2026-09-10", picks_list)
+        combined = "\n".join(e.description for e in embeds)
+        self.assertNotIn("Tennis", combined)
+        self.assertIn("MLB", combined)
+
+    def test_win_rate_still_unaffected_by_manually_untracked_picks(self):
+        picks_list = [
+            self._entry(status="void", detail="VOID - Manually untracked", label="Jessica Pegula ML"),
+            self._entry(status="won", detail="WON", label="Zack Wheeler Over 5.5 Strikeouts"),
+            self._entry(status="lost", detail="LOST", label="Philadelphia Phillies ML"),
+        ]
+        embeds = bot._build_summary_embeds("2026-09-10", picks_list)
+        combined = "\n".join(e.description for e in embeds)
+        self.assertIn("**Win Rate:** 1-1 (50.0%)", combined)
+
+
 class PackSummaryBlocksIntoEmbeds(unittest.TestCase):
     def test_small_report_produces_exactly_one_embed(self):
         blocks = ["**MLB**\nWon: Team A ML", "**Win Rate:** 1-0 (100.0%)"]
