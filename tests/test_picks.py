@@ -1328,6 +1328,18 @@ class VolleyballSetHandicaps(unittest.TestCase):
         result = picks.parse_pick_line("[Volleyball] Puerto Rico vs Guatemala - Puerto Rico/Guatemala Double Result (1st Set/Match)")
         self.assertEqual(result, {"kind": "ht_ft", "sport": "volleyball", "ht_team": "Puerto Rico", "ft_team": "Guatemala"})
 
+    def test_set_handicap_wording_no_matchup(self):
+        # Confirmed live: "Finland -1.5 Set Handicap" fell through to a
+        # bare moneyline with the line dropped - the extra "Set" word
+        # between the number and "Handicap" wasn't in the generic spread
+        # parser's trailing-word allowlist at all.
+        result = picks.parse_pick_line("[Volleyball] Finland -1.5 Set Handicap")
+        self.assertEqual(result, {"kind": "team_total", "sport": "volleyball", "team": "Finland", "direction": "spread", "line": -1.5})
+
+    def test_sets_handicap_wording_with_matchup(self):
+        result = picks.parse_pick_line("[Volleyball] Turkey vs Germany - Turkey +1.5 Sets Handicap")
+        self.assertEqual(result, {"kind": "team_total", "sport": "volleyball", "team": "Turkey", "direction": "spread", "line": 1.5})
+
 
 class VolleyballMatchPointMarkets(unittest.TestCase):
     """Volleyball's own match-WIDE "Total Points"/"Points Handicap" markets
@@ -1352,6 +1364,15 @@ class VolleyballMatchPointMarkets(unittest.TestCase):
     def test_bare_points_handicap_no_matchup(self):
         result = picks.parse_pick_line("[Volleyball] Bulgaria +15.5 Points")
         self.assertEqual(result, {"kind": "volleyball_match_point_handicap", "team": "Bulgaria", "line": 15.5})
+
+    def test_singular_point_handicap_wording(self):
+        # Confirmed live: "Ukraine -9.5 Point Handicap" (singular "Point",
+        # plus the trailing "Handicap" word) didn't match the plural-only
+        # "points\b" regex and silently mis-tracked the WRONG matchup side
+        # (Israel, not Ukraine) as a bare moneyline - worse than dropping
+        # the pick outright, since it still looked like a normal track.
+        result = picks.parse_pick_line("[Volleyball] Israel vs Ukraine - Ukraine -9.5 Point Handicap")
+        self.assertEqual(result, {"kind": "volleyball_match_point_handicap", "team": "Ukraine", "line": -9.5})
 
     def test_points_wording_does_not_get_stolen_by_the_generic_spread_parser(self):
         # Without the volleyball-first priority ordering, this would

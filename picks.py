@@ -387,11 +387,18 @@ _SET1_POINT_HANDICAP_MATCHUP_RE = re.compile(
 # both already tolerate a trailing "Points" word for other sports' own
 # scoring unit, with no way to know volleyball's own "Points" means a
 # completely different stat than that same match's score field.
+#
+# "points?" (not just the plural) - confirmed live, a real "Ukraine -9.5
+# Point Handicap" pick didn't match the plural-only "points\b" and fell
+# all the way through to a bare moneyline on the WRONG matchup side
+# (whichever team _parse_team_pick's own last-resort guess happened to
+# land on) - worse than just dropping the handicap line, since it still
+# looked like a normal successful track.
 _VOLLEYBALL_POINT_HANDICAP_NOMATCHUP_RE = re.compile(
-    r"^(.+?)\s+([+-]\d+(?:\.\d+)?)\s*(?:total\s+)?points\b", re.IGNORECASE,
+    r"^(.+?)\s+([+-]\d+(?:\.\d+)?)\s*(?:total\s+)?points?\b(?:\s+handicap)?", re.IGNORECASE,
 )
 _VOLLEYBALL_POINT_HANDICAP_MATCHUP_RE = re.compile(
-    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s+-\s+(.+?)\s*\(?([+-]\d+(?:\.\d+)?)\)?\s*(?:total\s+)?points\b",
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s+-\s+(.+?)\s*\(?([+-]\d+(?:\.\d+)?)\)?\s*(?:total\s+)?points?\b(?:\s+handicap)?",
     re.IGNORECASE,
 )
 
@@ -937,9 +944,18 @@ _DOUBLE_RESULT_SAME_TEAM_RE = re.compile(
 # already covers extra innings, not just 9" - confirmed live, "Atlanta
 # Braves +1.5 Handicap Incl. Extra Innings" fell through the very same way
 # once "Handicap" alone was recognized but this trailing qualifier wasn't.
+#
+# "Set(s) Handicap" - volleyball's own sub-label for this exact same
+# plain sets-won spread (365scores' "score" field for volleyball already
+# IS sets won, so this needs no dedicated volleyball parser, just another
+# accepted trailing phrase - see _parse_team_spread_nomatchup_pick's own
+# comment). Confirmed live: "Finland -1.5 Set Handicap"/"Italy -2.5 Set
+# Handicap" both fell through to a bare moneyline with the line dropped,
+# since the extra "Set"/"Sets" word between the number and "Handicap"
+# wasn't in this allowlist at all - only a bare trailing "Handicap" was.
 _INCL_EXTRA_INNINGS_RE = r"(?:\s*\(?Incl\.?\s+Extra\s+Innings\)?)?"
 _TEAM_SPREAD_NOMATCHUP_RE = re.compile(
-    rf"^(.+?)\s+([+-]\d+(?:\.\d+)?)(?:\s+(?:Points|Pts|Runs|Goals|Handicap|Asian\s+Handicap))?{_INCL_EXTRA_INNINGS_RE}\s*$",
+    rf"^(.+?)\s+([+-]\d+(?:\.\d+)?)(?:\s+(?:Points|Pts|Runs|Goals|Handicap|Asian\s+Handicap|Sets?\s+Handicap))?{_INCL_EXTRA_INNINGS_RE}\s*$",
     re.IGNORECASE,
 )
 
@@ -977,7 +993,7 @@ def _parse_team_spread_nomatchup_pick(sport: str, description: str) -> Optional[
 # the same reason ("Broncos -3.5 Points").
 _TEAM_SPREAD_MATCHUP_RE = re.compile(
     rf"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s+-\s+(.+?)\s*\(?([+-]\d+(?:\.\d+)?)\)?"
-    rf"(?:\s+(?:Points|Pts|Runs|Goals|Handicap|Asian\s+Handicap))?{_INCL_EXTRA_INNINGS_RE}\s*$",
+    rf"(?:\s+(?:Points|Pts|Runs|Goals|Handicap|Asian\s+Handicap|Sets?\s+Handicap))?{_INCL_EXTRA_INNINGS_RE}\s*$",
     re.IGNORECASE,
 )
 
