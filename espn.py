@@ -148,6 +148,10 @@ STAT_CATALOG = {
         "Rushing + Receiving Yards": RUSH_REC_YARDS_KEY,
         "Sacks": ("SACKS", "SOLO"),
         "Tackles": ("TOT", "SOLO"),
+        # A kicker's own game total (field goals + extra points) - confirmed
+        # live, a real boxscore's own "kicking" group carries this directly
+        # as its own "PTS" column, no computation needed.
+        "Kicking Points": ("PTS", "FG"),
     },
     "hockey": {
         "Goals": ("G", None),

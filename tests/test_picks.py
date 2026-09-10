@@ -336,6 +336,11 @@ class NflPassingCompletionsAttemptsAndComboYards(unittest.TestCase):
         pick = picks.parse_pick_line("[NFL Props] Brock Purdy Lower 36.5 Pass Attempts")
         self.assertEqual(pick["direction"], "under")
 
+    def test_kicking_points(self):
+        pick = picks.parse_pick_line("[NFL Props] Jason Myers Higher 5.5 Kicking Points")
+        self.assertEqual(pick["stat"], "Kicking Points")
+        self.assertEqual(pick["direction"], "over")
+
 
 class PitchingOutsAndMidPhraseAltLine(unittest.TestCase):
     """Two distinct real-message bugs confirmed live in the same slate:
