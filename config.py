@@ -68,6 +68,18 @@ ADMIN_ONLY_PICKS_CHANNEL_IDS: set[int] = {
     int(cid.strip()) for cid in _admin_only_picks_channel_ids.split(",") if cid.strip()
 }
 
+# Same idea as ADMIN_ONLY_PICKS_CHANNEL_IDS above, but for slash commands
+# instead of parsed pick messages - a channel listed here rejects every
+# command (via _channel_allowed in bot.py) from anyone without the
+# "Administrator" guild permission, same generic "Unable to use this
+# command in this channel" reply as an unmapped ALLOWED_CHANNEL_ID channel
+# would give (deliberately not a distinct message - see
+# _reject_wrong_channel's own reasoning for why it stays generic).
+_admin_only_command_channel_ids = os.environ.get("ADMIN_ONLY_COMMAND_CHANNEL_IDS", "").strip()
+ADMIN_ONLY_COMMAND_CHANNEL_IDS: set[int] = {
+    int(cid.strip()) for cid in _admin_only_command_channel_ids.split(",") if cid.strip()
+}
+
 # /summary is restricted to server admins (guild_permissions.administrator)
 # plus these specific user IDs, comma-separated - lets a non-admin (e.g. in
 # a server they don't administer) still use it without granting them admin

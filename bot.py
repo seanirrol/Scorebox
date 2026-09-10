@@ -2367,7 +2367,11 @@ async def on_message_edit(before: discord.Message, after: discord.Message):
 
 
 def _channel_allowed(interaction: discord.Interaction) -> bool:
-    return config.ALLOWED_CHANNEL_IDS is None or interaction.channel_id in config.ALLOWED_CHANNEL_IDS
+    if config.ALLOWED_CHANNEL_IDS is not None and interaction.channel_id not in config.ALLOWED_CHANNEL_IDS:
+        return False
+    if interaction.channel_id in config.ADMIN_ONLY_COMMAND_CHANNEL_IDS:
+        return isinstance(interaction.user, discord.Member) and interaction.user.guild_permissions.administrator
+    return True
 
 
 async def _reject_wrong_channel(interaction: discord.Interaction):
