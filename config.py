@@ -102,6 +102,17 @@ SUMMARY_ALLOWED_USER_IDS: set[int] = {
     int(uid.strip()) for uid in _summary_allowed_user_ids.split(",") if uid.strip()
 }
 
+# These specific user IDs are treated as if they had the "Administrator"
+# guild permission for ADMIN_ONLY_COMMAND_CHANNEL_IDS (bot.py's
+# _channel_allowed) and for 🗑️-reaction deletes of owner-less auto-tracked
+# cards (bot.py's on_raw_reaction_add) - lets a trusted non-admin get the
+# same bot-level access without granting real Discord Administrator power
+# (manage roles/channels/kick/etc). Comma-separated user IDs.
+_admin_override_user_ids = os.environ.get("ADMIN_OVERRIDE_USER_IDS", "").strip()
+ADMIN_OVERRIDE_USER_IDS: set[int] = {
+    int(uid.strip()) for uid in _admin_override_user_ids.split(",") if uid.strip()
+}
+
 class ParlayRoute(NamedTuple):
     scores_channel_id: int
     post_channel_id: int

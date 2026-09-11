@@ -396,7 +396,9 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
         return
     kind, info = found
     owner_id = info[-1]
-    is_admin = bool(payload.member and payload.member.guild_permissions.administrator)
+    is_admin = payload.user_id in config.ADMIN_OVERRIDE_USER_IDS or bool(
+        payload.member and payload.member.guild_permissions.administrator
+    )
 
     try:
         channel = client.get_channel(payload.channel_id) or await client.fetch_channel(payload.channel_id)
@@ -2376,6 +2378,8 @@ def _channel_allowed(interaction: discord.Interaction) -> bool:
     if not guild_unrestricted and config.ALLOWED_CHANNEL_IDS is not None and interaction.channel_id not in config.ALLOWED_CHANNEL_IDS:
         return False
     if interaction.channel_id in config.ADMIN_ONLY_COMMAND_CHANNEL_IDS:
+        if interaction.user.id in config.ADMIN_OVERRIDE_USER_IDS:
+            return True
         return isinstance(interaction.user, discord.Member) and interaction.user.guild_permissions.administrator
     return True
 
