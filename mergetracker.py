@@ -162,6 +162,12 @@ async def build_merged_embed(
     live_scores = scores365.main_scores(game)
     home_cols = [scores365.fmt_score(live_scores[0])] if live_scores else ["-"]
     away_cols = [scores365.fmt_score(live_scores[1])] if live_scores else ["-"]
+
+    set_score = scores365.current_set_score(game, sport_id)
+    if set_score:
+        home_cols.append(scores365.fmt_score(set_score[0]))
+        away_cols.append(scores365.fmt_score(set_score[1]))
+
     home_name = home_competitor.get("name", "?")
     away_name = away_competitor.get("name", "?")
     home_logo_url = scores365.competitor_logo_url(home_competitor)
