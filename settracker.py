@@ -730,6 +730,15 @@ async def _track_loop(
                         message.channel, channel_id, message, "settracker", key, pre_label,
                         f"NOT STARTED - <t:{int(kickoff)}:f>", group_ids,
                     )
+                # Same gap fixed in tracker.py's identical hibernation loop -
+                # confirmed live, a merged leg still sitting in pre-kickoff
+                # hibernation never reported to its merge group at all.
+                merge_key = mergetracker.merged_into(channel_id, "settracker", key)
+                if merge_key:
+                    await mergetracker.report_leg(
+                        message.channel, channel_id, merge_key, "settracker", key,
+                        f"NOT STARTED - <t:{int(kickoff)}:f>", game, sport_id,
+                    )
 
                 log.info("Tennis-market game %s (%s) not starting soon; hibernating %.0fs", game_id, market, hibernate_for)
                 await asyncio.sleep(hibernate_for)

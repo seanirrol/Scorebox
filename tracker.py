@@ -549,6 +549,19 @@ async def _track_loop(
                         message.channel, channel_id, message, "tracker", key, pre_label,
                         f"NOT STARTED - <t:{int(kickoff)}:f>", group_ids,
                     )
+                # Same gap as the parlay reporting just above had before it
+                # was added - confirmed live, a merged leg still sitting in
+                # pre-kickoff hibernation never called this at all (only
+                # the post-hibernation live-polling section further down
+                # did), so its merged card sat frozen on its initial
+                # "Pending" placeholder - no score box, no live detail -
+                # for however long hibernation lasted, sometimes hours.
+                merge_key = mergetracker.merged_into(channel_id, "tracker", key)
+                if merge_key:
+                    await mergetracker.report_leg(
+                        message.channel, channel_id, merge_key, "tracker", key,
+                        f"NOT STARTED - <t:{int(kickoff)}:f>", game, sport_id,
+                    )
 
                 log.info("Game %s not starting soon; hibernating %.0fs", game_id, hibernate_for)
                 await asyncio.sleep(hibernate_for)
