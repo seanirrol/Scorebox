@@ -1439,6 +1439,25 @@ class VolleyballMatchPointMarkets(unittest.TestCase):
         result = picks.parse_pick_line("[Volleyball] Bulgaria +15.5 Points")
         self.assertNotEqual(result["kind"], "team_total")
 
+    def test_set1_total_points(self):
+        # Confirmed live: "Over 45.5 1st Set Total Points" had no dedicated
+        # parser at all - it fell through to _parse_volleyball_point_total_
+        # pick (the match-WIDE version, no "1st set" anchor of its own),
+        # silently grading against the whole match's combined points
+        # instead of just Set 1's.
+        result = picks.parse_pick_line("[Volleyball] Switzerland vs Romania - Over 45.5 1st Set Total Points")
+        self.assertEqual(result, {"kind": "volleyball_set1_point_total", "team": "Switzerland", "direction": "over", "line": 45.5})
+
+    def test_set1_total_points_under_bare_wording(self):
+        result = picks.parse_pick_line("[Volleyball] Switzerland vs Romania - Under 45.5 1st Set Points")
+        self.assertEqual(result, {"kind": "volleyball_set1_point_total", "team": "Switzerland", "direction": "under", "line": 45.5})
+
+    def test_set1_total_points_does_not_collide_with_match_wide_total(self):
+        # Same wording minus "1st Set" must still resolve as the match-wide
+        # total, not the Set 1 one.
+        result = picks.parse_pick_line("[Volleyball] Switzerland vs Romania - Over 45.5 Total Points")
+        self.assertEqual(result["kind"], "volleyball_match_point_total")
+
     def test_total_points_wording_does_not_get_stolen_by_the_generic_total_parser(self):
         result = picks.parse_pick_line("[Volleyball] Netherlands vs Belgium - Over 177.5 Total Points")
         self.assertNotEqual(result["kind"], "total")

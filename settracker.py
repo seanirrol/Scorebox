@@ -46,6 +46,12 @@ per-game detail call needed:
   (scores365.volleyball_match_points) instead of games won - distinct
   from "Total Sets"/"Set Handicap" (tracker.py's own generic total/spread,
   which grade off main_scores - sets WON, e.g. 3-1 - not rally points).
+- "set1_point_total": volleyball only - the set1_total_games shape again,
+  but against Set 1's own combined rally-point total
+  (scores365.volleyball_first_set_result) instead of games, and settling
+  as soon as Set 1 itself ends rather than waiting on the whole match -
+  distinct from "match_point_total" (the whole match) the same way
+  set1_point_handicap is distinct from match_point_handicap.
 
 Mirrors f5tracker.py's multi-mode design (one tracker module, several
 distinct grading shapes selected by which optional params are set) rather
@@ -231,6 +237,8 @@ def pick_label(market: str, team: Optional[str], direction: Optional[str], line:
         return f"{team} {line:+g} 1st Set"
     if market == "match_point_total":
         return f"{direction.title()} {line:g} Total Points"
+    if market == "set1_point_total":
+        return f"1st Set {direction.title()} {line:g} Points"
     if market == "match_point_handicap":
         return f"{team} {line:+g} Points"
     return f"{team} {'to Win a Set' if direction == 'yes' else 'Not to Win a Set'}"  # win_a_set
@@ -385,6 +393,15 @@ async def build_embed(
         elif direction == "over" and line is not None and home_points + away_points > line:
             early_win = True
         frozen_cols = (scores365.fmt_score(home_points), scores365.fmt_score(away_points))  # live-running, shown whether decided or not
+
+    elif market == "set1_point_total":
+        breakdown = scores365.volleyball_first_set_result(game)
+        decided = breakdown is not None
+        if decided:
+            current_total_value = breakdown[0] + breakdown[1]
+            result = scores365.grade_over_under(current_total_value, direction, line)
+            frozen_cols = (scores365.fmt_score(breakdown[0]), scores365.fmt_score(breakdown[1]))
+        final_period_text = "1st Set Final"
 
     elif market == "match_point_handicap":
         decided = scores365.is_finished(game)
@@ -556,6 +573,11 @@ def grade_now(game: dict, market: str, team: Optional[str], direction: Optional[
             return True, "void"
         home_points, away_points = scores365.volleyball_match_points(game)
         return True, scores365.grade_over_under(home_points + away_points, direction, line)
+    if market == "set1_point_total":
+        breakdown = scores365.volleyball_first_set_result(game)
+        if breakdown is None:
+            return False, None
+        return True, scores365.grade_over_under(breakdown[0] + breakdown[1], direction, line)
     if market == "match_point_handicap":
         if not scores365.is_finished(game):
             return False, None

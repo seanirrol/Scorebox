@@ -451,6 +451,34 @@ def _parse_volleyball_point_total_pick(description: str) -> Optional[dict]:
     return {"kind": "volleyball_match_point_total", "team": team, "direction": m.group(3).lower(), "line": float(m.group(4))}
 
 
+# "Switzerland vs Romania - Over 45.5 1st Set Total Points" - volleyball's
+# own Set-1-scoped combined rally-point total (scores365.
+# volleyball_first_set_result), distinct from the match-WIDE version above
+# by the "1st Set" qualifier - settles as soon as Set 1 itself ends rather
+# than waiting on the whole match, same early-settlement shape as
+# settracker.py's set1_point_handicap/set1_games_handicap. Checked ahead of
+# _parse_volleyball_point_total_pick (see _parse_description) so "1st Set"
+# wording isn't swallowed by the match-wide parser instead - that regex has
+# no "1st set" anchor of its own and would otherwise happily match the
+# "Over 45.5 ... points" tail alone, silently grading against the WHOLE
+# match's combined points instead of just Set 1's.
+_VOLLEYBALL_SET1_POINT_TOTAL_RE = re.compile(
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s*(?:-\s*)?(Over|Under)\s+([\d.]+)\s*1st\s*set\s*(?:total\s+)?points\b",
+    re.IGNORECASE,
+)
+
+
+def _parse_volleyball_set1_point_total_pick(description: str) -> Optional[dict]:
+    text = _clean_line(description)
+    m = _VOLLEYBALL_SET1_POINT_TOTAL_RE.match(text)
+    if not m:
+        return None
+    team = m.group(1).strip()  # either matchup side - just used to look the game up
+    if not team:
+        return None
+    return {"kind": "volleyball_set1_point_total", "team": team, "direction": m.group(3).lower(), "line": float(m.group(4))}
+
+
 # "Marek Bereiter vs Adrian Walek - Marek Bereiter +3.5 Point Handicap" -
 # table tennis's own combined-points margin (see tabletennis.
 # grade_point_handicap) - a completely separate market/provider from every
@@ -2565,6 +2593,10 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
         point_handicap = _parse_volleyball_point_handicap_pick(description)
         if point_handicap:
             return point_handicap
+
+        set1_point_total = _parse_volleyball_set1_point_total_pick(description)
+        if set1_point_total:
+            return set1_point_total
 
         point_total = _parse_volleyball_point_total_pick(description)
         if point_total:

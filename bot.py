@@ -2176,6 +2176,11 @@ async def _dispatch_pick(
                 target_channel, pick["team"], "match_point_total", pick["direction"], pick["line"],
                 section=section, label=label, origin_channel_id=origin_channel_id, manual=manual, sport="volleyball", game_id=game_id,
             )
+        elif pick["kind"] == "volleyball_set1_point_total":
+            return await _auto_tennis_market(
+                target_channel, pick["team"], "set1_point_total", pick["direction"], pick["line"],
+                section=section, label=label, origin_channel_id=origin_channel_id, manual=manual, sport="volleyball", game_id=game_id,
+            )
         elif pick["kind"] == "tennis_playerprops":
             return await _auto_tennis_playerprops(
                 target_channel, pick["player"], pick["stat"], pick.get("direction"), pick.get("line"),
@@ -2547,7 +2552,7 @@ async def tracktoday(interaction: discord.Interaction, sport: app_commands.Choic
         "track", "total", "team_total", "btts", "set1_moneyline", "tennis_set1_total_games", "tennis_match_total_games",
         "tennis_player_total_games", "tennis_win_a_set", "tennis_games_handicap", "tennis_set1_games_handicap",
         "tennis_sets_handicap", "tennis_exact_sets", "volleyball_set1_handicap", "volleyball_match_point_handicap",
-        "volleyball_match_point_total",
+        "volleyball_match_point_total", "volleyball_set1_point_total",
     )
     if game_id is not None and parsed["kind"] not in _GAME_ID_SUPPORTED_KINDS:
         await interaction.response.send_message(
