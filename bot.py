@@ -391,11 +391,11 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     if payload.user_id == client.user.id or str(payload.emoji) != TRASH_EMOJI:
         return
 
-    found = _find_message_owner(payload.message_id)
-    if not found:
+    merge_owner = mergetracker.get_message_owner(payload.message_id)
+    found = None if merge_owner else _find_message_owner(payload.message_id)
+    if not merge_owner and not found:
         return
-    kind, info = found
-    owner_id = info[-1]
+    owner_id = None if merge_owner else found[1][-1]
     is_admin = payload.user_id in config.ADMIN_OVERRIDE_USER_IDS or bool(
         payload.member and payload.member.guild_permissions.administrator
     )
@@ -413,10 +413,16 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
             pass
         return
 
-    _stop_tracking_by_card_message(payload.message_id)
-
     reactor = str(payload.member) if payload.member else f"user `{payload.user_id}`"
-    botlog.event(f"🗑️ Untracked (🗑️ reaction, {kind}): message `{payload.message_id}` in <#{payload.channel_id}> — by **{reactor}**")
+    if merge_owner:
+        channel_id, group_key, game_id = merge_owner
+        mergetracker.stop_merge(group_key)
+        _untrack_one(channel_id, game_id, None)
+        botlog.event(f"🗑️ Untracked (🗑️ reaction, merged card): game `{game_id}` in <#{payload.channel_id}> — by **{reactor}**")
+    else:
+        kind, info = found
+        _stop_tracking_by_card_message(payload.message_id)
+        botlog.event(f"🗑️ Untracked (🗑️ reaction, {kind}): message `{payload.message_id}` in <#{payload.channel_id}> — by **{reactor}**")
 
     try:
         await message.delete()

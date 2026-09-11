@@ -214,6 +214,54 @@ class ReportLegAndHandleLegResult(unittest.TestCase):
         self.assertEqual(legs["tracker:555:100:ml:Atletico Madrid"]["status"], "pending")
 
 
+class GetMessageOwnerAndStopMerge(unittest.TestCase):
+    """A merged card's own message isn't registered in any individual
+    tracker module's _message_owners (its legs' ORIGINAL cards were deleted
+    at merge time) - get_message_owner/stop_merge are what let bot.py's
+    shared 🗑️-reaction handler find and kill a merged card at all. Without
+    these, clicking 🗑️ on a merged card found no owner anywhere and did
+    nothing, while the underlying legs kept polling and _edit_or_repost's
+    own "message gone -> repost" self-healing kept resurrecting it."""
+
+    def setUp(self):
+        self._data: dict = {}
+        self._orig_load = mergetracker.state.load_merges
+        self._orig_save = mergetracker.state.save_merges
+        mergetracker.state.load_merges = lambda: dict(self._data)
+        mergetracker.state.save_merges = lambda data: self._data.clear() or self._data.update(data)
+        mergetracker._leg_index.clear()
+        self._data["555:100"] = {
+            "channel_id": 555, "game_id": 100, "message_id": 42, "header": "Soccer • LaLiga",
+            "legs": {
+                "tracker:555:100:ml:Atletico Madrid": {"label": "Atletico Madrid ML", "status": "pending", "detail": "Pending"},
+                "doublechancetracker:555:100": {"label": "Draw or Atletico Madrid", "status": "pending", "detail": "Pending"},
+            },
+        }
+        mergetracker._leg_index["555:tracker:555:100:ml:Atletico Madrid"] = "555:100"
+        mergetracker._leg_index["555:doublechancetracker:555:100"] = "555:100"
+
+    def tearDown(self):
+        mergetracker.state.load_merges = self._orig_load
+        mergetracker.state.save_merges = self._orig_save
+        mergetracker._leg_index.clear()
+
+    def test_finds_the_group_by_its_own_message_id(self):
+        self.assertEqual(mergetracker.get_message_owner(42), (555, "555:100", 100))
+
+    def test_returns_none_for_an_unrelated_message_id(self):
+        self.assertIsNone(mergetracker.get_message_owner(999))
+
+    def test_stop_merge_removes_the_group_and_its_leg_index_entries(self):
+        self.assertTrue(mergetracker.stop_merge("555:100"))
+        self.assertNotIn("555:100", self._data)
+        self.assertIsNone(mergetracker.merged_into(555, "tracker", "555:100:ml:Atletico Madrid"))
+        self.assertIsNone(mergetracker.merged_into(555, "doublechancetracker", "555:100"))
+        self.assertIsNone(mergetracker.get_message_owner(42))
+
+    def test_stop_merge_returns_false_for_an_already_gone_group(self):
+        self.assertFalse(mergetracker.stop_merge("555:999"))
+
+
 class PersistDoesNotClobberAConcurrentlySavedDifferentGroup(unittest.TestCase):
     """Same race shape parlaytracker._persist was fixed for once already
     (see that function's own docstring): state.save_merges writes the WHOLE

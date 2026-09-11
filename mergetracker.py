@@ -116,6 +116,39 @@ def merged_into(channel_id: int, module_name: str, track_key_str: str) -> Option
     return _leg_index.get(_leg_lookup_key(channel_id, module_name, track_key_str))
 
 
+def get_message_owner(message_id: int) -> Optional[tuple[int, str, object]]:
+    """Returns (channel_id, group_key, game_id) if message_id is a merged
+    card's own message. A merged card isn't registered in any individual
+    tracker module's own _message_owners (its legs' ORIGINAL cards were
+    deleted at merge time) - bot.py's shared 🗑️-reaction handler
+    (_find_message_owner) checks here first for exactly that reason.
+    Confirmed live: without this, clicking 🗑️ on a merged card found no
+    owner anywhere and silently did nothing, while the card's own legs kept
+    polling and _edit_or_repost's "message gone -> repost" self-healing
+    kept resurrecting it every cooldown - the card looked un-killable."""
+    for group_key, group in state.load_merges().items():
+        if group.get("message_id") == message_id:
+            return group["channel_id"], group_key, group["game_id"]
+    return None
+
+
+def stop_merge(group_key: str) -> bool:
+    """Removes a merge group's own bookkeeping so it stops trying to
+    resurrect itself. Doesn't touch the underlying legs' own trackers -
+    callers use the group's game_id to stop those separately (see bot.py's
+    on_raw_reaction_add, which reuses the same per-module stop_tracking
+    calls /untrack already makes for a game_id)."""
+    data = state.load_merges()
+    group = data.pop(group_key, None)
+    if group is None:
+        return False
+    channel_id = group["channel_id"]
+    for leg_id in group.get("legs", {}):
+        _leg_index.pop(f"{channel_id}:{leg_id}", None)
+    state.save_merges(data)
+    return True
+
+
 def _tracker_modules():
     """Lazily imported - every supported module imports this one at the top
     level to call merged_into/report_leg/handle_leg_result, so importing
