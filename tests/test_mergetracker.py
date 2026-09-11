@@ -48,6 +48,7 @@ class _FakeMessage:
         self.embeds = embeds or []
         self.deleted = False
         self.edits = []
+        self.reactions = []
         self.jump_url = f"https://discord.com/channels/0/0/{message_id}"
 
     async def edit(self, **kwargs):
@@ -55,6 +56,9 @@ class _FakeMessage:
 
     async def delete(self):
         self.deleted = True
+
+    async def add_reaction(self, emoji):
+        self.reactions.append(emoji)
 
 
 class _FakeChannel:
@@ -380,6 +384,12 @@ class CreateMergeValidation(unittest.TestCase):
         self.assertEqual(len(channel.sent), 1)
         self.assertEqual(mergetracker.merged_into(555, "tracker", tracker.track_key(555, 100, None, None, "over", 2.5)), "555:100")
         self.assertEqual(mergetracker.merged_into(555, "doublechancetracker", doublechancetracker.track_key(555, 100)), "555:100")
+        # The merged card must get its own 🗑️ reaction - without this,
+        # there's no way to untrack it via reaction at all (confirmed live:
+        # a merged card never got one, forcing people to delete the Discord
+        # message directly, which just gets self-healed back into existence).
+        new_message = channel.messages[group["message_id"]]
+        self.assertIn("🗑️", new_message.reactions)
 
     def test_settracker_legs_resolve_and_merge_alongside_tracker(self):
         # The original real-world case this was added for: a tennis

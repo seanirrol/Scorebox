@@ -49,6 +49,22 @@ import throttle
 
 log = logging.getLogger("scorebox.mergetracker")
 
+_TRASH_EMOJI = "🗑️"
+
+
+async def _safe_add_trash_reaction(message: discord.Message):
+    """Mirrors bot.py's own _safe_add_trash_reaction (duplicated rather than
+    imported - bot.py imports this module, so importing back would be
+    circular). Confirmed live: a merged card never got this reaction at
+    all, on creation or on repost - clicking a (nonexistent) 🗑️ was never
+    possible, forcing anyone who wanted a merged card gone to delete the
+    Discord message directly, which _edit_or_repost's own "message gone ->
+    repost" self-healing then treated as accidental loss and resurrected."""
+    try:
+        await message.add_reaction(_TRASH_EMOJI)
+    except discord.HTTPException as e:
+        log.warning("Failed to add trash-reaction to merged card %s: %s", message.id, e)
+
 # Serializes updates to the same merge group - two legs of the SAME group
 # can report in back-to-back from independent poll loops, each awaiting a
 # Discord call between its own load and save. Same race shape parlaytracker
@@ -239,6 +255,7 @@ async def _edit_or_repost(
     except discord.HTTPException as e:
         log.warning("Failed to repost merged card: %s", e)
         return message_id
+    await _safe_add_trash_reaction(new_message)
     return new_message.id
 
 
@@ -384,6 +401,7 @@ async def create_merge(channel: discord.abc.Messageable, channel_id: int, messag
         await throttle.run(channel_id, lambda: new_message.edit(embed=embed))
     except discord.HTTPException as e:
         log.warning("Failed to attach footer id to fresh merged card %s: %s", new_message.id, e)
+    await _safe_add_trash_reaction(new_message)
 
     for module_name, key, mid, _gid in resolved:
         try:
