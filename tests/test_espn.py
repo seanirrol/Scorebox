@@ -147,6 +147,78 @@ class RushingPlusReceivingYards(unittest.TestCase):
         self.assertEqual(pick["stat"], "Rushing + Receiving Yards")
 
 
+def _ncaaf_boxscore_event(comp_att, rushing_yds=None, receiving_yds=None, entity_id="1"):
+    """Same shape as _nfl_boxscore_event, but matching college football's
+    OWN confirmed-live boxscore groups: passing carries "QBR" but never
+    "RTG", and receiving has no "TGTS" column at all (only REC/YDS/AVG/TD/
+    LONG) - both real structural differences from the NFL's own boxscore,
+    not just cosmetic label renames."""
+    team = {"id": "10"}
+    statistics = [{
+        "labels": ["C/ATT", "YDS", "AVG", "TD", "INT", "QBR"],
+        "athletes": [{"athlete": {"id": entity_id}, "stats": [comp_att, "310", "9.4", "2", "0", "88.1"]}],
+    }]
+    if rushing_yds is not None:
+        statistics.append({
+            "labels": ["CAR", "YDS", "AVG", "TD", "LONG"],
+            "athletes": [{"athlete": {"id": entity_id}, "stats": ["8", str(rushing_yds), "3.9", "0", "12"]}],
+        })
+    if receiving_yds is not None:
+        statistics.append({
+            "labels": ["REC", "YDS", "AVG", "TD", "LONG"],
+            "athletes": [{"athlete": {"id": entity_id}, "stats": ["5", str(receiving_yds), "8.0", "0", "20"]}],
+        })
+    row = {"team": team, "statistics": statistics}
+    other_row = {"team": {"id": "20"}, "statistics": []}
+    return {
+        "header": {"competitions": [{"status": {"type": {"state": "post"}}}]},
+        "boxscore": {"players": [row, other_row]},
+    }
+
+
+class CollegeFootballDiscriminatorFallbacks(unittest.TestCase):
+    """College football's boxscore mirrors the NFL's shape but disambiguates
+    differently (confirmed live) - PASSING_COMPLETIONS_KEY/PASSING_ATTEMPTS_
+    KEY and RUSH_REC_YARDS_KEY must fall back to college's own discriminators
+    ("QBR", "REC") when the NFL-first ones ("RTG", "TGTS") aren't present,
+    without ever double-counting a boxscore that (like the NFL's) happens to
+    carry both."""
+
+    def test_completions_falls_back_to_qbr_when_rtg_is_absent(self):
+        event = _ncaaf_boxscore_event("18/25")
+        value, _, _ = espn.get_stat_value(event, "1", espn.PASSING_COMPLETIONS_KEY)
+        self.assertEqual(value, 18)
+
+    def test_attempts_falls_back_to_qbr_when_rtg_is_absent(self):
+        event = _ncaaf_boxscore_event("18/25")
+        value, _, _ = espn.get_stat_value(event, "1", espn.PASSING_ATTEMPTS_KEY)
+        self.assertEqual(value, 25)
+
+    def test_rush_rec_yards_falls_back_to_rec_when_tgts_is_absent(self):
+        event = _ncaaf_boxscore_event("18/25", rushing_yds=40, receiving_yds=7)
+        value, _, _ = espn.get_stat_value(event, "1", espn.RUSH_REC_YARDS_KEY)
+        self.assertEqual(value, 47)
+
+    def test_receiver_with_no_rushing_row_counts_receiving_only(self):
+        event = _ncaaf_boxscore_event("0/0", receiving_yds=65)
+        value, _, _ = espn.get_stat_value(event, "1", espn.RUSH_REC_YARDS_KEY)
+        self.assertEqual(value, 65)
+
+    def test_nfl_shaped_boxscore_with_both_tgts_and_rec_is_not_double_counted(self):
+        # NFL's own receiving group carries REC *and* TGTS together - the
+        # REC fallback must never also fire here, or a rushing+receiving
+        # combo would count the same receiving yards twice.
+        event = _nfl_boxscore_event("23/33", rushing_yds=40, receiving_yds=7)
+        value, _, _ = espn.get_stat_value(event, "1", espn.RUSH_REC_YARDS_KEY)
+        self.assertEqual(value, 47)
+
+    def test_catalog_lookup_resolves_ncaaf_receiving_yards(self):
+        import picks
+        pick = picks.parse_pick_line("[NCAAF Props] Jourdin Houston Over 32.5 Receiving Yards")
+        self.assertEqual(pick["sport"], "ncaaf")
+        self.assertEqual(pick["stat"], "Receiving Yards")
+
+
 def _play_by_play_event(state: str, play_types: list[str]):
     return {
         "header": {"competitions": [{"status": {"type": {"state": state}}}]},

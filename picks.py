@@ -36,6 +36,9 @@ _SPORT_MAP = {
     "fiba": "basketball",
     "fiba women": "basketball",
     "nfl": "nfl",
+    "ncaaf": "ncaaf",
+    "cfb": "ncaaf",
+    "college football": "ncaaf",
     "nhl": "hockey",
     "soccer": "soccer",
     "tennis": "tennis",
@@ -1214,6 +1217,17 @@ _AMBIGUOUS_STAT_DEFAULTS = {
     # above, just on both halves of the combo stat at once.
     ("nfl", "rush + rec yards"): "Rushing + Receiving Yards",
     ("nfl", "rush+rec yards"): "Rushing + Receiving Yards",
+    # Same wording gaps as the NFL entries above - college football uses the
+    # identical stat catalog labels, so the same abbreviated/"ing"-dropped
+    # wording would silently drop the whole pick here too.
+    ("ncaaf", "rush yards"): "Rushing Yards",
+    ("ncaaf", "pass yds"): "Passing Yards",
+    ("ncaaf", "rush yds"): "Rushing Yards",
+    ("ncaaf", "rec yds"): "Receiving Yards",
+    ("ncaaf", "receiving yds"): "Receiving Yards",
+    ("ncaaf", "pass attempts"): "Passing Attempts",
+    ("ncaaf", "rush + rec yards"): "Rushing + Receiving Yards",
+    ("ncaaf", "rush+rec yards"): "Rushing + Receiving Yards",
     # "3-Pointers Made" shares no substring with any of these (confirmed
     # live: "A'ja Wilson Over 0.5 player threes" silently dropped the whole
     # pick), unlike most other stat wording variants this module already

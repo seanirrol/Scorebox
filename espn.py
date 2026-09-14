@@ -35,6 +35,7 @@ SPORT_PATHS = {
     "basketball": ("basketball", "nba"),
     "wnba": ("basketball", "wnba"),
     "nfl": ("football", "nfl"),
+    "ncaaf": ("football", "college-football"),
     "hockey": ("hockey", "nhl"),
 }
 
@@ -43,6 +44,7 @@ SPORT_DISPLAY_LABELS = {
     "basketball": "NBA",
     "wnba": "WNBA",
     "nfl": "NFL",
+    "ncaaf": "NCAAF",
     "hockey": "NHL",
 }
 
@@ -69,7 +71,6 @@ PRA_KEY = ("__computed__", "pra")
 RUSH_REC_YARDS_KEY = ("__computed__", "rush_rec_yards")
 _COMBO_STAT_COMPONENTS = {
     PRA_KEY: (("PTS", None), ("REB", None), ("AST", None)),
-    RUSH_REC_YARDS_KEY: (("YDS", "CAR"), ("YDS", "TGTS")),
 }
 
 # ESPN's raw "IP" boxscore field uses baseball notation - "5.2" means 5 full
@@ -160,6 +161,33 @@ STAT_CATALOG = {
         "Hits": ("HT", None),
         "Blocked Shots": ("BS", None),
         "Penalty Minutes": ("PIM", None),
+    },
+    # College football's boxscore groups mirror the NFL's shape (same
+    # passing/rushing/receiving/defensive/kicking groups) but disambiguate
+    # differently - confirmed live, its passing group carries "QBR" but
+    # never "RTG", and its receiving group carries no "TGTS" column at all
+    # (only REC/YDS/AVG/TD/LONG) - so the discriminators below differ from
+    # the NFL catalog's even though the stat names are identical.
+    "ncaaf": {
+        "Passing Yards": ("YDS", "QBR"),
+        "Passing TDs": ("TD", "QBR"),
+        "Interceptions Thrown": ("INT", "QBR"),
+        "Passing Completions": PASSING_COMPLETIONS_KEY,
+        "Passing Attempts": PASSING_ATTEMPTS_KEY,
+        "Rushing Yards": ("YDS", "CAR"),
+        "Rushing TDs": ("TD", "CAR"),
+        # "REC" (not "TGTS" - see get_stat_value's own RUSH_REC_YARDS_KEY
+        # comment) disambiguates the receiving group here - unique among all
+        # of college football's boxscore groups when paired with "YDS"/"TD"
+        # (fumbles is the only other group carrying "REC", and it has
+        # neither YDS nor TD).
+        "Receiving Yards": ("YDS", "REC"),
+        "Receptions": ("REC", "YDS"),
+        "Receiving TDs": ("TD", "REC"),
+        "Rushing + Receiving Yards": RUSH_REC_YARDS_KEY,
+        "Sacks": ("SACKS", "SOLO"),
+        "Tackles": ("TOT", "SOLO"),
+        "Kicking Points": ("PTS", "FG"),
     },
 }
 # WNBA uses the same generic basketball boxscore labels as NBA.
@@ -462,7 +490,13 @@ def get_stat_value(event: dict, entity_id: str, stat_key: tuple) -> tuple[Option
         # are real, separately-tracked prop markets here, so this pulls out
         # whichever half was asked for instead of only ever keeping the
         # first the way 3PT's made-attempted handling does.
+        # "RTG" (passer rating) disambiguates the passing group for NFL;
+        # confirmed live, college football's own passing group never carries
+        # RTG at all (only "QBR"), so this falls back to that instead of
+        # coming up empty for every college pick.
         raw, _, _ = get_stat_value(event, entity_id, ("C/ATT", "RTG"))
+        if raw is None:
+            raw, _, _ = get_stat_value(event, entity_id, ("C/ATT", "QBR"))
         if raw is None or "/" not in str(raw):
             return None, is_home, team
         made, _, attempted = str(raw).partition("/")
@@ -471,6 +505,32 @@ def get_stat_value(event: dict, entity_id: str, stat_key: tuple) -> tuple[Option
         except ValueError:
             return None, is_home, team
         return value, is_home, team
+
+    if stat_key == RUSH_REC_YARDS_KEY:
+        # Not handled via the generic _COMBO_STAT_COMPONENTS summing below -
+        # NFL's receiving group discriminates on "TGTS", but confirmed live,
+        # college football's receiving group has no TGTS column at all (only
+        # REC/YDS/AVG/TD/LONG), so it needs "REC" as the discriminator
+        # instead. Trying REC unconditionally as a second _summed_ component
+        # would double-count NFL, though - its own receiving group carries
+        # REC too (alongside TGTS), so both lookups would resolve to the
+        # SAME group and add its yards twice. Only fall back to REC when the
+        # TGTS-based lookup truly found nothing, never sum both.
+        rushing, _, _ = get_stat_value(event, entity_id, ("YDS", "CAR"))
+        receiving, _, _ = get_stat_value(event, entity_id, ("YDS", "TGTS"))
+        if receiving is None:
+            receiving, _, _ = get_stat_value(event, entity_id, ("YDS", "REC"))
+        total = 0
+        any_found = False
+        for raw in (rushing, receiving):
+            if raw is None:
+                continue
+            try:
+                total += int(raw)
+                any_found = True
+            except (TypeError, ValueError):
+                continue
+        return (total if any_found else None), is_home, team
 
     if stat_key in _COMBO_STAT_COMPONENTS:
         # PTS/REB/AST are always whole numbers - int, not float, so display

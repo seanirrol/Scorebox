@@ -95,6 +95,7 @@ SPORT_CHOICES = [
     app_commands.Choice(name="Tennis", value="tennis"),
     app_commands.Choice(name="Hockey", value="hockey"),
     app_commands.Choice(name="NFL (American Football)", value="nfl"),
+    app_commands.Choice(name="College Football", value="ncaaf"),
     app_commands.Choice(name="Baseball", value="baseball"),
     app_commands.Choice(name="Volleyball", value="volleyball"),
     app_commands.Choice(name="Rugby", value="rugby"),
@@ -2500,6 +2501,7 @@ _TRACKTODAY_SPORT_CHOICES = [
     app_commands.Choice(name="NBA", value="NBA"),
     app_commands.Choice(name="WNBA", value="WNBA"),
     app_commands.Choice(name="NFL", value="NFL"),
+    app_commands.Choice(name="College Football", value="College Football"),
     app_commands.Choice(name="NHL", value="NHL"),
     app_commands.Choice(name="Soccer", value="Soccer"),
     app_commands.Choice(name="Tennis", value="Tennis"),
@@ -2726,7 +2728,7 @@ async def playerprops(interaction: discord.Interaction, sport: app_commands.Choi
 
     if sport.value not in espn.SPORT_PATHS:
         await interaction.followup.send(
-            f"{sport.name} isn't supported for /playerprops yet - only Baseball, Basketball, Hockey, NFL, Tennis, and Soccer for now.",
+            f"{sport.name} isn't supported for /playerprops yet - only Baseball, Basketball, Hockey, NFL, College Football, Tennis, and Soccer for now.",
             ephemeral=True,
         )
         return
