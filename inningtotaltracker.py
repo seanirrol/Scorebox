@@ -199,9 +199,9 @@ async def build_embed(
     if result:
         embed.title = _RESULT_TITLES[result]
 
-    author_bits = [b for b in (scores365.sport_label(sport_id), game.get("competitionDisplayName")) if b]
-    if author_bits:
-        embed.set_author(name=" • ".join(author_bits))
+    author_name = scores365.author_line(sport_id, game)
+    if author_name:
+        embed.set_author(name=author_name)
 
     description_lines = [_pick_label(pick_type, line)]
     if status == "notstarted":

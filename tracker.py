@@ -171,9 +171,9 @@ async def build_embed(
     elif early_win:
         embed.title = _RESULT_TITLES["won"]
 
-    author_bits = [b for b in (scores365.sport_label(sport_id), game.get("competitionDisplayName")) if b]
-    if author_bits:
-        embed.set_author(name=" • ".join(author_bits))
+    author_name = scores365.author_line(sport_id, game)
+    if author_name:
+        embed.set_author(name=author_name)
 
     # The pick stays visible for the card's whole lifetime (auto-tracked
     # picks only - manual /track has no pick to label). Discord's own

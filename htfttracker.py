@@ -179,9 +179,9 @@ async def build_embed(
     if result:
         embed.title = _RESULT_TITLES[result]
 
-    author_bits = [b for b in (scores365.sport_label(sport_id), game.get("competitionDisplayName")) if b]
-    if author_bits:
-        embed.set_author(name=" • ".join(author_bits))
+    author_name = scores365.author_line(sport_id, game)
+    if author_name:
+        embed.set_author(name=author_name)
 
     market_label = _market_label(sport_id)
     pick_text = f"{ht_team}/{ft_team} {market_label}" if ht_team != ft_team else f"{ht_team} {market_label}"

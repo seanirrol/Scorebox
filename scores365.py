@@ -97,6 +97,20 @@ def sport_label(sport_id: Optional[int], competition_name: Optional[str] = None)
     return SPORT_ID_LABELS.get(sport_id)
 
 
+def author_line(sport_id: Optional[int], game: dict) -> Optional[str]:
+    """"<sport label> • <competition>" for a card's embed author, or just
+    one half if only one is available. Deduplicates identical halves -
+    confirmed live, an NFL card showed "NFL • NFL" since 365scores'
+    competitionDisplayName is literally "NFL" for an NFL game, the same
+    plain string sport_label already returns for that sport_id (unlike
+    basketball/baseball, whose sport_id spans multiple real leagues and so
+    always needs both halves to disambiguate, e.g. "WNBA" + a competition
+    name that's actually different text)."""
+    bits = [b for b in (sport_label(sport_id), game.get("competitionDisplayName")) if b]
+    bits = list(dict.fromkeys(bits))
+    return " • ".join(bits) if bits else None
+
+
 def tournament_name(game: dict) -> Optional[str]:
     """The specific tournament/competition/league a game belongs to (e.g.
     "MLB", "KBO", "Cincinnati" for a tennis event, "Premier League" for

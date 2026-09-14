@@ -273,9 +273,9 @@ async def build_embed(
         embed.title = _RESULT_TITLES[result]
     elif early_win:
         embed.title = _RESULT_TITLES["won"]
-    author_bits = [b for b in (scores365.sport_label(sport_id), game.get("competitionDisplayName")) if b]
-    if author_bits:
-        embed.set_author(name=" • ".join(author_bits))
+    author_name = scores365.author_line(sport_id, game)
+    if author_name:
+        embed.set_author(name=author_name)
     embed.description = description
     embed.set_image(url="attachment://score.png")
     embed.set_footer(text=_footer_text(message_id))
