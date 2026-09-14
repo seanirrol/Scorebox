@@ -1525,6 +1525,41 @@ class LowerHigherAndToWinWording(unittest.TestCase):
         result = picks.parse_pick_line("[MLB] Nate Lowery Over 1.5 Total Bases")
         self.assertEqual(result["player"], "Nate Lowery")
 
+
+class F5MoneylineMatchup(unittest.TestCase):
+    """A matchup-prefixed F5 moneyline pick (e.g. "Minnesota Twins vs New
+    York Yankees - New York Yankees F5") used to fall through to the
+    generic full-game moneyline parser instead - the bare-team-name F5
+    check (_parse_f5_pick) only ever ran inside the "no matchup" branch, so
+    the named team fuzzy-matched a real matchup side and silently tracked a
+    full 9-inning moneyline instead of an F5 (first 5 innings) one - a
+    materially different, wrong bet."""
+
+    def test_named_team_f5_with_matchup_is_scoped_to_f5_not_the_full_game(self):
+        result = picks.parse_pick_line("[MLB] Minnesota Twins vs New York Yankees - New York Yankees F5")
+        self.assertEqual(result, {"kind": "f5_moneyline", "sport": "baseball", "team": "New York Yankees"})
+
+    def test_trailing_ml_word_after_the_f5_marker_still_works(self):
+        result = picks.parse_pick_line("[MLB] Minnesota Twins vs New York Yankees - New York Yankees F5 ML")
+        self.assertEqual(result, {"kind": "f5_moneyline", "sport": "baseball", "team": "New York Yankees"})
+
+    def test_away_side_named_team_resolves_to_the_away_team(self):
+        result = picks.parse_pick_line("[MLB] Minnesota Twins vs New York Yankees - Minnesota Twins F5 Moneyline")
+        self.assertEqual(result, {"kind": "f5_moneyline", "sport": "baseball", "team": "Minnesota Twins"})
+
+    def test_named_team_not_matching_either_matchup_side_is_rejected(self):
+        result = picks.parse_pick_line("[MLB] Minnesota Twins vs New York Yankees - Boston Red Sox F5")
+        self.assertIsNone(result)
+
+    def test_bare_team_name_f5_moneyline_without_a_matchup_is_unaffected(self):
+        # The original, already-supported no-matchup form must still work -
+        # note it requires an explicit "ML"/"Moneyline" word (see
+        # _parse_f5_pick), unlike the matchup form above which doesn't need
+        # one since the named team is already validated against a real
+        # matchup side.
+        result = picks.parse_pick_line("[MLB] New York Yankees F5 ML")
+        self.assertEqual(result, {"kind": "f5_moneyline", "sport": "baseball", "team": "New York Yankees"})
+
     def test_plain_ml_wording_is_unaffected(self):
         result = picks.parse_pick_line("[Tennis] Marcos Giron ML")
         self.assertEqual(result, {"kind": "track", "sport": "tennis", "team": "Marcos Giron"})

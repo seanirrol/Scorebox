@@ -844,6 +844,25 @@ _F5_HANDICAP_RE = re.compile(
     re.IGNORECASE,
 )
 
+# "Minnesota Twins vs New York Yankees - New York Yankees F5" / "... F5 ML" -
+# the matchup-included counterpart to _parse_f5_pick's bare-team-name form
+# (see _F5_MARKER_RE) - an F5 moneyline settles after the 5th inning, not the
+# whole game, same distinction _F5_TOTAL_RE/_F5_HANDICAP_RE already draw for
+# the total/handicap flavors. Without this, a matchup-prefixed F5 moneyline
+# pick fell all the way through to the generic full-game "Team A vs Team B -
+# Team X ML"-style matchup parser (has_matchup gates the bare-team-name F5
+# check out entirely) - confirmed live, "New York Yankees F5" fuzzy-matched
+# against the real matchup side "New York Yankees" (a plain substring match),
+# silently tracking it as a full 9-inning moneyline instead of F5 - a
+# materially different, wrong bet. The named team is validated against a
+# matchup side the same way _TEAM_ML_MATCHUP_RE/_F5_HANDICAP_RE are.
+_F5_MONEYLINE_MATCHUP_RE = re.compile(
+    r"^(.+?)\s*(?:@|\bvs\.?\b|\bv\.?\b|\bat\b)\s*(.+?)\s+-\s+(.+?)\s+"
+    r"(?:f5|first\s+5\s+innings|first\s+five\s+innings|1st\s+5\s+innings)"
+    r"(?:\s+(?:ML|Moneyline))?\s*$",
+    re.IGNORECASE,
+)
+
 # "Houston Astros vs Chicago White Sox - Over 1.5 Home Runs" - the combined
 # home run total for the WHOLE match (both teams), not a single player's
 # own count (see espn.get_match_home_runs/matchhrtracker.py) - a distinct
@@ -2124,6 +2143,23 @@ def _parse_f5_handicap_pick(description: str, sport: str) -> Optional[dict]:
     }
 
 
+def _parse_f5_moneyline_matchup_pick(description: str, sport: str) -> Optional[dict]:
+    text = _clean_line(description)
+    m = _F5_MONEYLINE_MATCHUP_RE.match(text)
+    if not m:
+        return None
+    team_a, team_b, named_team = m.group(1).strip(), m.group(2).strip(), m.group(3).strip()
+    if not team_a or not team_b or not named_team:
+        return None
+    if scores365.names_match(named_team, team_a):
+        team = team_a
+    elif scores365.names_match(named_team, team_b):
+        team = team_b
+    else:
+        return None  # doesn't look like either matchup side - don't guess
+    return {"kind": "f5_moneyline", "sport": sport, "team": team}
+
+
 def _parse_match_home_runs_pick(description: str) -> Optional[dict]:
     text = _clean_line(description)
     m = _MATCH_HOME_RUNS_RE.match(text)
@@ -2730,6 +2766,10 @@ def _parse_description(sport: str, sport_key: str, description: str, is_prop_cat
         f5_handicap = _parse_f5_handicap_pick(description, sport)
         if f5_handicap:
             return f5_handicap
+
+        f5_ml_matchup = _parse_f5_moneyline_matchup_pick(description, sport)
+        if f5_ml_matchup:
+            return f5_ml_matchup
 
         match_home_runs = _parse_match_home_runs_pick(description)
         if match_home_runs:
