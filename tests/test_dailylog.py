@@ -30,6 +30,7 @@ class DailyLogTestCase(unittest.TestCase):
     def setUp(self):
         self._real_path = state.DAILY_LOG_FILE
         self._real_overrides_path = state.WINLOSSGRAPH_OVERRIDES_FILE
+        self._real_reconcile_path = state.SPORT_MONTH_RECONCILE_FILE
         fd, self._tmp_path = tempfile.mkstemp(suffix=".json")
         os.close(fd)
         os.remove(self._tmp_path)  # _load() treats a missing file as {}
@@ -38,11 +39,16 @@ class DailyLogTestCase(unittest.TestCase):
         os.close(fd2)
         os.remove(self._tmp_overrides_path)
         state.WINLOSSGRAPH_OVERRIDES_FILE = self._tmp_overrides_path
+        fd3, self._tmp_reconcile_path = tempfile.mkstemp(suffix=".json")
+        os.close(fd3)
+        os.remove(self._tmp_reconcile_path)
+        state.SPORT_MONTH_RECONCILE_FILE = self._tmp_reconcile_path
 
     def tearDown(self):
         state.DAILY_LOG_FILE = self._real_path
         state.WINLOSSGRAPH_OVERRIDES_FILE = self._real_overrides_path
-        for path in (self._tmp_path, self._tmp_overrides_path):
+        state.SPORT_MONTH_RECONCILE_FILE = self._real_reconcile_path
+        for path in (self._tmp_path, self._tmp_overrides_path, self._tmp_reconcile_path):
             if os.path.exists(path):
                 os.remove(path)
 
@@ -437,6 +443,63 @@ class SportTournamentWinLoss(DailyLogTestCase):
         self._log(other_server_channel, "ufctracker", "k1", "Jon Jones ML", "UFC", "UFC 330", "won", date_str="2026-08-01")
         result = dailylog.sport_tournament_win_loss(score_channel_ids=(other_server_channel,))
         self.assertEqual(result["UFC"], {"UFC 330": (1, 0)})
+
+
+class SportMonthReconcile(DailyLogTestCase):
+    """set_sport_month_reconcile (backing /reconcile) adds a real,
+    hand-verified won/lost count for picks the bot never tracked at all
+    (unsupported market) on top of whatever it DID track that sport/month -
+    under its own "Untracked" bucket, never replacing or double-counting
+    real tracked picks."""
+
+    IN_CHANNEL = dailylog.PERFORMANCE_CHANNEL_IDS[0]
+
+    def _log(self, channel_id, module, key, label, sport, tournament, status, date_str="2026-09-05"):
+        dailylog.record_pick(
+            channel_id, module, key, "Section", label, message_id=1, origin_channel_id=1,
+            sport=sport, tournament=tournament,
+        )
+        entry_key = f"{channel_id}:{module}:{key}"
+        data = state.load_daily_log()
+        data[entry_key]["date"] = date_str
+        data[entry_key]["status"] = status
+        state.save_daily_log(data)
+
+    def test_reconcile_adds_an_untracked_bucket_on_top_of_real_tracked_picks(self):
+        self._log(self.IN_CHANNEL, "tracker", "k1", "Denver Broncos ML", "NFL", "NFL", "won", date_str="2026-09-05")
+        dailylog.set_sport_month_reconcile("NFL", "2026-09", won=15, lost=4)
+        result = dailylog.sport_tournament_win_loss("2026-09")["NFL"]
+        self.assertEqual(result["NFL"], (1, 0))
+        self.assertEqual(result["Untracked"], (15, 4))
+
+    def test_reconcile_shows_with_no_real_tracked_picks_at_all(self):
+        dailylog.set_sport_month_reconcile("Soccer", "2026-09", won=8, lost=2)
+        self.assertEqual(dailylog.sport_tournament_win_loss("2026-09")["Soccer"], {"Untracked": (8, 2)})
+
+    def test_reconcile_shows_in_the_all_time_view_too(self):
+        dailylog.set_sport_month_reconcile("MMA", "2026-09", won=6, lost=1)
+        result = dailylog.sport_tournament_win_loss()["MMA"]
+        self.assertEqual(result["Untracked"], (6, 1))
+
+    def test_reconcile_doesnt_leak_into_a_different_months_filtered_view(self):
+        dailylog.set_sport_month_reconcile("MLB", "2026-09", won=5, lost=1)
+        self.assertNotIn("MLB", dailylog.sport_tournament_win_loss("2026-08"))
+
+    def test_calling_set_again_replaces_rather_than_adds(self):
+        dailylog.set_sport_month_reconcile("MLB", "2026-09", won=5, lost=1)
+        dailylog.set_sport_month_reconcile("MLB", "2026-09", won=7, lost=2)
+        self.assertEqual(dailylog.sport_tournament_win_loss("2026-09")["MLB"], {"Untracked": (7, 2)})
+
+    def test_clear_removes_it(self):
+        dailylog.set_sport_month_reconcile("MLB", "2026-09", won=5, lost=1)
+        dailylog.clear_sport_month_reconcile("MLB", "2026-09")
+        self.assertNotIn("MLB", dailylog.sport_tournament_win_loss("2026-09"))
+
+    def test_reconcile_doesnt_apply_outside_the_default_channel_scope(self):
+        other_server_channel = 555555
+        dailylog.set_sport_month_reconcile("NFL", "2026-09", won=15, lost=4)
+        result = dailylog.sport_tournament_win_loss("2026-09", score_channel_ids=(other_server_channel,))
+        self.assertNotIn("NFL", result)
 
 
 class WinLossGraphOverrides(DailyLogTestCase):

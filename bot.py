@@ -4257,6 +4257,59 @@ async def performance_command(interaction: discord.Interaction):
     await interaction.followup.send("Pick a period to preview:", view=view, ephemeral=True)
 
 
+_MONTH_RE = re.compile(r"^\d{4}-\d{2}$")
+
+
+@tree.command(
+    name="reconcile",
+    description="Add real won/lost counts for picks /performance couldn't track (unsupported market) to one sport/month",
+)
+@app_commands.describe(
+    sport="Sport name exactly as it appears on the /performance chart (e.g. MLB, NFL, Soccer, MMA)",
+    won="Real, already-verified wins from picks the bot never tracked",
+    lost="Real, already-verified losses from picks the bot never tracked",
+    month="Month as YYYY-MM (defaults to the current month)",
+)
+async def reconcile_command(interaction: discord.Interaction, sport: str, won: int, lost: int, month: Optional[str] = None):
+    if not _summary_allowed(interaction):
+        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+        return
+    month = month or dailylog.today_str()[:7]
+    if not _MONTH_RE.match(month):
+        await interaction.response.send_message("Month must be in YYYY-MM format, e.g. 2026-09.", ephemeral=True)
+        return
+    if won < 0 or lost < 0:
+        await interaction.response.send_message("Won/lost must be zero or positive.", ephemeral=True)
+        return
+    dailylog.set_sport_month_reconcile(sport, month, won, lost)
+    _log_command(interaction, sport=sport, month=month, won=won, lost=lost)
+    botlog.event(f"🧮 /reconcile: {sport} {month} untracked record set to {won}-{lost} — by **{interaction.user}**")
+    await interaction.response.send_message(
+        f"Added {won}-{lost} as {sport}'s untracked record for {month}. This adds on top of the bot's own tracked "
+        "picks for that sport/month, and shows as its own \"Untracked\" line next time /performance is run.",
+        ephemeral=True,
+    )
+
+
+@tree.command(name="reconcile-clear", description="Remove a sport/month's untracked won/lost record added via /reconcile")
+@app_commands.describe(
+    sport="Sport name exactly as passed to /reconcile",
+    month="Month as YYYY-MM (defaults to the current month)",
+)
+async def reconcile_clear_command(interaction: discord.Interaction, sport: str, month: Optional[str] = None):
+    if not _summary_allowed(interaction):
+        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+        return
+    month = month or dailylog.today_str()[:7]
+    if not _MONTH_RE.match(month):
+        await interaction.response.send_message("Month must be in YYYY-MM format, e.g. 2026-09.", ephemeral=True)
+        return
+    dailylog.clear_sport_month_reconcile(sport, month)
+    _log_command(interaction, sport=sport, month=month)
+    botlog.event(f"🧮 /reconcile-clear: {sport} {month} untracked record cleared — by **{interaction.user}**")
+    await interaction.response.send_message(f"Cleared {sport}'s untracked record for {month} (if one was set).", ephemeral=True)
+
+
 def main():
     if not config.DISCORD_TOKEN:
         raise SystemExit("DISCORD_TOKEN is not set. Copy .env.example to .env and fill it in.")

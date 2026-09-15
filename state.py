@@ -43,6 +43,7 @@ DOUBLE_CHANCE_FILE = os.path.join(_DIR, "double_chance_state.json")
 MERGE_FILE = os.path.join(_DIR, "merge_state.json")
 TABLE_TENNIS_FILE = os.path.join(_DIR, "table_tennis_state.json")
 SNOOKER_FILE = os.path.join(_DIR, "snooker_state.json")
+SPORT_MONTH_RECONCILE_FILE = os.path.join(_DIR, "sport_month_reconcile_state.json")
 
 
 def _load(path: str) -> dict[str, Any]:
@@ -282,3 +283,11 @@ def load_winlossgraph_overrides() -> dict[str, Any]:
 
 def save_winlossgraph_overrides(data: dict[str, Any]):
     _save(WINLOSSGRAPH_OVERRIDES_FILE, data)
+
+
+def load_sport_month_reconcile() -> dict[str, Any]:
+    return _load(SPORT_MONTH_RECONCILE_FILE)
+
+
+def save_sport_month_reconcile(data: dict[str, Any]):
+    _save(SPORT_MONTH_RECONCILE_FILE, data)

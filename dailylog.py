@@ -377,6 +377,33 @@ _SPORT_BASELINE_OVERRIDE = {
 }
 
 
+def _sport_month_reconcile_key(sport: str, month: str) -> str:
+    return f"{sport}:{month}"
+
+
+def set_sport_month_reconcile(sport: str, month: str, won: int, lost: int):
+    """Adds a real, hand-verified won/lost count for one sport/month to
+    /performance's own tally - meant for picks the bot never tracked at
+    all because the source it reads from doesn't cover that market
+    (distinct from _SPORT_BASELINE_OVERRIDE's "replace everything before a
+    cutoff date" shape: this ADDS on top of whatever the bot already
+    tracked for that sport/month, under its own "Untracked" bucket, so it
+    never double-counts or hides real tracked picks). `won`/`lost` must
+    already be actual verified results, not a target percentage - see
+    /reconcile's own command description. Calling this again for the same
+    (sport, month) replaces the previous count rather than adding to it,
+    so correcting a typo doesn't require clearing first."""
+    data = state.load_sport_month_reconcile()
+    data[_sport_month_reconcile_key(sport, month)] = {"won": won, "lost": lost}
+    state.save_sport_month_reconcile(data)
+
+
+def clear_sport_month_reconcile(sport: str, month: str):
+    data = state.load_sport_month_reconcile()
+    data.pop(_sport_month_reconcile_key(sport, month), None)
+    state.save_sport_month_reconcile(data)
+
+
 def sport_tournament_win_loss(
     year_month: Optional[str] = None, score_channel_ids: Iterable[int] = PERFORMANCE_CHANNEL_IDS,
 ) -> dict[str, dict[str, tuple[int, int]]]:
@@ -392,7 +419,7 @@ def sport_tournament_win_loss(
     scores365.tournament_name).
 
     _SPORT_DISPLAY_MERGE/_NBA_CLEAN_SLATE_FROM/_SPORT_BASELINE_OVERRIDE/
-    _SINGLE_BUCKET_SPORTS only
+    _SINGLE_BUCKET_SPORTS/set_sport_month_reconcile only
     apply for the default PERFORMANCE_CHANNEL_IDS scope - those were
     requested for that specific dataset (confirmed live against it), not a
     blanket rule every other /performance route should inherit sight
@@ -444,6 +471,19 @@ def sport_tournament_win_loss(
             counts.setdefault(sport, {}).setdefault(sport, [0, 0])
             counts[sport][sport][0] += won
             counts[sport][sport][1] += lost
+
+        # Same "shows for all-time and the exact month it was set for"
+        # rule as _SPORT_BASELINE_OVERRIDE above - added under its own
+        # "Untracked" bucket per sport rather than folded into a real
+        # tournament's count, so it stays visibly distinct from picks the
+        # bot actually graded itself (see set_sport_month_reconcile).
+        for key, extra in state.load_sport_month_reconcile().items():
+            r_sport, r_month = key.rsplit(":", 1)
+            if year_month and year_month != r_month:
+                continue
+            bucket = counts.setdefault(r_sport, {}).setdefault("Untracked", [0, 0])
+            bucket[0] += extra["won"]
+            bucket[1] += extra["lost"]
 
     return {sport: {t: (w, l) for t, (w, l) in tournaments.items()} for sport, tournaments in counts.items()}
 
