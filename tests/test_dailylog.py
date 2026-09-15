@@ -449,8 +449,10 @@ class SportMonthReconcile(DailyLogTestCase):
     """set_sport_month_reconcile (backing /reconcile) adds a real,
     hand-verified won/lost count for picks the bot never tracked at all
     (unsupported market) on top of whatever it DID track that sport/month -
-    under its own "Untracked" bucket, never replacing or double-counting
-    real tracked picks."""
+    folded into the sport's own same-named bucket (same shape as
+    _SPORT_BASELINE_OVERRIDE), so it combines into that one sport-level bar
+    rather than showing as a separate line, never replacing or
+    double-counting real tracked picks."""
 
     IN_CHANNEL = dailylog.PERFORMANCE_CHANNEL_IDS[0]
 
@@ -465,21 +467,23 @@ class SportMonthReconcile(DailyLogTestCase):
         data[entry_key]["status"] = status
         state.save_daily_log(data)
 
-    def test_reconcile_adds_an_untracked_bucket_on_top_of_real_tracked_picks(self):
+    def test_reconcile_combines_into_the_same_sport_bucket_as_real_tracked_picks(self):
         self._log(self.IN_CHANNEL, "tracker", "k1", "Denver Broncos ML", "NFL", "NFL", "won", date_str="2026-09-05")
         dailylog.set_sport_month_reconcile("NFL", "2026-09", won=15, lost=4)
         result = dailylog.sport_tournament_win_loss("2026-09")["NFL"]
-        self.assertEqual(result["NFL"], (1, 0))
-        self.assertEqual(result["Untracked"], (15, 4))
+        self.assertEqual(result, {"NFL": (16, 4)})
 
     def test_reconcile_shows_with_no_real_tracked_picks_at_all(self):
         dailylog.set_sport_month_reconcile("Soccer", "2026-09", won=8, lost=2)
-        self.assertEqual(dailylog.sport_tournament_win_loss("2026-09")["Soccer"], {"Untracked": (8, 2)})
+        self.assertEqual(dailylog.sport_tournament_win_loss("2026-09")["Soccer"], {"Soccer": (8, 2)})
 
     def test_reconcile_shows_in_the_all_time_view_too(self):
+        # MMA's all-time view already carries the standing 34-13
+        # _SPORT_BASELINE_OVERRIDE - this adds on top of THAT too, same
+        # same-named-bucket shape, so both combine into one number.
         dailylog.set_sport_month_reconcile("MMA", "2026-09", won=6, lost=1)
         result = dailylog.sport_tournament_win_loss()["MMA"]
-        self.assertEqual(result["Untracked"], (6, 1))
+        self.assertEqual(result, {"MMA": (40, 14)})
 
     def test_reconcile_doesnt_leak_into_a_different_months_filtered_view(self):
         dailylog.set_sport_month_reconcile("MLB", "2026-09", won=5, lost=1)
@@ -488,7 +492,7 @@ class SportMonthReconcile(DailyLogTestCase):
     def test_calling_set_again_replaces_rather_than_adds(self):
         dailylog.set_sport_month_reconcile("MLB", "2026-09", won=5, lost=1)
         dailylog.set_sport_month_reconcile("MLB", "2026-09", won=7, lost=2)
-        self.assertEqual(dailylog.sport_tournament_win_loss("2026-09")["MLB"], {"Untracked": (7, 2)})
+        self.assertEqual(dailylog.sport_tournament_win_loss("2026-09")["MLB"], {"MLB": (7, 2)})
 
     def test_clear_removes_it(self):
         dailylog.set_sport_month_reconcile("MLB", "2026-09", won=5, lost=1)

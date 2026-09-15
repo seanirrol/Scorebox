@@ -387,8 +387,10 @@ def set_sport_month_reconcile(sport: str, month: str, won: int, lost: int):
     all because the source it reads from doesn't cover that market
     (distinct from _SPORT_BASELINE_OVERRIDE's "replace everything before a
     cutoff date" shape: this ADDS on top of whatever the bot already
-    tracked for that sport/month, under its own "Untracked" bucket, so it
-    never double-counts or hides real tracked picks). `won`/`lost` must
+    tracked for that sport/month, folded into that sport's own same-named
+    bucket - same shape _SPORT_BASELINE_OVERRIDE already uses - so it
+    combines into that one sport-level bar rather than a separate line, and
+    never double-counts or replaces real tracked picks). `won`/`lost` must
     already be actual verified results, not a target percentage - see
     /reconcile's own command description. Calling this again for the same
     (sport, month) replaces the previous count rather than adding to it,
@@ -472,16 +474,22 @@ def sport_tournament_win_loss(
             counts[sport][sport][0] += won
             counts[sport][sport][1] += lost
 
-        # Same "shows for all-time and the exact month it was set for"
-        # rule as _SPORT_BASELINE_OVERRIDE above - added under its own
-        # "Untracked" bucket per sport rather than folded into a real
-        # tournament's count, so it stays visibly distinct from picks the
-        # bot actually graded itself (see set_sport_month_reconcile).
+        # Same "shows for all-time and the exact month it was set for" rule,
+        # and same same-named-bucket shape, as _SPORT_BASELINE_OVERRIDE
+        # above - folds into the sport's own bucket (hidden from its own
+        # sub-row by _visible_tournaments, same as a real MLB/NFL/etc. pick
+        # with no distinct tournament) rather than a separately-labeled
+        # "Untracked" row, so it combines into that one sport-level bar
+        # instead of showing as its own line in the chart (per explicit
+        # request - the addition itself still lives in
+        # sport_month_reconcile_state.json and is logged to botlog when
+        # /reconcile is run, so it stays auditable even though it doesn't
+        # get its own chart row).
         for key, extra in state.load_sport_month_reconcile().items():
             r_sport, r_month = key.rsplit(":", 1)
             if year_month and year_month != r_month:
                 continue
-            bucket = counts.setdefault(r_sport, {}).setdefault("Untracked", [0, 0])
+            bucket = counts.setdefault(r_sport, {}).setdefault(r_sport, [0, 0])
             bucket[0] += extra["won"]
             bucket[1] += extra["lost"]
 
