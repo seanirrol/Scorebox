@@ -774,6 +774,54 @@ class FetchGamesForSportRetriesFailedPages(unittest.TestCase):
             scores365._fetch_games_for_sport(8)
 
 
+class FetchGamesForSportBustsCacheOnEmptyResponse(unittest.TestCase):
+    """The base /games/current/ call is a fixed URL+params, always
+    identical for a given sport - a perfect, deterministic key for a CDN
+    (365scores sits behind CloudFront) to cache. Confirmed live: a single
+    brief upstream hiccup got an empty-but-200-OK response cached at the
+    CDN edge for its full 3-hour max-age, so simply retrying the exact
+    same request (the pre-existing behavior) kept re-hitting that same
+    poisoned cache entry every time - never actually recovering. The
+    retries now add a varying "_cb" param specifically to change the CDN
+    cache key and force a fresh origin fetch, verified live to
+    immediately return the real data. Monkeypatches scores365._get, same
+    pattern as FetchGamesForSportRetriesFailedPages."""
+
+    def setUp(self):
+        self._orig_get = scores365._get
+        self._orig_cache = scores365._games_cache
+        scores365._games_cache = {}
+        self._calls: list = []
+
+    def tearDown(self):
+        scores365._get = self._orig_get
+        scores365._games_cache = self._orig_cache
+
+    def _install(self, responses):
+        queue = list(responses)
+
+        def fake_get(url, **params):
+            self._calls.append(params)
+            return queue.pop(0)
+
+        scores365._get = fake_get
+
+    def test_retry_after_an_empty_no_paging_response_includes_a_cache_bust_param(self):
+        self._install([
+            {"lastUpdateId": 1, "summary": {}},  # empty, no "games"/"paging" at all - the poisoned-cache shape
+            {"games": [{"id": 1}], "paging": {}},
+        ])
+        games = scores365._fetch_games_for_sport(8)
+        self.assertEqual([g["id"] for g in games], [1])
+        self.assertNotIn("_cb", self._calls[0])  # the normal first call is left alone
+        self.assertIn("_cb", self._calls[1])  # only the retry busts the cache
+
+    def test_still_empty_after_every_retry_returns_an_empty_list_rather_than_raising(self):
+        self._install([{"summary": {}}] * 3)  # base call + PAGE_FETCH_RETRIES retries, all empty
+        games = scores365._fetch_games_for_sport(8)
+        self.assertEqual(games, [])
+
+
 class FindMatchForTeam(unittest.TestCase):
     """find_match_for_team backs every auto-tracked pick's match lookup -
     monkeypatches _fetch_games_for_sport so this exercises the real

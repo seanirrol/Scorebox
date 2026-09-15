@@ -228,9 +228,23 @@ def _fetch_games_for_sport(sport_id: int) -> list[dict]:
     # PAGE_FETCH_RETRIES already gives an outright exception. Confirmed
     # live: this exact gap auto-voided a real in-progress volleyball pick,
     # after all 6 poll cycles in a row hit this empty response.
+    #
+    # The retries add a throwaway "_cb" (cache-bust) param the base call
+    # above never sends - confirmed live, the actual root cause of the
+    # empty response is 365scores' own CDN (CloudFront) serving a STALE
+    # cached copy of this exact URL+params from one brief upstream hiccup,
+    # with a 3-hour max-age - retrying the identical URL just re-hits that
+    # same poisoned cache entry every time, never actually recovering
+    # until the cache naturally expires. A varying param changes the CDN's
+    # cache key, forcing a fresh origin fetch instead (verified live: the
+    # exact same request returns the full, correct games list the instant
+    # this param is added).
     if not data.get("games") and not data.get("paging"):
         for _ in range(PAGE_FETCH_RETRIES):
-            data = _get_retrying(f"{BASE_URL}/games/current/", langId=1, timezoneName="UTC", userCountryId=1, sports=sport_id)
+            data = _get_retrying(
+                f"{BASE_URL}/games/current/", langId=1, timezoneName="UTC", userCountryId=1, sports=sport_id,
+                _cb=int(time.time() * 1000),
+            )
             if data and (data.get("games") or data.get("paging")):
                 break
 
