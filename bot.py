@@ -4262,7 +4262,7 @@ _MONTH_RE = re.compile(r"^\d{4}-\d{2}$")
 
 @tree.command(
     name="reconcile",
-    description="Add real won/lost counts for picks /performance couldn't track (unsupported market) to one sport/month",
+    description="Add real won/lost counts for picks /performance missed (unsupported market) to one sport/month",
 )
 @app_commands.describe(
     sport="Sport name exactly as it appears on the /performance chart (e.g. MLB, NFL, Soccer, MMA)",
