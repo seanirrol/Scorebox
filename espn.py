@@ -303,13 +303,31 @@ def find_current_event_id(
         datetime.datetime.combine(today, datetime.time(12, 0), tzinfo=scores365.EASTERN).timestamp()
         if reference_date else time.time()
     )
-    start = (today - datetime.timedelta(days=days_back)).strftime("%Y%m%d")
-    end = (today + datetime.timedelta(days=days_ahead)).strftime("%Y%m%d")
-    data = _get(f"{SITE_BASE}/{sport_slug}/{league_slug}/scoreboard", dates=f"{start}-{end}")
+    start_date = today - datetime.timedelta(days=days_back)
+    end_date = today + datetime.timedelta(days=days_ahead)
+
+    # One request per date rather than a single "dates=START-END" (or
+    # comma-joined multi-date) call - confirmed live, this "site" scoreboard
+    # endpoint now rejects BOTH of those with a 400 ("Failed to get events
+    # endpoint") for every mainstream league (MLB/NFL/NBA/NHL/college
+    # football all reproduced), even for a trivial same-day "range" like
+    # "20260916-20260916" - only a single bare date is accepted anymore.
+    # This silently broke every non-manual auto-track lookup here (the
+    # default days_ahead=1/days_back=0 window is never a single day), not
+    # just a rare edge case - confirmed a real MLB NRFI pick failed outright
+    # with that 400 surfacing all the way up as an "unexpected error".
+    # ESPN's MMA scoreboard (espn_ufc.py) still accepts the range syntax
+    # fine - this is scoped to just this "site" endpoint's own regression.
+    events = []
+    d = start_date
+    while d <= end_date:
+        data = _get(f"{SITE_BASE}/{sport_slug}/{league_slug}/scoreboard", dates=d.strftime("%Y%m%d"))
+        events.extend(data.get("events", []))
+        d += datetime.timedelta(days=1)
 
     best = None
     best_key = None
-    for event in data.get("events", []):
+    for event in events:
         competitors = event.get("competitions", [{}])[0].get("competitors", [])
         if not any(c.get("team", {}).get("id") == team_id for c in competitors):
             continue
@@ -321,10 +339,10 @@ def find_current_event_id(
             continue
         event_date = event_dt.astimezone(scores365.EASTERN).date()
         if state == "post":
-            if not allow_finished or event_date < today - datetime.timedelta(days=days_back) or event_date > today:
+            if not allow_finished or event_date < start_date or event_date > today:
                 continue
         elif state == "pre":
-            if event_date < today or event_date > today + datetime.timedelta(days=days_ahead):
+            if event_date < today or event_date > end_date:
                 continue
         rank = _STATUS_RANK.get(state, 3)
         # Within the same rank tier, a team can have more than one candidate

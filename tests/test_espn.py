@@ -265,7 +265,13 @@ class FindCurrentEventId(unittest.TestCase):
     def setUp(self):
         self._orig_get = espn._get
         self._events: list = []
-        espn._get = lambda url, **params: {"events": self._events}
+        self._calls: list = []
+
+        def fake_get(url, **params):
+            self._calls.append(params)
+            return {"events": self._events}
+
+        espn._get = fake_get
 
     def tearDown(self):
         espn._get = self._orig_get
@@ -306,6 +312,26 @@ class FindCurrentEventId(unittest.TestCase):
             "baseball", "10", days_ahead=0, days_back=3, allow_finished=True,
         )
         self.assertEqual(event_id, "100")
+
+    def test_queries_one_date_per_call_not_a_range_or_comma_list(self):
+        # Confirmed live: ESPN's "site" scoreboard endpoint now rejects
+        # BOTH a "dates=START-END" range and a comma-joined multi-date list
+        # with a 400 ("Failed to get events endpoint") for every mainstream
+        # league - only a single bare "dates=YYYYMMDD" per call still
+        # works. A days_ahead=1/days_back=0 window (the real default) spans
+        # 2 distinct dates, so this must fire exactly 2 calls, each with
+        # its own single date - not 1 call with a combined "dates" value.
+        today = datetime.datetime.now(tz=espn.scores365.EASTERN).date()
+        espn.find_current_event_id("baseball", "10", days_ahead=1, days_back=0)
+        self.assertEqual(len(self._calls), 2)
+        dates_requested = [c["dates"] for c in self._calls]
+        for value in dates_requested:
+            self.assertNotIn("-", value)
+            self.assertNotIn(",", value)
+        self.assertEqual(
+            sorted(dates_requested),
+            sorted([today.strftime("%Y%m%d"), (today + datetime.timedelta(days=1)).strftime("%Y%m%d")]),
+        )
 
 
 if __name__ == "__main__":
