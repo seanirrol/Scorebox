@@ -35,6 +35,15 @@ _SPORT_MAP = {
     "wnba": "basketball",
     "fiba": "basketball",
     "fiba women": "basketball",
+    # A bracket tag isn't always a league abbreviation - confirmed live, a
+    # real "[Basketball] CSB Blazers vs LPU Pirates - ..." pick (Philippine
+    # college ball, no NBA/WNBA/FIBA tag fits) silently failed to parse at
+    # all, since only the abbreviated forms above were recognized here -
+    # the spelled-out name was already accepted for a bare (non-bracketed)
+    # section header via _HEADER_SPORT_MAP below, just never for this,
+    # despite that map's own stale comment claiming bracket tags "always"
+    # use the abbreviation.
+    "basketball": "basketball",
     "nfl": "nfl",
     "ncaaf": "ncaaf",
     "cfb": "ncaaf",
@@ -65,15 +74,17 @@ _SPORT_MAP = {
     "snooker": "snooker",
 }
 
-# Bare section headers can use the sport's full name ("Basketball") instead
-# of the league abbreviation bracket tags always use ("NBA") - confirmed live
-# a "Basketball" header was silently dropped because only "nba" was
-# recognized. "Football" is deliberately left out: ambiguous between NFL and
-# soccer depending on the source, so it's safer to skip than guess.
+# Bare section headers can use the sport's full name ("Basketball", "Baseball",
+# "Hockey") instead of a league abbreviation - confirmed live a "Basketball"
+# header was silently dropped because only "nba" was recognized. "basketball"
+# is now also accepted as a bracket tag directly in _SPORT_MAP above (see its
+# own comment) - "baseball"/"hockey" are left header-only below since no live
+# case has confirmed a bracket-tagged pick needs them too yet. "Football" is
+# deliberately left out of both maps: ambiguous between NFL and soccer
+# depending on the source, so it's safer to skip than guess.
 _HEADER_SPORT_MAP = {
     **_SPORT_MAP,
     "baseball": "baseball",
-    "basketball": "basketball",
     "hockey": "hockey",
 }
 

@@ -1850,5 +1850,24 @@ class TennisExactSets(unittest.TestCase):
         self.assertEqual(result["kind"], "tennis_match_total_games")
 
 
+class SpelledOutBasketballBracketTag(unittest.TestCase):
+    """"[Basketball]" (the spelled-out name) used to only be recognized as a
+    bare, non-bracketed section header (_HEADER_SPORT_MAP) - a bracket tag
+    only ever matched an abbreviation (nba/wnba/fiba/fiba women), so a real
+    "[Basketball] CSB Blazers vs LPU Pirates - ..." pick (Philippine college
+    basketball, no NBA/WNBA/FIBA tag fits) silently failed to parse at all."""
+
+    def test_spelled_out_bracket_tag_resolves_to_basketball(self):
+        result = picks.parse_pick_line("[Basketball] CSB Blazers vs LPU Pirates - CSB Blazers -4.5 Handicap")
+        self.assertEqual(
+            result, {"kind": "team_total", "sport": "basketball", "team": "CSB Blazers", "direction": "spread", "line": -4.5},
+        )
+
+    def test_still_works_as_a_bare_section_header_too(self):
+        msg = "Basketball\n- CSB Blazers ML"
+        results = picks.parse_picks_message(msg)
+        self.assertEqual(results, [{"kind": "track", "sport": "basketball", "team": "CSB Blazers", "section": "Basketball", "raw": "CSB Blazers ML"}])
+
+
 if __name__ == "__main__":
     unittest.main()
