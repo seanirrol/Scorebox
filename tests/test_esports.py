@@ -190,5 +190,117 @@ class GradeMapTotalKills(unittest.TestCase):
         self.assertIsNone(esports.grade_map_total_kills(series, 1, "over", 50.5))
 
 
+def _gosu_detail(
+    team1_name="Team A", team2_name="Team B", team1_score=0, team2_score=0,
+    games_per_match=3, starting_at_ms=None, tournament="Some Cup",
+):
+    """Mirrors the real shape captured live from a GosuGamers match-page's
+    own embedded flight data (see _series_from_gosu_detail's own callers) -
+    just the fields that function actually reads."""
+    return {
+        "opponents": [
+            {"registrationId": 1, "name": team1_name, "score": team1_score, "opponentImage": "https://img/a"},
+            {"registrationId": 2, "name": team2_name, "score": team2_score, "opponentImage": "https://img/b"},
+        ],
+        "team1RegistrationId": 1, "team2RegistrationId": 2,
+        "gamesPerMatch": games_per_match,
+        "startingAt": starting_at_ms,
+        "parentTournamentName": tournament,
+    }
+
+
+class GosuMatchUrlRegex(unittest.TestCase):
+    """_GOSU_MATCH_URL_RE only needs the two numeric ids - confirmed live
+    the human-readable slug text after each is purely cosmetic (GosuGamers
+    redirects a wrong-slug-but-correct-id URL to the real canonical page,
+    see _curl_text's own -L comment)."""
+
+    def test_extracts_slug_and_both_ids_from_a_real_looking_url(self):
+        m = esports._GOSU_MATCH_URL_RE.search(
+            "https://www.gosugamers.net/dota2/tournaments/63119-pgl-wallachia-season-9/matches/659411-lgd-gaming-vs-yakult-brothers"
+        )
+        self.assertEqual(m.groups(), ("dota2", "63119", "659411"))
+
+    def test_still_matches_with_placeholder_slug_text(self):
+        m = esports._GOSU_MATCH_URL_RE.search("https://www.gosugamers.net/cs2/tournaments/1-x/matches/2-x")
+        self.assertEqual(m.groups(), ("cs2", "1", "2"))
+
+    def test_does_not_match_a_bare_matches_list_url(self):
+        self.assertIsNone(esports._GOSU_MATCH_URL_RE.search("https://www.gosugamers.net/dota2/matches"))
+
+    def test_does_not_match_an_unrelated_url(self):
+        self.assertIsNone(esports._GOSU_MATCH_URL_RE.search("https://www.espn.com/nba/game/_/id/1"))
+
+
+class GetSeriesByUrl(unittest.TestCase):
+    """get_series_by_url is /tracktoday's escape hatch for a real match not
+    yet on esports.get_series' own list-search (see that function's own
+    docstring - confirmed live for PGL Wallachia Season 9's later Round 1
+    matches). Monkeypatches _gosu_match_detail so this exercises the URL-
+    parsing/sport-validation/orientation logic without a live request."""
+
+    def setUp(self):
+        self._orig = esports._gosu_match_detail
+        self._detail = None
+
+    def tearDown(self):
+        esports._gosu_match_detail = self._orig
+
+    def _stub(self, detail):
+        self._detail = detail
+        esports._gosu_match_detail = lambda game_slug, match: self._detail
+
+    def test_resolves_a_real_looking_dota2_url(self):
+        self._stub(_gosu_detail(team1_name="LGD Gaming", team2_name="Yakult Brothers"))
+        result = esports.get_series_by_url(
+            "dota2",
+            "https://www.gosugamers.net/dota2/tournaments/63119-x/matches/659411-x",
+            "LGD Gaming", "Yakult Brothers",
+        )
+        self.assertEqual(result["home_team"], "LGD Gaming")
+        self.assertEqual(result["away_team"], "Yakult Brothers")
+        self.assertEqual(result["tournament"], "Some Cup")
+
+    def test_team_a_orients_which_side_is_home_regardless_of_url_order(self):
+        self._stub(_gosu_detail(team1_name="LGD Gaming", team2_name="Yakult Brothers"))
+        result = esports.get_series_by_url(
+            "dota2", "https://www.gosugamers.net/dota2/tournaments/63119-x/matches/659411-x",
+            "Yakult Brothers", "LGD Gaming",
+        )
+        self.assertEqual(result["home_team"], "Yakult Brothers")
+        self.assertEqual(result["away_team"], "LGD Gaming")
+
+    def test_wrong_sport_slug_in_url_is_rejected(self):
+        self._stub(_gosu_detail())
+        result = esports.get_series_by_url(
+            "cs2",  # url says dota2, sport param says cs2 - mismatch
+            "https://www.gosugamers.net/dota2/tournaments/63119-x/matches/659411-x",
+            "Team A", "Team B",
+        )
+        self.assertIsNone(result)
+
+    def test_unparseable_url_returns_none_without_ever_fetching(self):
+        self._stub(_gosu_detail())
+        result = esports.get_series_by_url("dota2", "not a url at all", "Team A", "Team B")
+        self.assertIsNone(result)
+
+    def test_no_detail_found_returns_none(self):
+        self._stub(None)
+        result = esports.get_series_by_url(
+            "dota2", "https://www.gosugamers.net/dota2/tournaments/63119-x/matches/659411-x", "Team A", "Team B",
+        )
+        self.assertIsNone(result)
+
+    def test_not_yet_started_match_reports_notstarted_status(self):
+        future_ms = (time.time() + 3600) * 1000
+        self._stub(_gosu_detail(starting_at_ms=future_ms))
+        result = esports.get_series_by_url(
+            "dota2", "https://www.gosugamers.net/dota2/tournaments/63119-x/matches/659411-x", "Team A", "Team B",
+        )
+        self.assertEqual(result["status"], "notstarted")
+        self.assertEqual(result["home_score"], 0)
+        self.assertEqual(result["away_score"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

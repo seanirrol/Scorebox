@@ -1738,17 +1738,31 @@ async def _auto_esports(
     picked_team: Optional[str] = None, direction: Optional[str] = None, line: Optional[float] = None,
     map_number: Optional[int] = None, picked_maps: Optional[int] = None, other_maps: Optional[int] = None,
     section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
+    match_url: Optional[str] = None,
 ):
     """Dota 2 / CS2 / LoL / Mobile Legends picks - six markets, all settling
     on the overall series or one specific map within it - see esports.py/esportstracker.py.
     Unlike every other sport in this bot, both team_a and team_b (not just
     one) are needed to resolve the match at all - hawk.live/GosuGamers have
-    no "find any match for this one team" lookup the way 365scores/ESPN do."""
+    no "find any match for this one team" lookup the way 365scores/ESPN do.
+
+    match_url (/tracktoday-only, mirrors game_id's role for the 365scores-
+    backed sports) is GosuGamers' own match-page URL, for a real match
+    that's genuinely not on esports.get_series' own list-search yet -
+    confirmed live, a match still ~11 hours from kickoff already had its
+    own fully-populated page while being completely absent from the site-
+    wide "upcoming matches" list every other lookup here depends on. Only
+    changes THIS initial lookup, not the tracker's own later poll cycles -
+    see esports.get_series_by_url's own docstring for why that's fine."""
     category_label = f"esports {market}"
-    series_data = await asyncio.to_thread(esports.get_series, sport, team_a, team_b)
+    series_data = (
+        await asyncio.to_thread(esports.get_series_by_url, sport, match_url, team_a, team_b) if match_url
+        else await asyncio.to_thread(esports.get_series, sport, team_a, team_b)
+    )
     if not series_data:
         log.info("Auto-esports (%s): no match found for '%s v %s'", market, team_a, team_b)
-        botlog.event(f"❌ Not tracked ({category_label}): **{team_a} v {team_b}** — no match found")
+        reason = "couldn't resolve that match_url (wrong sport/ids, or unrecognized URL)" if match_url else "no match found"
+        botlog.event(f"❌ Not tracked ({category_label}): **{team_a} v {team_b}** — {reason}")
         return
     if esportstracker.is_tracked(channel.id, sport, team_a, team_b, market):
         botlog.event(f"⏭️ Skipped ({category_label}): **{team_a} v {team_b}** — already being tracked in <#{channel.id}>")
@@ -2034,7 +2048,7 @@ async def _report_not_tracked_lines(message: discord.Message, raw_lines: list[st
 async def _dispatch_pick(
     target_channel: discord.abc.Messageable, pick: dict,
     section: Optional[str], label: Optional[str], origin_channel_id: Optional[int], manual: bool = False,
-    game_id: Optional[str] = None,
+    game_id: Optional[str] = None, match_url: Optional[str] = None,
 ) -> Optional[int | str]:
     """Routes one already-parsed pick to its tracker, mirroring exactly
     which _auto_* function on_message would have called - shared with
@@ -2060,7 +2074,10 @@ async def _dispatch_pick(
 
     game_id (also /tracktoday-only, and only wired to the "track"-family
     kinds below, plus tennis/volleyball's own settracker-backed markets)
-    - see _auto_track's own docstring."""
+    - see _auto_track's own docstring.
+
+    match_url (/tracktoday-only, only wired to the esports_* kinds below)
+    - see _auto_esports' own docstring."""
     try:
         if pick["kind"] == "track":
             return await _auto_track(target_channel, pick["sport"], pick["team"], section=section, label=label, origin_channel_id=origin_channel_id, manual=manual, game_id=game_id)
@@ -2214,61 +2231,61 @@ async def _dispatch_pick(
         elif pick["kind"] == "esports_match_winner":
             return await _auto_esports(
                 target_channel, pick["sport"], pick["team_a"], pick["team_b"], "match_winner",
-                picked_team=pick["team"], section=section, label=label, origin_channel_id=origin_channel_id,
+                picked_team=pick["team"], section=section, label=label, origin_channel_id=origin_channel_id, match_url=match_url,
             )
         elif pick["kind"] == "esports_map_handicap":
             return await _auto_esports(
                 target_channel, pick["sport"], pick["team_a"], pick["team_b"], "map_handicap",
-                picked_team=pick["team"], line=pick["line"], section=section, label=label, origin_channel_id=origin_channel_id,
+                picked_team=pick["team"], line=pick["line"], section=section, label=label, origin_channel_id=origin_channel_id, match_url=match_url,
             )
         elif pick["kind"] == "esports_total_maps":
             return await _auto_esports(
                 target_channel, pick["sport"], pick["team_a"], pick["team_b"], "total_maps",
-                direction=pick["direction"], line=pick["line"], section=section, label=label, origin_channel_id=origin_channel_id,
+                direction=pick["direction"], line=pick["line"], section=section, label=label, origin_channel_id=origin_channel_id, match_url=match_url,
             )
         elif pick["kind"] == "esports_map_winner":
             return await _auto_esports(
                 target_channel, pick["sport"], pick["team_a"], pick["team_b"], "map_winner",
-                picked_team=pick["team"], map_number=pick["map_number"], section=section, label=label, origin_channel_id=origin_channel_id,
+                picked_team=pick["team"], map_number=pick["map_number"], section=section, label=label, origin_channel_id=origin_channel_id, match_url=match_url,
             )
         elif pick["kind"] == "esports_match_and_map_winner":
             return await _auto_esports(
                 target_channel, pick["sport"], pick["team_a"], pick["team_b"], "match_and_map_winner",
-                picked_team=pick["team"], map_number=pick["map_number"], section=section, label=label, origin_channel_id=origin_channel_id,
+                picked_team=pick["team"], map_number=pick["map_number"], section=section, label=label, origin_channel_id=origin_channel_id, match_url=match_url,
             )
         elif pick["kind"] == "esports_win_at_least_one_map":
             return await _auto_esports(
                 target_channel, pick["sport"], pick["team_a"], pick["team_b"], "win_at_least_one_map",
-                picked_team=pick["team"], direction=pick["direction"], section=section, label=label, origin_channel_id=origin_channel_id,
+                picked_team=pick["team"], direction=pick["direction"], section=section, label=label, origin_channel_id=origin_channel_id, match_url=match_url,
             )
         elif pick["kind"] == "esports_correct_score":
             return await _auto_esports(
                 target_channel, pick["sport"], pick["team_a"], pick["team_b"], "correct_score",
                 picked_team=pick["team"], picked_maps=pick["picked_maps"], other_maps=pick["other_maps"],
-                section=section, label=label, origin_channel_id=origin_channel_id,
+                section=section, label=label, origin_channel_id=origin_channel_id, match_url=match_url,
             )
         elif pick["kind"] == "esports_total_kills":
             return await _auto_esports(
                 target_channel, pick["sport"], pick["team_a"], pick["team_b"], "total_kills",
-                direction=pick["direction"], line=pick["line"], section=section, label=label, origin_channel_id=origin_channel_id,
+                direction=pick["direction"], line=pick["line"], section=section, label=label, origin_channel_id=origin_channel_id, match_url=match_url,
             )
         elif pick["kind"] == "esports_team_total_kills":
             return await _auto_esports(
                 target_channel, pick["sport"], pick["team_a"], pick["team_b"], "team_total_kills",
                 picked_team=pick["team"], direction=pick["direction"], line=pick["line"],
-                section=section, label=label, origin_channel_id=origin_channel_id,
+                section=section, label=label, origin_channel_id=origin_channel_id, match_url=match_url,
             )
         elif pick["kind"] == "esports_map_kills_handicap":
             return await _auto_esports(
                 target_channel, pick["sport"], pick["team_a"], pick["team_b"], "map_kills_handicap",
                 picked_team=pick["team"], line=pick["line"], map_number=pick["map_number"],
-                section=section, label=label, origin_channel_id=origin_channel_id,
+                section=section, label=label, origin_channel_id=origin_channel_id, match_url=match_url,
             )
         elif pick["kind"] == "esports_map_total_kills":
             return await _auto_esports(
                 target_channel, pick["sport"], pick["team_a"], pick["team_b"], "map_total_kills",
                 direction=pick["direction"], line=pick["line"], map_number=pick["map_number"],
-                section=section, label=label, origin_channel_id=origin_channel_id,
+                section=section, label=label, origin_channel_id=origin_channel_id, match_url=match_url,
             )
         elif pick["kind"] == "tabletennis_winner":
             opponent = pick["team_b"] if pick["team"] == pick["team_a"] else pick["team_a"]
@@ -2525,9 +2542,13 @@ _TRACKTODAY_SPORT_CHOICES = [
     pick='The pick itself, e.g. "Los Angeles ML" or "Fernando Tatis Jr. Over 0.5 Total Bases"',
     game_id='Optional: 365scores game id (from the match URL\'s "#id=...") to track directly, '
             "bypassing team-name search - not supported for player props or ESPN-backed markets",
+    match_url="Optional (esports only): the match's own GosuGamers URL, for one not yet listed on the live feed",
 )
 @app_commands.choices(sport=_TRACKTODAY_SPORT_CHOICES)
-async def tracktoday(interaction: discord.Interaction, sport: app_commands.Choice[str], pick: str, game_id: Optional[str] = None):
+async def tracktoday(
+    interaction: discord.Interaction, sport: app_commands.Choice[str], pick: str,
+    game_id: Optional[str] = None, match_url: Optional[str] = None,
+):
     """Unlike every _auto_* pick this bot detects on its own (which only
     ever attach to a live or not-yet-started match - see find_match_for_
     team/find_current_event_id's own docstrings), this deliberately also
@@ -2539,11 +2560,16 @@ async def tracktoday(interaction: discord.Interaction, sport: app_commands.Choic
     game_id is the escape hatch for 365scores' own bulk-list outages (see
     _auto_track's own docstring) - team-name search is unusable while that
     list is broken, but a game id copied from 365scores' own match page
-    still resolves fine via the per-game detail call."""
+    still resolves fine via the per-game detail call.
+
+    match_url is the same idea for esports (see esports.get_series_by_url's
+    own docstring) - a real match can sit fully populated on its own
+    GosuGamers page for hours before ever appearing on the site-wide
+    "upcoming matches" list every other esports lookup here depends on."""
     if not _channel_allowed(interaction):
         await _reject_wrong_channel(interaction)
         return
-    _log_command(interaction, sport=sport.name, pick=pick, game_id=game_id)
+    _log_command(interaction, sport=sport.name, pick=pick, game_id=game_id, match_url=match_url)
 
     parsed = picks.parse_pick_line(f"[{sport.value}] {pick.strip()}")
     if not parsed:
@@ -2571,11 +2597,16 @@ async def tracktoday(interaction: discord.Interaction, sport: app_commands.Choic
             "game_id isn't supported for this pick type yet.", ephemeral=True,
         )
         return
+    if match_url is not None and not parsed["kind"].startswith("esports_"):
+        await interaction.response.send_message(
+            "match_url is only supported for esports picks.", ephemeral=True,
+        )
+        return
 
     await interaction.response.defer(ephemeral=True)
     result = await _dispatch_pick(
         interaction.channel, parsed, section=None, label=picks.clean_label(pick.strip()), origin_channel_id=interaction.channel_id, manual=True,
-        game_id=game_id,
+        game_id=game_id, match_url=match_url,
     )
     if result is None:
         await interaction.followup.send(

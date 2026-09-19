@@ -36,8 +36,18 @@ class EsportsError(Exception):
 
 def _curl_text(url: str) -> str:
     try:
+        # -L (follow redirects) - confirmed live: GosuGamers 30x-redirects a
+        # match-page URL whose human-readable slug text doesn't match its
+        # own numeric id (only the id is actually validated - the slug is
+        # cosmetic/SEO text) to the real canonical URL. Without -L, curl
+        # just returned that redirect response's own tiny body instead of
+        # the real page, so get_series_by_url's whole "give it any slug
+        # text, only the numeric ids matter" contract silently returned
+        # nothing. Harmless for every other existing caller here (hawk.live,
+        # the general matches list) - they only ever fetch already-correct
+        # canonical URLs, which never redirect in the first place.
         result = subprocess.run(
-            ["curl", "-s", "-A", USER_AGENT, url],
+            ["curl", "-s", "-L", "-A", USER_AGENT, url],
             capture_output=True, timeout=CURL_TIMEOUT_SECONDS, check=False,
         )
     except (subprocess.SubprocessError, OSError, FileNotFoundError) as e:
@@ -554,12 +564,13 @@ def _gosu_series_decided(detail: dict) -> bool:
     return a >= majority or b >= majority or a + b >= games_per_match
 
 
-def _get_series_gosu(game_slug: str, team_a: str, team_b: str, expected_epoch: Optional[float]) -> Optional[dict]:
-    resolved = _gosu_resolve(game_slug, team_a, team_b, expected_epoch)
-    if not resolved:
-        return None
-    match, detail = resolved
-
+def _series_from_gosu_detail(game_slug: str, match: dict, detail: dict, team_a: str, team_b: str) -> Optional[dict]:
+    """Shared by _get_series_gosu (list-search path) and get_series_by_url
+    (direct match-page path) - everything past "we already have the raw
+    match/detail dicts" is identical regardless of how they were found.
+    team_a is only used to orient which real opponent becomes home_team
+    (so home_team == team_a in the result, matching every other lookup in
+    this module)."""
     opponents = detail.get("opponents") or []
     team1_reg = detail.get("team1RegistrationId")
     team2_reg = detail.get("team2RegistrationId")
@@ -603,6 +614,61 @@ def _get_series_gosu(game_slug: str, team_a: str, team_b: str, expected_epoch: O
             "home_registration_id": home_opp.get("registrationId"), "away_registration_id": away_opp.get("registrationId"),
         },
     }
+
+
+def _get_series_gosu(game_slug: str, team_a: str, team_b: str, expected_epoch: Optional[float]) -> Optional[dict]:
+    resolved = _gosu_resolve(game_slug, team_a, team_b, expected_epoch)
+    if not resolved:
+        return None
+    match, detail = resolved
+    return _series_from_gosu_detail(game_slug, match, detail, team_a, team_b)
+
+
+# A real match's own page has its full data long before it's "imminent"
+# enough to appear on _gosu_matches_for_slug's own list (confirmed live:
+# PGL Wallachia Season 9's later Round 1 matches, LGD Gaming vs Yakult
+# Brothers and Team Yandex vs MOUZ, both fully populated on their own match
+# pages roughly half a day out while completely absent from the site-wide
+# "upcoming matches" list the whole time) - get_series (and therefore every
+# _auto_esports auto-track attempt) can never find a match that far out no
+# matter how good the name-matching is, since it never even looks at the
+# individual page. This is the escape hatch: given the match's own
+# GosuGamers URL (copy-pasted from the site, same UX as 365scores' own
+# "#id=..." url suffix /tracktoday already accepts), fetch it directly -
+# bypassing the list search entirely. Confirmed live: a wrong/placeholder
+# tournament id in the URL fails to resolve the match at all (GosuGamers'
+# own Next.js route actually validates it, unlike the numeric match id's
+# own trailing slug text, which can be anything) - both numeric ids in the
+# URL must be the real ones, only the human-readable slug text after each
+# is ignorable.
+_GOSU_MATCH_URL_RE = re.compile(r"gosugamers\.net/([a-z0-9-]+)/tournaments/(\d+)-[^/?#]+/matches/(\d+)-[^/?#]+")
+
+
+def get_series_by_url(sport: str, url: str, team_a: str, team_b: str) -> Optional[dict]:
+    """One-shot direct lookup for /tracktoday's match_url escape hatch -
+    NOT used by _track_loop's own ongoing poll cycle, which keeps calling
+    plain get_series(sport, team_a, team_b) same as always; by the time a
+    few poll cycles have passed the match is close enough to kickoff to
+    have naturally appeared on the list (the existing MAX_CONSECUTIVE_MISSES
+    tolerance already bridges that gap without needing this module's own
+    ongoing polling to also learn to re-derive a match id/url on every
+    cycle - out of scope for this first cut, see get_series_by_url's
+    caller for how the initial track still succeeds regardless)."""
+    m = _GOSU_MATCH_URL_RE.search(url)
+    if not m:
+        return None
+    url_slug, parent_id, match_id = m.group(1), int(m.group(2)), int(m.group(3))
+    norm_sport = _normalize_sport(sport)
+    if not norm_sport or _GOSU_GAME_SLUGS.get(norm_sport) != url_slug:
+        return None
+    match = {
+        "matchId": match_id, "parentId": parent_id,
+        "parentUrlSafeName": "x", "team1UrlSafeName": "x", "team2UrlSafeName": "x",
+    }
+    detail = _gosu_match_detail(url_slug, match)
+    if not detail:
+        return None
+    return _series_from_gosu_detail(url_slug, match, detail, team_a, team_b)
 
 
 def _gosu_map_winners(series_data: dict) -> list[Optional[str]]:
