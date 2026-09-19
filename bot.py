@@ -1782,6 +1782,7 @@ async def _auto_esports(
         picked_team, direction, line, map_number, picked_maps, other_maps, section, label, origin_channel_id,
         tournament=series_data.get("tournament"),
         game_date=scores365.eastern_date_str(esports.start_epoch(series_data)),
+        initial_series_data=series_data,
     )
     log.info("Auto-tracked esports (%s) pick '%s v %s' -> %s", market, team_a, team_b, sport)
     botlog.event(f"✅ Tracked ({category_label}): **{team_a} v {team_b}** in <#{channel.id}>")

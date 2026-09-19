@@ -404,6 +404,7 @@ async def _track_loop(
     message: discord.Message, sport: str, team_a: str, team_b: str, channel_id: int, market: str, owner_id: int,
     picked_team: Optional[str] = None, direction: Optional[str] = None, line: Optional[float] = None,
     map_number: Optional[int] = None, picked_maps: Optional[int] = None, other_maps: Optional[int] = None,
+    initial_series_data: Optional[dict] = None,
 ):
     key = track_key(channel_id, sport, team_a, team_b, market)
     deadline = time.monotonic() + config.MAX_TRACK_HOURS * 3600
@@ -486,9 +487,25 @@ async def _track_loop(
     await asyncio.sleep(random.uniform(0, config.UPDATE_INTERVAL_SECONDS))
     try:
         while time.monotonic() < deadline:
-            await asyncio.sleep(config.UPDATE_INTERVAL_SECONDS)
-
-            series_data = await asyncio.to_thread(esports.get_series, sport, team_a, team_b, expected_epoch)
+            if initial_series_data is not None:
+                # Seeds the very first check with what /tracktoday's
+                # match_url lookup (or the normal auto-track lookup) already
+                # resolved, instead of discarding it and immediately
+                # re-querying esports.get_series' own team-name list search -
+                # confirmed live this mattered: a match_url-tracked pick
+                # still hours from kickoff got voided within minutes, since
+                # that list search (which every later poll cycle, including
+                # this very first one before this fix, always falls back to)
+                # hadn't found the match yet either - the whole reason
+                # match_url existed in the first place. Seeding this first
+                # check lets it hibernate properly instead of burning through
+                # MAX_CONSECUTIVE_MISSES against a search that was never
+                # going to succeed yet.
+                series_data = initial_series_data
+                initial_series_data = None
+            else:
+                await asyncio.sleep(config.UPDATE_INTERVAL_SECONDS)
+                series_data = await asyncio.to_thread(esports.get_series, sport, team_a, team_b, expected_epoch)
 
             # A notstarted series' maps-won score can't change before it
             # starts, so hibernate instead of polling every cycle - same
@@ -707,7 +724,7 @@ def start_tracking(
     picked_team: Optional[str] = None, direction: Optional[str] = None, line: Optional[float] = None,
     map_number: Optional[int] = None, picked_maps: Optional[int] = None, other_maps: Optional[int] = None,
     section: Optional[str] = None, label: Optional[str] = None, origin_channel_id: Optional[int] = None,
-    tournament: Optional[str] = None, game_date: Optional[str] = None,
+    tournament: Optional[str] = None, game_date: Optional[str] = None, initial_series_data: Optional[dict] = None,
 ):
     key = track_key(channel_id, sport, team_a, team_b, market)
     if key in _active:
@@ -716,6 +733,7 @@ def start_tracking(
         _track_loop(
             message, sport, team_a, team_b, channel_id, market, owner_id,
             picked_team, direction, line, map_number, picked_maps, other_maps,
+            initial_series_data=initial_series_data,
         )
     )
     _active[key] = task
